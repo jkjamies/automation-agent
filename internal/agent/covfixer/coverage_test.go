@@ -70,17 +70,6 @@ func TestParsePlan(t *testing.T) {
 	}
 }
 
-func TestIsTestFileAndDerivePathGone(t *testing.T) {
-	for _, n := range []string{"foo_test.go", "Foo.test.ts", "FooTest.java", "test_foo.py", "bar_spec.rb", "FooTests.swift"} {
-		if !isTestFile(n) {
-			t.Errorf("isTestFile(%q) should be true", n)
-		}
-	}
-	if isTestFile("foo.go") {
-		t.Error("source file should not be a test file")
-	}
-}
-
 func TestAnalyze(t *testing.T) {
 	// A checkout with a source file and an existing test (so conventions are gathered).
 	dir := t.TempDir()
@@ -106,28 +95,6 @@ func TestAnalyze(t *testing.T) {
 	}
 }
 
-func TestFindTestFilesAndConventions(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// a test file inside a skipped dir must be ignored
-	_ = os.WriteFile(filepath.Join(dir, "node_modules", "x_test.go"), []byte("x"), 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "foo_test.go"), []byte("package foo\nfunc TestFoo(t *testing.T){}"), 0o644)
-
-	files := findTestFiles(dir)
-	if len(files) != 1 || files[0] != "foo_test.go" {
-		t.Fatalf("findTestFiles = %v", files)
-	}
-	conv := gatherTestConventions(dir)
-	if !strings.Contains(conv, "foo_test.go") || !strings.Contains(conv, "Example existing test") {
-		t.Errorf("conventions missing evidence:\n%s", conv)
-	}
-	if !strings.Contains(gatherTestConventions(t.TempDir()), "No existing test files") {
-		t.Error("empty-repo message missing")
-	}
-}
-
 func TestBuildExecuteInput(t *testing.T) {
 	got := buildExecuteInput(
 		fixflow.FileWork{Path: "calc.go", Items: []string{"Divide"}},
@@ -137,15 +104,6 @@ func TestBuildExecuteInput(t *testing.T) {
 		if !strings.Contains(got, w) {
 			t.Errorf("execute input missing %q", w)
 		}
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	if truncate("abc", 10) != "abc" {
-		t.Error("short string should be unchanged")
-	}
-	if !strings.Contains(truncate("abcdef", 3), "truncated") {
-		t.Error("long string should be truncated")
 	}
 }
 

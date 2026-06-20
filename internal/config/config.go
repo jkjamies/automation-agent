@@ -54,9 +54,10 @@ type Config struct {
 	CronWeekly string
 
 	// Lint-fixer
-	MaxIterations       int
+	MaxIterations int
+	// CITimeout bounds how long a suspended fix run waits for its CI result before
+	// it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
 	CITimeout           time.Duration
-	ReconcileInterval   time.Duration
 	GitHubWebhookSecret string
 	AgentPRLabel        string
 	AgentCheckName      string
@@ -96,9 +97,6 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.CITimeout, err = time.ParseDuration(getOr(get, "CI_TIMEOUT", "90m")); err != nil {
 		return Config{}, fmt.Errorf("CI_TIMEOUT: %w", err)
-	}
-	if c.ReconcileInterval, err = time.ParseDuration(getOr(get, "RECONCILE_INTERVAL", "15m")); err != nil {
-		return Config{}, fmt.Errorf("RECONCILE_INTERVAL: %w", err)
 	}
 
 	// Code models default to the base models when unset.

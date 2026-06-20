@@ -15,9 +15,7 @@ flowchart TD
     C --> G["splitList(REPOS)"]
     G -->|"comma split + trim"| H["[]string Repos"]
     C --> I["strconv.Atoi MAX_ITERATIONS"]
-    C --> J["time.ParseDuration CI_TIMEOUT / RECONCILE_INTERVAL"]
     I -->|parse error| K["return Config{}, err"]
-    J -->|parse error| K
     C --> L["c.Validate()"]
     L --> M{LLMProvider in ollama|gemini?}
     M -->|no| K

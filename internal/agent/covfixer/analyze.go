@@ -4,17 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
 	"github.com/jkjamies/automation-agent/internal/agent/setup"
 )
 
-// Analyze plans test placement by examining the checked-out repo's real conventions,
-// then generates a test per file in parallel from that grounded plan.
+// Analyze plans test placement by having a tool-using agent examine the checked-out
+// repo's real conventions, then generates a test per file in parallel from that plan.
 func Analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, error) {
 	plan, err := explore(ctx, in)
 	if err != nil {
@@ -32,11 +29,10 @@ type planEntry struct {
 	Notes     string `json:"notes"`
 }
 
-// explore gathers the repo's real test conventions from the checkout and asks the
-// model to produce a per-file plan grounded in them.
+// explore runs a tool-using agent that navigates the checkout itself (read_file /
+// list_dir) to learn the repo's real test conventions and returns a per-file plan.
 func explore(ctx context.Context, in fixflow.AnalyzeInput) (map[string]planEntry, error) {
-	conventions := gatherTestConventions(in.RepoDir)
-	out, err := setup.GenerateText(ctx, in.LLM, prompts.MustGet("explore"), buildExploreInput(in.Work, conventions))
+	out, err := fixflow.Explore(ctx, in.LLM, in.RepoDir, prompts.MustGet("explore"), buildExploreInput(in.Work))
 	if err != nil {
 		return nil, fmt.Errorf("explore: %w", err)
 	}
@@ -87,14 +83,12 @@ func parsePlan(out string) (map[string]planEntry, error) {
 	return m, nil
 }
 
-func buildExploreInput(work []fixflow.FileWork, conventions string) string {
+func buildExploreInput(work []fixflow.FileWork) string {
 	var b strings.Builder
 	b.WriteString("Source files that need tests:\n")
 	for _, w := range work {
 		fmt.Fprintf(&b, "- %s\n", w.Path)
 	}
-	b.WriteString("\n")
-	b.WriteString(conventions)
 	return b.String()
 }
 
@@ -115,82 +109,4 @@ func buildExecuteInput(w fixflow.FileWork, src string, p planEntry, ciFeedback s
 	}
 	fmt.Fprintf(&b, "\nSource file (%s):\n```\n%s\n```\n", w.Path, src)
 	return b.String()
-}
-
-// gatherTestConventions walks the checkout for existing test files (real evidence of
-// the project's conventions) and includes one example, so the explorer decides test
-// placement from what the repo actually does — not a hardcoded rule.
-func gatherTestConventions(repoDir string) string {
-	tests := findTestFiles(repoDir)
-	var b strings.Builder
-	if len(tests) == 0 {
-		b.WriteString("No existing test files were found in the repository. Infer the idiomatic location and framework for the language, and state your assumption in 'notes'.\n")
-		return b.String()
-	}
-	b.WriteString("Existing test files in this repository (use these to determine the real conventions — location, naming, framework):\n")
-	for _, t := range tests {
-		fmt.Fprintf(&b, "- %s\n", t)
-	}
-	if ex, err := fixflow.ReadFile(repoDir, tests[0]); err == nil {
-		fmt.Fprintf(&b, "\nExample existing test file (%s):\n```\n%s\n```\n", tests[0], truncate(ex, 4000))
-	}
-	return b.String()
-}
-
-func findTestFiles(repoDir string) []string {
-	var out []string
-	_ = filepath.WalkDir(repoDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if skipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if isTestFile(d.Name()) {
-			if rel, err := filepath.Rel(repoDir, p); err == nil {
-				out = append(out, rel)
-			}
-		}
-		if len(out) >= 60 {
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	sort.Strings(out)
-	return out
-}
-
-func isTestFile(name string) bool {
-	switch {
-	case strings.HasSuffix(name, "_test.go"),
-		strings.HasSuffix(name, ".test.ts"), strings.HasSuffix(name, ".test.tsx"),
-		strings.HasSuffix(name, ".test.js"), strings.HasSuffix(name, ".spec.ts"),
-		strings.HasSuffix(name, ".spec.js"),
-		strings.HasSuffix(name, "_test.py"), strings.HasPrefix(name, "test_") && strings.HasSuffix(name, ".py"),
-		strings.HasSuffix(name, "_spec.rb"),
-		strings.HasSuffix(name, "Test.java"), strings.HasSuffix(name, "Tests.java"),
-		strings.HasSuffix(name, "Test.kt"), strings.HasSuffix(name, "Tests.kt"),
-		strings.HasSuffix(name, "Tests.swift"),
-		strings.HasSuffix(name, "_test.rs"):
-		return true
-	}
-	return false
-}
-
-func skipDir(name string) bool {
-	switch name {
-	case ".git", "node_modules", "vendor", "target", "build", ".gradle", "dist", "out", ".idea":
-		return true
-	}
-	return strings.HasPrefix(name, ".")
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "\n… (truncated)"
 }

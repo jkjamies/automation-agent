@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -29,7 +28,6 @@ import (
 	"github.com/jkjamies/automation-agent/internal/githubapi"
 	"github.com/jkjamies/automation-agent/internal/ingest"
 	"github.com/jkjamies/automation-agent/internal/notify"
-	"github.com/jkjamies/automation-agent/internal/reconcile"
 	"github.com/jkjamies/automation-agent/internal/scheduler"
 	"github.com/jkjamies/automation-agent/internal/webhook"
 )
@@ -119,15 +117,8 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Reconcile loop: stateless recovery for missed CI webhooks + timeouts (one per engine).
-	var reconcilers []*reconcile.Reconciler
-	for _, eng := range engines {
-		reconcilers = append(reconcilers, newReconciler(gh, notifier, eng, cfg))
-	}
-
 	sched.Start()
 	defer sched.Stop()
-	go runReconcileLoop(sigCtx, reconcilers, cfg.ReconcileInterval, logger)
 
 	go func() {
 		logger.Info("automation-agent listening",
@@ -196,38 +187,3 @@ func ciResumeHandler(engines []*fixflow.Engine) root.Handler {
 	}
 }
 
-// newReconciler builds the stateless recovery scanner for one engine.
-func newReconciler(gh *githubapi.Client, notifier notify.Notifier, eng *fixflow.Engine, cfg config.Config) *reconcile.Reconciler {
-	return reconcile.New(gh, notifier, func(ctx context.Context, a reconcile.Action) error {
-		owner, name, _ := strings.Cut(a.Repo, "/")
-		return eng.HandleResume(ctx, fixflow.ResumeInput{
-			Owner: owner, Repo: name, FullRepo: a.Repo,
-			PRNumber: a.PR.Number, Branch: a.PR.Branch, HeadSHA: a.PR.HeadSHA,
-			Conclusion: a.Check.Conclusion, OutputText: a.Check.OutputText,
-		})
-	}, reconcile.Config{
-		Repos: cfg.Repos, Label: eng.Label(), CheckName: eng.CheckName(), CITimeout: cfg.CITimeout,
-	})
-}
-
-// runReconcileLoop scans on startup and on a ticker until the context is cancelled.
-func runReconcileLoop(ctx context.Context, reconcilers []*reconcile.Reconciler, interval time.Duration, logger *slog.Logger) {
-	scan := func() {
-		for _, r := range reconcilers {
-			if _, err := r.Scan(context.Background()); err != nil {
-				logger.Warn("reconcile scan", "err", err)
-			}
-		}
-	}
-	scan()
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			scan()
-		}
-	}
-}

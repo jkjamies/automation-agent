@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"strings"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -28,6 +29,22 @@ func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input strin
 		}
 	}
 	return nil
+}
+
+// DriveText runs the agent and returns the concatenated text of its non-partial
+// responses. For a tool-using agent this is the final answer after any tool calls
+// (intermediate function-call/response events carry no text).
+func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (string, error) {
+	var sb strings.Builder
+	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), agent.RunConfig{}) {
+		if err != nil {
+			return "", err
+		}
+		if ev.Content != nil && !ev.Partial {
+			sb.WriteString(contentText(ev.Content))
+		}
+	}
+	return sb.String(), nil
 }
 
 // DriveCollectState runs the agent and accumulates every state delta emitted by its
