@@ -15,6 +15,7 @@ import (
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("POST /webhooks/lint", s.handleLint)
+	s.mux.HandleFunc("POST /webhooks/coverage", s.handleCoverage)
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHub)
 }
 
@@ -33,7 +34,17 @@ func (s *Server) handleLint(w http.ResponseWriter, r *http.Request) {
 	s.dispatch(w, r.Context(), ingest.New(ingest.KindLint, "webhook:/lint", body, s.now()))
 }
 
-// handleGitHub is the lint-fixer resume: GitHub check_run events.
+// handleCoverage is the coverage-fixer kickoff: an agnostic coverage report.
+func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	s.dispatch(w, r.Context(), ingest.New(ingest.KindCoverage, "webhook:/coverage", body, s.now()))
+}
+
+// handleGitHub is the lint/coverage-fixer resume: GitHub check_run events.
 func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {

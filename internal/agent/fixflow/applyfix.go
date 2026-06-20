@@ -1,9 +1,4 @@
-// Package lintfixer implements the autonomous lint-remediation workflow.
-//
-// This file holds the deterministic "apply one fix" mechanics, which are
-// independent of the suspend/resume loop. The loop, the analyze LLM agent, and the
-// resume wiring are added once the suspend/resume design notes are finalized.
-package lintfixer
+package fixflow
 
 import (
 	"context"
@@ -22,13 +17,14 @@ type GitHub interface {
 	AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error
 }
 
-// FileEdit is a whole-file write the fix applies (the analyze step produces these).
+// FileEdit is a whole-file write an analyze step produces (a rewritten source file,
+// a generated test file, …).
 type FileEdit struct {
 	Path    string // repo-relative path
 	Content string
 }
 
-// ApplyConfig parameterizes one fix attempt.
+// ApplyConfig parameterizes one apply.
 type ApplyConfig struct {
 	Owner, Repo   string
 	CloneURL      string
@@ -49,36 +45,37 @@ type ApplyResult struct {
 	HeadSHA string
 }
 
-// ApplyFix clones the repo into a temp dir, applies edits on a fresh agent branch,
-// commits, pushes, and ensures a labeled PR exists. It returns the PR and the new
-// head SHA.
-//
-// With NewBranch=true it creates the agent branch from the clone's HEAD (kickoff);
-// with NewBranch=false it checks out the existing remote branch and adds a commit
-// onto the previous fix (retry).
-func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit) (ApplyResult, error) {
-	if len(edits) == 0 {
-		return ApplyResult{}, fmt.Errorf("apply fix: no edits to apply")
-	}
-
+// Open clones the repo into a fresh temp dir and checks out the agent branch — the
+// single checkout the explorer reads, the executor writes into, and the commit step
+// pushes. NewBranch=true creates the branch from HEAD (kickoff); false checks out the
+// existing remote branch (retry). The caller must os.RemoveAll(repo.Dir()) when done.
+func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	dir, err := os.MkdirTemp("", "agentfix-*")
 	if err != nil {
-		return ApplyResult{}, fmt.Errorf("tempdir: %w", err)
+		return nil, fmt.Errorf("tempdir: %w", err)
 	}
-	defer os.RemoveAll(dir)
-
 	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, cfg.Token)
 	if err != nil {
-		return ApplyResult{}, err
+		os.RemoveAll(dir)
+		return nil, err
 	}
 	if cfg.NewBranch {
-		if err := repo.Checkout(cfg.Branch, true); err != nil {
-			return ApplyResult{}, err
-		}
+		err = repo.Checkout(cfg.Branch, true)
 	} else {
-		if err := repo.CheckoutRemote(cfg.Branch); err != nil {
-			return ApplyResult{}, err
-		}
+		err = repo.CheckoutRemote(cfg.Branch)
+	}
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return repo, nil
+}
+
+// Commit writes edits into the working tree, commits, pushes, and ensures a labeled
+// PR exists.
+func Commit(ctx context.Context, gh GitHub, repo *gitrepo.Repo, cfg ApplyConfig, edits []FileEdit) (ApplyResult, error) {
+	if len(edits) == 0 {
+		return ApplyResult{}, fmt.Errorf("apply: no edits to apply")
 	}
 	if err := writeEdits(repo, edits); err != nil {
 		return ApplyResult{}, err
@@ -90,12 +87,22 @@ func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit)
 	if err := repo.Push(ctx); err != nil {
 		return ApplyResult{}, err
 	}
-
 	pr, err := ensurePR(ctx, gh, cfg)
 	if err != nil {
 		return ApplyResult{}, err
 	}
 	return ApplyResult{PR: pr, HeadSHA: sha}, nil
+}
+
+// ApplyFix opens a checkout and commits edits in one step (no analysis in between) —
+// a convenience used in tests; the engine interleaves analysis between Open and Commit.
+func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit) (ApplyResult, error) {
+	repo, err := Open(ctx, cfg)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	defer os.RemoveAll(repo.Dir())
+	return Commit(ctx, gh, repo, cfg, edits)
 }
 
 func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
@@ -112,7 +119,6 @@ func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
 }
 
 // ensurePR returns the existing agent PR for the branch, or creates and labels one.
-// On a retry the branch's push already updated the existing PR, so we don't reopen.
 func ensurePR(ctx context.Context, gh GitHub, cfg ApplyConfig) (githubapi.PR, error) {
 	existing, err := gh.FindAgentPRs(ctx, cfg.Owner, cfg.Repo, cfg.Label)
 	if err != nil {

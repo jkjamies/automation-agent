@@ -32,8 +32,12 @@ type Config struct {
 	// LLM
 	LLMProvider Provider
 	OllamaHost  string
-	OllamaModel string
+	OllamaModel string // default model: triage, explore, summary
 	GeminiModel string
+	// Code model: the (typically larger) model used for the code-change steps
+	// (lint rewrite, coverage test generation). Falls back to the default model.
+	OllamaCodeModel string
+	GeminiCodeModel string
 
 	// GitHub / repos
 	Repos       []string
@@ -70,7 +74,9 @@ func loadFrom(get lookup) (Config, error) {
 		LLMProvider:         Provider(getOr(get, "LLM_PROVIDER", string(ProviderOllama))),
 		OllamaHost:          getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
 		OllamaModel:         getOr(get, "OLLAMA_MODEL", "gemma4:12b"),
+		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", ""),
 		GeminiModel:         getOr(get, "GEMINI_MODEL", ""),
+		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
 		Repos:               splitList(getOr(get, "REPOS", "")),
 		GitHubToken:         getOr(get, "GITHUB_TOKEN", ""),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
@@ -93,6 +99,14 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.ReconcileInterval, err = time.ParseDuration(getOr(get, "RECONCILE_INTERVAL", "15m")); err != nil {
 		return Config{}, fmt.Errorf("RECONCILE_INTERVAL: %w", err)
+	}
+
+	// Code models default to the base models when unset.
+	if c.OllamaCodeModel == "" {
+		c.OllamaCodeModel = c.OllamaModel
+	}
+	if c.GeminiCodeModel == "" {
+		c.GeminiCodeModel = c.GeminiModel
 	}
 
 	if err := c.Validate(); err != nil {

@@ -51,6 +51,18 @@ func TestLintKickoff(t *testing.T) {
 	}
 }
 
+func TestCoverageKickoff(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest)
+	rec := do(t, s, http.MethodPost, "/webhooks/coverage", `{"report":"jacoco"}`, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if c.env.Kind != ingest.KindCoverage {
+		t.Errorf("kind = %q, want coverage", c.env.Kind)
+	}
+}
+
 func sign(secret, body string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))

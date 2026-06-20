@@ -12,17 +12,19 @@ import (
 	"github.com/jkjamies/automation-agent/internal/ingest"
 )
 
-// Deps wires the dispatcher. Each handler is optional: a nil SummaryAgent leaves
-// the cron kinds unhandled, and nil lint handlers leave KindLint/KindCI unhandled.
+// Deps wires the dispatcher. Each handler is optional. CIResume handles KindCI for
+// every fix workflow (lint, coverage) — each engine no-ops unless its check matches.
 type Deps struct {
-	SummaryAgent agent.Agent
-	LintKickoff  Handler // KindLint
-	LintResume   Handler // KindCI
-	Log          *slog.Logger
+	SummaryAgent    agent.Agent
+	LintKickoff     Handler // KindLint
+	CoverageKickoff Handler // KindCoverage
+	CIResume        Handler // KindCI (dispatched to all fix engines)
+	Log             *slog.Logger
 }
 
 // BuildRootDispatcher builds the dispatcher and registers the available workflows:
-// cron kinds → the summary workflow; KindLint/KindCI → the lint-fixer.
+// cron kinds → summary; KindLint → lint-fixer; KindCoverage → coverage-fixer;
+// KindCI → resume (all fix engines).
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	disp := NewDispatcher(d.Log)
 
@@ -38,8 +40,11 @@ func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	if d.LintKickoff != nil {
 		disp.Register(ingest.KindLint, d.LintKickoff)
 	}
-	if d.LintResume != nil {
-		disp.Register(ingest.KindCI, d.LintResume)
+	if d.CoverageKickoff != nil {
+		disp.Register(ingest.KindCoverage, d.CoverageKickoff)
+	}
+	if d.CIResume != nil {
+		disp.Register(ingest.KindCI, d.CIResume)
 	}
 	return disp, nil
 }

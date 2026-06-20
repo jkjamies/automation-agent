@@ -19,6 +19,8 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 
+	"github.com/jkjamies/automation-agent/internal/agent/covfixer"
+	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
 	"github.com/jkjamies/automation-agent/internal/agent/lintfixer"
 	"github.com/jkjamies/automation-agent/internal/agent/root"
 	"github.com/jkjamies/automation-agent/internal/agent/setup"
@@ -58,23 +60,31 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build llm: %w", err)
 	}
+	codeLLM, err := setup.BuildCodeLLM(sigCtx, cfg)
+	if err != nil {
+		return fmt.Errorf("build code llm: %w", err)
+	}
 	gh := githubapi.New(cfg.GitHubToken)
 	notifier := buildNotifier(logger, cfg)
 
 	// Summary workflow (needs repos + a notifier).
 	summaryAgent := buildSummaryAgent(logger, cfg, llm, gh, notifier)
 
-	// Lint-fixer (event-driven; works without a notifier — it just won't post results).
-	fixer := lintfixer.NewFixer(lintfixer.Deps{
-		LLM: llm, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
-		Label: cfg.AgentPRLabel, CheckName: cfg.AgentCheckName, MaxIter: cfg.MaxIterations, Log: logger,
-	})
+	// Fix engines (event-driven; work without a notifier — they just won't post results).
+	fixDeps := fixflow.Deps{
+		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
+		MaxIter: cfg.MaxIterations, Log: logger,
+	}
+	lintEngine := lintfixer.NewEngine(fixDeps)
+	covEngine := covfixer.NewEngine(fixDeps)
+	engines := []*fixflow.Engine{lintEngine, covEngine}
 
 	dispatcher, err := root.BuildRootDispatcher(root.Deps{
-		SummaryAgent: summaryAgent,
-		LintKickoff:  func(ctx context.Context, e ingest.Envelope) error { return fixer.Kickoff(ctx, e.Payload) },
-		LintResume:   func(ctx context.Context, e ingest.Envelope) error { return fixer.Resume(ctx, e.Payload) },
-		Log:          logger,
+		SummaryAgent:    summaryAgent,
+		LintKickoff:     payloadHandler(lintEngine.Kickoff),
+		CoverageKickoff: payloadHandler(covEngine.Kickoff),
+		CIResume:        ciResumeHandler(engines),
+		Log:             logger,
 	})
 	if err != nil {
 		return fmt.Errorf("build dispatcher: %w", err)
@@ -109,21 +119,15 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Reconcile loop: stateless recovery for missed CI webhooks + timeouts.
-	reconciler := reconcile.New(gh, notifier, func(ctx context.Context, a reconcile.Action) error {
-		owner, name, _ := strings.Cut(a.Repo, "/")
-		return fixer.HandleResume(ctx, lintfixer.ResumeInput{
-			Owner: owner, Repo: name, FullRepo: a.Repo,
-			PRNumber: a.PR.Number, Branch: a.PR.Branch, HeadSHA: a.PR.HeadSHA,
-			Conclusion: a.Check.Conclusion, OutputText: a.Check.OutputText,
-		})
-	}, reconcile.Config{
-		Repos: cfg.Repos, Label: cfg.AgentPRLabel, CheckName: cfg.AgentCheckName, CITimeout: cfg.CITimeout,
-	})
+	// Reconcile loop: stateless recovery for missed CI webhooks + timeouts (one per engine).
+	var reconcilers []*reconcile.Reconciler
+	for _, eng := range engines {
+		reconcilers = append(reconcilers, newReconciler(gh, notifier, eng, cfg))
+	}
 
 	sched.Start()
 	defer sched.Stop()
-	go runReconcileLoop(sigCtx, reconciler, cfg.ReconcileInterval, logger)
+	go runReconcileLoop(sigCtx, reconcilers, cfg.ReconcileInterval, logger)
 
 	go func() {
 		logger.Info("automation-agent listening",
@@ -173,11 +177,46 @@ func buildSummaryAgent(logger *slog.Logger, cfg config.Config, llm model.LLM, gh
 	return a
 }
 
+// payloadHandler adapts a raw-payload kickoff/resume func to a root.Handler.
+func payloadHandler(f func(ctx context.Context, raw []byte) error) root.Handler {
+	return func(ctx context.Context, e ingest.Envelope) error { return f(ctx, e.Payload) }
+}
+
+// ciResumeHandler hands a check_run event to every engine; each no-ops unless its
+// check name matches.
+func ciResumeHandler(engines []*fixflow.Engine) root.Handler {
+	return func(ctx context.Context, e ingest.Envelope) error {
+		var errs []error
+		for _, eng := range engines {
+			if err := eng.Resume(ctx, e.Payload); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+}
+
+// newReconciler builds the stateless recovery scanner for one engine.
+func newReconciler(gh *githubapi.Client, notifier notify.Notifier, eng *fixflow.Engine, cfg config.Config) *reconcile.Reconciler {
+	return reconcile.New(gh, notifier, func(ctx context.Context, a reconcile.Action) error {
+		owner, name, _ := strings.Cut(a.Repo, "/")
+		return eng.HandleResume(ctx, fixflow.ResumeInput{
+			Owner: owner, Repo: name, FullRepo: a.Repo,
+			PRNumber: a.PR.Number, Branch: a.PR.Branch, HeadSHA: a.PR.HeadSHA,
+			Conclusion: a.Check.Conclusion, OutputText: a.Check.OutputText,
+		})
+	}, reconcile.Config{
+		Repos: cfg.Repos, Label: eng.Label(), CheckName: eng.CheckName(), CITimeout: cfg.CITimeout,
+	})
+}
+
 // runReconcileLoop scans on startup and on a ticker until the context is cancelled.
-func runReconcileLoop(ctx context.Context, r *reconcile.Reconciler, interval time.Duration, logger *slog.Logger) {
+func runReconcileLoop(ctx context.Context, reconcilers []*reconcile.Reconciler, interval time.Duration, logger *slog.Logger) {
 	scan := func() {
-		if _, err := r.Scan(context.Background()); err != nil {
-			logger.Warn("reconcile scan", "err", err)
+		for _, r := range reconcilers {
+			if _, err := r.Scan(context.Background()); err != nil {
+				logger.Warn("reconcile scan", "err", err)
+			}
 		}
 	}
 	scan()

@@ -12,13 +12,14 @@ const (
 	KindCronDaily  Kind = "cron.daily"  // 09:00 daily -> summary digest
 	KindCronWeekly Kind = "cron.weekly" // 09:00 Monday
 	KindLint       Kind = "lint"        // agnostic lint payload -> lint-fixer
-	KindCI         Kind = "ci"          // GitHub check_run -> resume lint-fixer
+	KindCoverage   Kind = "coverage"    // agnostic coverage payload -> coverage-fixer
+	KindCI         Kind = "ci"          // GitHub check_run -> resume lint/coverage fixer
 )
 
 // Valid reports whether k is a recognized ingest kind.
 func (k Kind) Valid() bool {
 	switch k {
-	case KindCronDaily, KindCronWeekly, KindLint, KindCI:
+	case KindCronDaily, KindCronWeekly, KindLint, KindCoverage, KindCI:
 		return true
 	default:
 		return false

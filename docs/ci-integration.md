@@ -191,3 +191,83 @@ The check's `check_run` event is delivered to `POST /webhooks/github` (verified 
 Configure the webhook on each repo (Settings → Webhooks): payload URL
 `https://<agent-host>/webhooks/github`, content type `application/json`, secret =
 `GITHUB_WEBHOOK_SECRET`, events = **Check runs**.
+
+---
+
+## Coverage-fixer (same pattern, different report)
+
+The coverage-fixer works exactly like the lint-fixer but **generates tests** for
+uncovered logic instead of rewriting source. It uses its own endpoint, branch,
+label, and check:
+
+| | Lint-fixer | Coverage-fixer |
+|---|---|---|
+| Kickoff endpoint | `POST /webhooks/lint` | `POST /webhooks/coverage` |
+| Report | any linter output | any **coverage** report (JaCoCo XML, lcov, Cobertura, `go cover`, llvm-cov, SimpleCov…) |
+| Branch / label | `automation-agent/lint-fix` / `automation-agent` | `automation-agent/test-coverage` / `automation-agent-coverage` |
+| Verify check | `agent-lint-verify` | `agent-coverage-verify` |
+
+**The coverage report does not need to be JSON.** Most coverage tools emit XML or
+text — send the raw report as a JSON string in `report`; an LLM triage step reads any
+format. Cap to `MAX_LINT_ERRORS`-style limits if the report is huge.
+
+### Example — Go coverage
+
+```yaml
+      - name: Coverage report
+        run: go test -coverprofile=cover.out ./... || true
+      - name: Send coverage to the agent
+        run: |
+          # `go cover` is plain text; send it as a JSON string in `report`.
+          jq -Rs --arg repo "$GITHUB_REPOSITORY" --arg base "$GITHUB_REF_NAME" \
+            '{repo:$repo, base:$base, report:.}' cover.out \
+            | curl -sf -X POST "$AGENT_URL/webhooks/coverage" -H 'content-type: application/json' --data @-
+        env:
+          AGENT_URL: ${{ vars.AGENT_URL }}
+```
+
+### Example — Java/Kotlin (JaCoCo XML)
+
+```yaml
+      - run: ./gradlew test jacocoTestReport || true   # build/reports/jacoco/test/jacocoTestReport.xml
+      - name: Send coverage to the agent
+        run: |
+          jq -Rs --arg repo "$GITHUB_REPOSITORY" --arg base "$GITHUB_REF_NAME" \
+            '{repo:$repo, base:$base, report:.}' build/reports/jacoco/test/jacocoTestReport.xml \
+            | curl -sf -X POST "$AGENT_URL/webhooks/coverage" -H 'content-type: application/json' --data @-
+        env:
+          AGENT_URL: ${{ vars.AGENT_URL }}
+```
+
+(`jq -Rs` reads the raw file and emits it as a JSON string — works for XML, lcov, or
+any text format.)
+
+### The `agent-coverage-verify` check
+
+Identical to `agent-lint-verify` but triggered by the `automation-agent-coverage`
+label, and it should **run the tests and assert coverage rose** (or meets your
+threshold), failing otherwise:
+
+```yaml
+name: agent-coverage-verify
+on:
+  pull_request:
+    types: [labeled, synchronize]
+jobs:
+  agent-coverage-verify:
+    if: contains(github.event.pull_request.labels.*.name, 'automation-agent-coverage')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests and enforce coverage
+        run: |
+          # Run the suite (incl. the agent's new tests) and fail if they don't pass
+          # or coverage didn't improve. Put a short summary on stdout for the agent.
+          go test ./...   # (or gradle/jest/swift test for your stack)
+```
+
+Test placement is **not** guessed from a hardcoded rule. The agent checks out the
+repo, examines its **actual existing tests** (directory layout, naming, framework),
+and an explorer step plans where each test belongs from that real evidence; executor
+steps then write the tests. Tests are generated for **meaningful** uncovered logic
+only, and imperfect output is caught and retried by the CI loop above.

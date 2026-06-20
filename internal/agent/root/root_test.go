@@ -87,22 +87,25 @@ func TestBuildRootDispatcherWithSummary(t *testing.T) {
 	}
 }
 
-func TestBuildRootDispatcherLintHandlers(t *testing.T) {
+func TestBuildRootDispatcherFixHandlers(t *testing.T) {
 	called := map[ingest.Kind]bool{}
+	mark := func(_ context.Context, e ingest.Envelope) error { called[e.Kind] = true; return nil }
 	d, err := BuildRootDispatcher(Deps{
-		LintKickoff: func(_ context.Context, e ingest.Envelope) error { called[e.Kind] = true; return nil },
-		LintResume:  func(_ context.Context, e ingest.Envelope) error { called[e.Kind] = true; return nil },
+		LintKickoff:     mark,
+		CoverageKickoff: mark,
+		CIResume:        mark,
 	})
 	if err != nil {
 		t.Fatalf("BuildRootDispatcher: %v", err)
 	}
-	if !d.Handles(ingest.KindLint) || !d.Handles(ingest.KindCI) {
-		t.Fatal("lint kinds should be registered")
+	if !d.Handles(ingest.KindLint) || !d.Handles(ingest.KindCoverage) || !d.Handles(ingest.KindCI) {
+		t.Fatal("lint/coverage/ci kinds should be registered")
 	}
-	_ = d.Dispatch(context.Background(), env(ingest.KindLint))
-	_ = d.Dispatch(context.Background(), env(ingest.KindCI))
-	if !called[ingest.KindLint] || !called[ingest.KindCI] {
-		t.Errorf("handlers not invoked: %v", called)
+	for _, k := range []ingest.Kind{ingest.KindLint, ingest.KindCoverage, ingest.KindCI} {
+		_ = d.Dispatch(context.Background(), env(k))
+		if !called[k] {
+			t.Errorf("handler for %s not invoked", k)
+		}
 	}
 }
 

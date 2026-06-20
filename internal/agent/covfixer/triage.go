@@ -1,4 +1,4 @@
-package lintfixer
+package covfixer
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 	"github.com/jkjamies/automation-agent/internal/agent/setup"
 )
 
-// Triage uses the LLM to normalize an arbitrary linter report into per-file work,
-// so the lint-fixer is agnostic to the reporting format.
+// Triage uses the LLM to normalize an arbitrary coverage report into the source
+// files with meaningful uncovered logic.
 func Triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWork, error) {
 	out, err := setup.GenerateText(ctx, llm, prompts.MustGet("triage"), report)
 	if err != nil {
@@ -24,14 +24,14 @@ func Triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWo
 		return nil, fmt.Errorf("triage: %w", err)
 	}
 	if len(work) == 0 {
-		return nil, fmt.Errorf("triage: no actionable files found in report")
+		return nil, fmt.Errorf("triage: no meaningful uncovered files found in report")
 	}
 	return work, nil
 }
 
 type triageFile struct {
-	Path     string   `json:"path"`
-	Problems []string `json:"problems"`
+	Path      string   `json:"path"`
+	Uncovered []string `json:"uncovered"`
 }
 
 func parseTriage(out string) ([]fixflow.FileWork, error) {
@@ -46,7 +46,7 @@ func parseTriage(out string) ([]fixflow.FileWork, error) {
 	work := make([]fixflow.FileWork, 0, len(files))
 	for _, f := range files {
 		if strings.TrimSpace(f.Path) != "" {
-			work = append(work, fixflow.FileWork{Path: f.Path, Items: f.Problems})
+			work = append(work, fixflow.FileWork{Path: f.Path, Items: f.Uncovered})
 		}
 	}
 	return work, nil

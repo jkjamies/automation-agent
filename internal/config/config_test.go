@@ -20,6 +20,9 @@ func TestLoadDefaults(t *testing.T) {
 	if c.OllamaModel != "gemma4:12b" {
 		t.Errorf("OllamaModel = %q, want gemma4:12b", c.OllamaModel)
 	}
+	if c.OllamaCodeModel != "gemma4:12b" {
+		t.Errorf("OllamaCodeModel = %q, want fallback to gemma4:12b", c.OllamaCodeModel)
+	}
 	if c.NotifyProvider != NotifySlack {
 		t.Errorf("NotifyProvider = %q, want slack", c.NotifyProvider)
 	}
@@ -47,6 +50,19 @@ func TestReposParsing(t *testing.T) {
 		if c.Repos[i] != want[i] {
 			t.Errorf("Repos[%d] = %q, want %q", i, c.Repos[i], want[i])
 		}
+	}
+}
+
+func TestCodeModelOverride(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{"OLLAMA_MODEL": "gemma4:12b", "OLLAMA_CODE_MODEL": "gemma4:26b"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.OllamaCodeModel != "gemma4:26b" {
+		t.Errorf("OllamaCodeModel = %q, want gemma4:26b", c.OllamaCodeModel)
+	}
+	if c.OllamaModel != "gemma4:12b" {
+		t.Errorf("OllamaModel = %q, want gemma4:12b", c.OllamaModel)
 	}
 }
 

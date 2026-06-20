@@ -9,6 +9,9 @@ A lightweight, long-running Go service that ingests events from many sources
 - **Lint-fixer** — consumes an agnostic lint payload, opens a PR with a fix, and
   loops (max 3) on CI feedback before posting a result. Suspend/resume is durable
   via GitHub itself (no local database).
+- **Coverage-fixer** — consumes an agnostic coverage report (JaCoCo, lcov, `go cover`,
+  …) and opens a PR adding tests for *meaningful* uncovered logic, with the same CI
+  loop. Shares the `fixflow` engine with the lint-fixer.
 
 Built on the [Agent Development Kit for Go](https://github.com/google/adk-go),
 local-first on **Ollama + Gemma**, with a config switch to **Gemini/Vertex** for
