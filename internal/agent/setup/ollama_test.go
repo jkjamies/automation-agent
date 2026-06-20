@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/ollama/ollama/api"
+	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/genai"
 )
 
@@ -202,4 +205,62 @@ func TestModelNameOverride(t *testing.T) {
 	if got := m.modelName(&model.LLMRequest{}); got != "default-model" {
 		t.Errorf("modelName = %q, want default-model", got)
 	}
+}
+
+// TestLiveOllamaTools proves tool-calling works through the full stack: the adapter
+// forwards the tool, Gemma calls it, the adapter parses the call, and the ADK runner
+// executes the handler. Opt-in via OLLAMA_LIVE.
+func TestLiveOllamaTools(t *testing.T) {
+	if os.Getenv("OLLAMA_LIVE") == "" {
+		t.Skip("set OLLAMA_LIVE=1 to run the live tool-calling test")
+	}
+	tag := os.Getenv("OLLAMA_MODEL")
+	if tag == "" {
+		tag = "gemma4:12b"
+	}
+	llm, err := NewOllamaModel("http://localhost:11434", tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var called bool
+	var gotCity string
+	weather, err := functiontool.New(functiontool.Config{
+		Name:        "get_weather",
+		Description: "Get the current weather for a city.",
+	}, func(_ tool.Context, args struct {
+		City string `json:"city"`
+	}) (struct {
+		Weather string `json:"weather"`
+	}, error) {
+		called = true
+		gotCity = args.City
+		return struct {
+			Weather string `json:"weather"`
+		}{Weather: "sunny, 22C"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := llmagent.New(llmagent.Config{
+		Name:        "weatherbot",
+		Model:       llm,
+		Instruction: "You answer weather questions by calling the get_weather tool.",
+		Tools:       []tool.Tool{weather},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner("tool-test", a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Drive(context.Background(), r, "u", "s", "What is the weather in Paris right now?"); err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+	if !called {
+		t.Fatal("the get_weather tool was never executed (tool-calling did not round-trip)")
+	}
+	t.Logf("tool executed with city=%q", gotCity)
 }
