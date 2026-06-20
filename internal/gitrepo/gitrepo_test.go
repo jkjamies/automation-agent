@@ -1,0 +1,115 @@
+package gitrepo
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+)
+
+// seedRemote creates a local repo with one commit to act as the clone source.
+func seedRemote(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	wt, _ := repo.Worktree()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{
+		Author: &object.Signature{Name: "seed", Email: "s@x", When: time.Unix(1, 0)},
+	}); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+	return dir
+}
+
+func TestCloneBranchCommitPush(t *testing.T) {
+	remote := seedRemote(t)
+	work := filepath.Join(t.TempDir(), "work")
+	ctx := context.Background()
+
+	r, err := Clone(ctx, remote, work, "")
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+
+	if err := r.Checkout("agent/fix", true); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	if err := os.WriteFile(r.Path("fix.txt"), []byte("patched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, err := r.CommitAll("apply fix", Author{Name: "agent", Email: "a@x"})
+	if err != nil {
+		t.Fatalf("CommitAll: %v", err)
+	}
+	head, err := r.Head()
+	if err != nil || head != sha {
+		t.Fatalf("Head = %q, sha = %q, err = %v", head, sha, err)
+	}
+
+	if r.Dir() != work {
+		t.Errorf("Dir = %q, want %q", r.Dir(), work)
+	}
+
+	if err := r.Push(ctx); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	// A second push with no new commits is up-to-date, not an error.
+	if err := r.Push(ctx); err != nil {
+		t.Fatalf("idempotent Push: %v", err)
+	}
+
+	// The remote should now have the pushed branch at the committed SHA.
+	rr, err := git.PlainOpen(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := rr.Reference(plumbing.NewBranchReferenceName("agent/fix"), true)
+	if err != nil {
+		t.Fatalf("remote branch missing: %v", err)
+	}
+	if ref.Hash().String() != sha {
+		t.Errorf("remote agent/fix = %s, want %s", ref.Hash().String(), sha)
+	}
+}
+
+func TestCheckoutMissingBranch(t *testing.T) {
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Checkout("does-not-exist", false); err == nil {
+		t.Fatal("expected error checking out a missing branch")
+	}
+}
+
+func TestCommitNothing(t *testing.T) {
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitAll("nothing changed", Author{Name: "a", Email: "a@x"}); err == nil {
+		t.Fatal("expected error committing a clean tree")
+	}
+}
+
+func TestCloneBadURL(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "nope")
+	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, ""); err == nil {
+		t.Fatal("expected clone error for nonexistent source")
+	}
+}

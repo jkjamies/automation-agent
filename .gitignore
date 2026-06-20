@@ -1,0 +1,21 @@
+# Developer memory — specs live here, never committed (see .agents/templates)
+/specs/*
+!/specs/.gitkeep
+
+# Local env & secrets
+.env
+*.local
+
+# Build / test artifacts
+/bin/
+coverage.out
+coverage.html
+
+# Local durable state (only if a future phase adds it)
+*.db
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+.claude/settings.local.json

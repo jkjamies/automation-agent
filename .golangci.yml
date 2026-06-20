@@ -1,0 +1,42 @@
+# golangci-lint configuration. Run: make lint
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - depguard
+
+linters-settings:
+  depguard:
+    rules:
+      # Tooling packages must not depend on agent packages (also enforced by ARCH tests).
+      tooling-no-agents:
+        list-mode: lax
+        files:
+          - "**/internal/githubapi/**"
+          - "**/internal/gitrepo/**"
+          - "**/internal/webhook/**"
+          - "**/internal/notify/**"
+          - "**/internal/scheduler/**"
+          - "**/internal/reconcile/**"
+        deny:
+          - pkg: "github.com/jkjamies/automation-agent/internal/agent"
+            desc: "tooling must not import agent packages"
+  goimports:
+    local-prefixes: github.com/jkjamies/automation-agent
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
