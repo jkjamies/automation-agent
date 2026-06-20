@@ -5,6 +5,7 @@ package githubapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -60,6 +61,7 @@ type CheckResult struct {
 	Name        string
 	Status      string // queued | in_progress | completed
 	Conclusion  string // success | failure | ... (when completed)
+	OutputText  string // the check's output (lint findings), used to re-triage on resume
 	StartedAt   time.Time
 	CompletedAt time.Time
 }
@@ -161,14 +163,79 @@ func (c *Client) AgentCheck(ctx context.Context, owner, repo, ref, checkName str
 		return CheckResult{Found: false}, nil
 	}
 	cr := res.CheckRuns[0]
-	return CheckResult{
+	out := CheckResult{
 		Found:       true,
 		Name:        cr.GetName(),
 		Status:      cr.GetStatus(),
 		Conclusion:  cr.GetConclusion(),
 		StartedAt:   cr.GetStartedAt().Time,
 		CompletedAt: cr.GetCompletedAt().Time,
-	}, nil
+	}
+	if o := cr.GetOutput(); o != nil {
+		out.OutputText = o.GetText()
+		if out.OutputText == "" {
+			out.OutputText = o.GetSummary()
+		}
+	}
+	return out, nil
+}
+
+// GetFileContent returns the decoded contents of a file at ref (ref may be "" for
+// the default branch).
+func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref string) (string, error) {
+	fc, _, _, err := c.gh.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		return "", fmt.Errorf("get %s/%s:%s: %w", owner, repo, path, err)
+	}
+	if fc == nil {
+		return "", fmt.Errorf("%s is a directory, not a file", path)
+	}
+	content, err := fc.GetContent()
+	if err != nil {
+		return "", fmt.Errorf("decode %s: %w", path, err)
+	}
+	return content, nil
+}
+
+// CheckEvent is the parsed essentials of a GitHub check_run webhook event.
+type CheckEvent struct {
+	Action       string // created | completed | rerequested
+	CheckName    string
+	Status       string // queued | in_progress | completed
+	Conclusion   string // success | failure | ... (when completed)
+	HeadSHA      string
+	PRNumber     int
+	PRBranch     string
+	RepoFullName string // owner/name
+	OutputText   string // the check's output (lint findings), used to re-triage on resume
+}
+
+// ParseCheckRunEvent parses a check_run webhook body.
+func ParseCheckRunEvent(b []byte) (CheckEvent, error) {
+	var ev github.CheckRunEvent
+	if err := json.Unmarshal(b, &ev); err != nil {
+		return CheckEvent{}, fmt.Errorf("parse check_run event: %w", err)
+	}
+	cr := ev.GetCheckRun()
+	out := CheckEvent{
+		Action:       ev.GetAction(),
+		CheckName:    cr.GetName(),
+		Status:       cr.GetStatus(),
+		Conclusion:   cr.GetConclusion(),
+		HeadSHA:      cr.GetHeadSHA(),
+		RepoFullName: ev.GetRepo().GetFullName(),
+	}
+	if prs := cr.PullRequests; len(prs) > 0 {
+		out.PRNumber = prs[0].GetNumber()
+		out.PRBranch = prs[0].GetHead().GetRef()
+	}
+	if o := cr.GetOutput(); o != nil {
+		out.OutputText = o.GetText()
+		if out.OutputText == "" {
+			out.OutputText = o.GetSummary()
+		}
+	}
+	return out, nil
 }
 
 func toCommit(rc *github.RepositoryCommit) Commit {

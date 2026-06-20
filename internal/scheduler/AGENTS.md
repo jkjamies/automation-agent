@@ -3,6 +3,29 @@
 Wraps `robfig/cron/v3` to emit `ingest.Envelope`s on a schedule, so time triggers
 flow through the same root-agent path as any other ingress.
 
+## Flow
+
+```mermaid
+flowchart TD
+    Boot["cmd/agent: New(EmitFunc)"] --> S["Scheduler{cron, emit, now}"]
+    S --> AddD["Add(CRON_DAILY '0 9 * * *', KindCronDaily)"]
+    S --> AddW["Add(CRON_WEEKLY '0 9 * * 1', KindCronWeekly)"]
+    AddD -->|"cron.AddFunc(spec, closure)"| Reg{"valid spec?"}
+    AddW -->|"cron.AddFunc(spec, closure)"| Reg
+    Reg -->|no| Err["return error -> run() aborts"]
+    Reg -->|yes| Loop["Start(): cron.Start() (non-blocking)"]
+    Loop -->|"each goroutine fire"| Closure["closure -> s.trigger(kind)"]
+    Closure --> Tr["trigger(kind)"]
+    Tr -->|"ingest.New(kind, 'scheduler', nil, now())"| Env["ingest.Envelope{Kind, Source:'scheduler', Payload:nil, ReceivedAt}"]
+    Env --> Emit["emit(env) = EmitFunc"]
+    Emit --> Disp["root dispatcher.Dispatch(ctx, env)"]
+    Disp --> C{"Kind?"}
+    C -->|"cron.daily"| Sum["summary digest"]
+    C -->|"cron.weekly"| Sum2["summary digest (Monday)"]
+    Stop["Stop(): cron.Stop()"] -.->|"context done when jobs end"| Loop
+    Entries["Entries(): len(cron.Entries())"] -.->|test assertion| Loop
+```
+
 - `Add(spec, kind)` registers a 5-field cron spec (e.g. `0 9 * * *` daily,
   `0 9 * * 1` Mondays).
 - `trigger` is factored out of the cron closure so the emit path is unit-testable

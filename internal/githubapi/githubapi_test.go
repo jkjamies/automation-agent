@@ -2,6 +2,7 @@ package githubapi
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -108,10 +109,55 @@ func TestAttemptCount(t *testing.T) {
 	}
 }
 
+func TestGetFileContent(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("package foo\n"))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/contents/internal/foo.go", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"type":"file","encoding":"base64","path":"internal/foo.go","content":"` + encoded + `"}`))
+	})
+	c := testClient(t, mux)
+
+	got, err := c.GetFileContent(context.Background(), "o", "r", "internal/foo.go", "main")
+	if err != nil {
+		t.Fatalf("GetFileContent: %v", err)
+	}
+	if got != "package foo\n" {
+		t.Errorf("content = %q", got)
+	}
+}
+
+func TestParseCheckRunEvent(t *testing.T) {
+	body := `{
+		"action":"completed",
+		"check_run":{
+			"name":"agent-lint-verify",
+			"status":"completed",
+			"conclusion":"failure",
+			"head_sha":"sha123",
+			"output":{"text":"errcheck: unchecked error"},
+			"pull_requests":[{"number":12,"head":{"ref":"agent/fix"}}]
+		},
+		"repository":{"full_name":"acme/api"}
+	}`
+	ev, err := ParseCheckRunEvent([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseCheckRunEvent: %v", err)
+	}
+	if ev.Action != "completed" || ev.CheckName != "agent-lint-verify" || ev.Conclusion != "failure" {
+		t.Errorf("event = %+v", ev)
+	}
+	if ev.HeadSHA != "sha123" || ev.PRNumber != 12 || ev.PRBranch != "agent/fix" {
+		t.Errorf("correlation = %+v", ev)
+	}
+	if ev.RepoFullName != "acme/api" || ev.OutputText != "errcheck: unchecked error" {
+		t.Errorf("repo/output = %q / %q", ev.RepoFullName, ev.OutputText)
+	}
+}
+
 func TestAgentCheck(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/o/r/commits/sha1/check-runs", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"total_count":1,"check_runs":[{"name":"agent-lint-verify","status":"completed","conclusion":"success","completed_at":"2026-06-19T11:00:00Z"}]}`))
+		_, _ = w.Write([]byte(`{"total_count":1,"check_runs":[{"name":"agent-lint-verify","status":"completed","conclusion":"success","completed_at":"2026-06-19T11:00:00Z","output":{"summary":"all checks passed"}}]}`))
 	})
 	mux.HandleFunc("GET /repos/o/r/commits/sha2/check-runs", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"total_count":0,"check_runs":[]}`))
@@ -124,6 +170,9 @@ func TestAgentCheck(t *testing.T) {
 	}
 	if !res.Found || res.Status != "completed" || res.Conclusion != "success" {
 		t.Errorf("check = %+v", res)
+	}
+	if res.OutputText != "all checks passed" {
+		t.Errorf("output text = %q", res.OutputText)
 	}
 
 	missing, err := c.AgentCheck(context.Background(), "o", "r", "sha2", "agent-lint-verify")

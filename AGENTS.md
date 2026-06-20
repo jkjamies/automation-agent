@@ -4,6 +4,34 @@ This repository is a Go automation service built on the Agent Development Kit fo
 Go (`google.golang.org/adk`). Read [`docs/architecture.md`](docs/architecture.md)
 first — it is the authoritative design.
 
+## System flow
+
+```mermaid
+flowchart TD
+    Cron["scheduler (cron 09:00 daily / Mon)"] -->|"KindCronDaily/Weekly"| Env["ingest.Envelope{Kind, Source, Payload}"]
+    WLint["POST /webhooks/lint (CI lint report)"] -->|KindLint| Env
+    WCI["POST /webhooks/github (check_run, HMAC)"] -->|KindCI| Env
+    Env --> Root["root.Dispatcher.Dispatch (by Kind)"]
+    Root -->|"cron.*"| Sum["Summary workflow"]
+    Root -->|lint| LFK["Lint-fixer: Kickoff"]
+    Root -->|ci| LFR["Lint-fixer: Resume"]
+
+    Sum --> Par["Parallel[fetch_repo x N] -> state commits:<repo>"]
+    Par --> Smz["summarize (LLM, OutputKey=digest)"]
+    Smz --> Ntf["notify"] --> Chat[("Slack / Teams")]
+
+    LFK -->|"triage -> analyze(parallel/file) -> ApplyFix"| PR[("GitHub PR: automation-agent/lint-fix + label")]
+    PR -->|"agent-lint-verify check"| WCI
+    LFR --> Dec{conclusion}
+    Dec -->|success| Chat
+    Dec -->|"failure & attempts<3"| LFK
+    Dec -->|"failure & attempts>=3"| Chat
+    Recon["reconcile loop (startup + interval)"] -.->|"missed webhook / timeout"| LFR
+
+    Models["model.LLM: Ollama/Gemma (local) | Gemini (cloud)"] -.-> Sum
+    Models -.-> LFK
+```
+
 ## Mental model
 
 Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of two

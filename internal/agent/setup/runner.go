@@ -29,3 +29,19 @@ func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input strin
 	}
 	return nil
 }
+
+// DriveCollectState runs the agent and accumulates every state delta emitted by its
+// events into a single map. Useful for fan-out workflows where parallel sub-agents
+// each write a distinct state key the caller needs to read back.
+func DriveCollectState(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (map[string]any, error) {
+	state := make(map[string]any)
+	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), agent.RunConfig{}) {
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range ev.Actions.StateDelta {
+			state[k] = v
+		}
+	}
+	return state, nil
+}

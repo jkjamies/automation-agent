@@ -72,11 +72,42 @@ func (r *Repo) Checkout(branch string, create bool) error {
 	return nil
 }
 
+// CheckoutRemote checks out an existing remote branch (origin/<branch>) as a local
+// branch — used on retry iterations to add a commit onto the previous fix rather
+// than starting a new branch from the base.
+func (r *Repo) CheckoutRemote(branch string) error {
+	remoteRef := plumbing.NewRemoteReferenceName("origin", branch)
+	ref, err := r.repo.Reference(remoteRef, true)
+	if err != nil {
+		return fmt.Errorf("resolve origin/%s: %w", branch, err)
+	}
+	local := plumbing.NewBranchReferenceName(branch)
+	if err := r.repo.Storer.SetReference(plumbing.NewHashReference(local, ref.Hash())); err != nil {
+		return fmt.Errorf("create local branch %s: %w", branch, err)
+	}
+	if err := r.wt.Checkout(&git.CheckoutOptions{Branch: local}); err != nil {
+		return fmt.Errorf("checkout %s: %w", branch, err)
+	}
+	return nil
+}
+
+// ErrNoChanges is returned by CommitAll when the working tree is clean (the edits
+// produced no actual change), so callers can distinguish "nothing to do" from a
+// real failure.
+var ErrNoChanges = errors.New("gitrepo: no changes to commit")
+
 // CommitAll stages every change (including deletions) and commits, returning the
-// new commit SHA.
+// new commit SHA. It returns ErrNoChanges if the tree is clean.
 func (r *Repo) CommitAll(msg string, a Author) (string, error) {
 	if err := r.wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		return "", fmt.Errorf("stage changes: %w", err)
+	}
+	status, err := r.wt.Status()
+	if err != nil {
+		return "", fmt.Errorf("status: %w", err)
+	}
+	if status.IsClean() {
+		return "", ErrNoChanges
 	}
 	h, err := r.wt.Commit(msg, &git.CommitOptions{
 		Author: &object.Signature{Name: a.Name, Email: a.Email, When: r.now()},

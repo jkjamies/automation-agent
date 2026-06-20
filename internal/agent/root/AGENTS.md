@@ -2,6 +2,22 @@
 
 The dispatcher kicked off for every ingest. Build-agent pattern:
 
+## Flow
+
+```mermaid
+flowchart TD
+    Build["BuildRootDispatcher(Deps)"] -->|"SummaryAgent != nil"| RegC["Register KindCronDaily/Weekly"]
+    Build -->|"LintKickoff/Resume != nil"| RegL["Register KindLint / KindCI"]
+    RegC --> D["Dispatcher{handlers, log}"]
+    RegL --> D
+    Env["ingest.Envelope"] --> Disp["Dispatch(ctx, env)"]
+    Disp --> M{"handler for Kind?"}
+    M -->|no| Warn["log warn + no-op (return nil)"]
+    M -->|"cron.daily/weekly"| Sum["summaryHandler -> setup.Drive(summary runner)"]
+    M -->|lint| LK["fixer.Kickoff(payload)"]
+    M -->|ci| LR["fixer.Resume(payload)"]
+```
+
 - `root.go` — `Dispatcher`: routes an `ingest.Envelope` to a `Handler` by `Kind`.
   Unregistered kinds are logged and ignored (so a not-yet-wired ingress is a no-op).
 - `agents_setup.go` — `BuildRootDispatcher(Deps)` registers the available workflows:

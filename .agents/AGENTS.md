@@ -4,6 +4,39 @@ The open-standard knowledge directory — the rules and reusable recipes that ke
 this repo architecturally sound. This single `AGENTS.md` documents the whole
 `.agents/` tree; the subdirectories below do not carry their own.
 
+## Flow
+
+```mermaid
+flowchart TD
+    Agents[".agents/ (single AGENTS.md documents the tree)"] --> Std["standards/ — binding rules"]
+    Agents --> Skl["skills/ — reusable task recipes"]
+    Agents --> Tpl["templates/ — spec templates"]
+
+    Std --> S1["go-style.md"]
+    Std --> S2["testing.md (>=80% coverage, never assert LLM output)"]
+    Std --> S3["agent-build-pattern.md (agents_setup.go vs <name>.go)"]
+    Std --> S4["architecture.md (import boundaries, ingest->root->workflow)"]
+    Std -->|enforced by| Enf["ARCH/, make ci, .golangci.yml"]
+
+    Skl --> K1["add-workflow-agent.md"]
+    Skl --> K2["add-ingest-source.md"]
+    Skl --> K3["add-tool.md"]
+
+    Tpl --> T1["add.spec.md"]
+    Tpl --> T2["remove.spec.md"]
+    Tpl --> T3["change.spec.md (default kind)"]
+    Tpl --> T4["migrate.spec.md"]
+
+    Cmd["make spec name=&lt;slug&gt; kind=&lt;add|remove|change|migrate&gt;"] --> Pick["src = .agents/templates/$kind.spec.md"]
+    Pick -->|missing| Fail["echo 'no template' -> exit 1"]
+    Pick -->|found| Copy["cp src specs/$(date +%Y%m%d)-$name.md"]
+    Copy --> Out["specs/ (gitignored scratchpad)"]
+    T1 -.-> Pick
+    T2 -.-> Pick
+    T3 -.-> Pick
+    T4 -.-> Pick
+```
+
 ## `standards/` — binding rules
 
 The rules of the codebase. Enforced where possible by `ARCH/`, `make ci`, and

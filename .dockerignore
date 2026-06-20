@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.vscode
+.claude
+specs
+docs
+*.db
+coverage.out
+coverage.html
+.env
+*.local
+bin

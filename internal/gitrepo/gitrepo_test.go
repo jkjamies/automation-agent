@@ -87,6 +87,46 @@ func TestCloneBranchCommitPush(t *testing.T) {
 	}
 }
 
+func TestCheckoutRemote(t *testing.T) {
+	remote := seedRemote(t)
+	ctx := context.Background()
+
+	// First clone: create and push a branch.
+	r1, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w1"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.Checkout("feature", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r1.Path("f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := r1.CommitAll("feat", Author{Name: "a", Email: "a@x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second clone: check out the existing remote branch.
+	r2, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w2"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.CheckoutRemote("feature"); err != nil {
+		t.Fatalf("CheckoutRemote: %v", err)
+	}
+	head, _ := r2.Head()
+	if head != sha {
+		t.Errorf("head = %s, want %s", head, sha)
+	}
+	if err := r2.CheckoutRemote("does-not-exist"); err == nil {
+		t.Error("expected error for missing remote branch")
+	}
+}
+
 func TestCheckoutMissingBranch(t *testing.T) {
 	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "")
 	if err != nil {

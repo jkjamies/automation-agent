@@ -3,6 +3,20 @@
 The agents. Each workflow agent gets its own directory (`root/`, `summary/`,
 `lintfixer/` — added in later phases), and shared utilities live in `setup/`.
 
+## Flow
+
+```mermaid
+flowchart TD
+    Deps["Deps{LLM, tooling clients, repos}"] --> Setup["agents_setup.go: Build<Name>Agent(Deps)"]
+    Prompts["prompts/*.md (embed.FS)"] --> Setup
+    Model["model.LLM from setup.BuildLLM (Ollama/Gemini)"] --> Setup
+    Setup -->|"wiring only"| ADK["llmagent / sequential / parallel / loop .New"]
+    Logic["<name>.go: Run funcs, callbacks, parsing (no LLM)"] --> ADK
+    ADK --> Agent["agent.Agent"]
+    Setup -.->|"tested with fake model.LLM"| T1["structure tests"]
+    Logic -.->|"tested directly"| T2["logic tests (>=80%)"]
+```
+
 ## The build-agent pattern (shared convention for every agent dir)
 
 Each agent directory uses **one** `AGENTS.md` and two Go files:

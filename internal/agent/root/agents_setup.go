@@ -12,15 +12,17 @@ import (
 	"github.com/jkjamies/automation-agent/internal/ingest"
 )
 
-// Deps wires the dispatcher. SummaryAgent may be nil to leave the summary workflow
-// disabled (e.g. when no repos are configured).
+// Deps wires the dispatcher. Each handler is optional: a nil SummaryAgent leaves
+// the cron kinds unhandled, and nil lint handlers leave KindLint/KindCI unhandled.
 type Deps struct {
 	SummaryAgent agent.Agent
+	LintKickoff  Handler // KindLint
+	LintResume   Handler // KindCI
 	Log          *slog.Logger
 }
 
-// BuildRootDispatcher builds the dispatcher and registers the workflows that are
-// available. The cron kinds route to the summary workflow.
+// BuildRootDispatcher builds the dispatcher and registers the available workflows:
+// cron kinds → the summary workflow; KindLint/KindCI → the lint-fixer.
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	disp := NewDispatcher(d.Log)
 
@@ -33,8 +35,12 @@ func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 		disp.Register(ingest.KindCronDaily, h)
 		disp.Register(ingest.KindCronWeekly, h)
 	}
-
-	// KindLint / KindCI are registered by the lint-fixer in a later phase.
+	if d.LintKickoff != nil {
+		disp.Register(ingest.KindLint, d.LintKickoff)
+	}
+	if d.LintResume != nil {
+		disp.Register(ingest.KindCI, d.LintResume)
+	}
 	return disp, nil
 }
 

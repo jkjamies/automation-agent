@@ -87,6 +87,25 @@ func TestBuildRootDispatcherWithSummary(t *testing.T) {
 	}
 }
 
+func TestBuildRootDispatcherLintHandlers(t *testing.T) {
+	called := map[ingest.Kind]bool{}
+	d, err := BuildRootDispatcher(Deps{
+		LintKickoff: func(_ context.Context, e ingest.Envelope) error { called[e.Kind] = true; return nil },
+		LintResume:  func(_ context.Context, e ingest.Envelope) error { called[e.Kind] = true; return nil },
+	})
+	if err != nil {
+		t.Fatalf("BuildRootDispatcher: %v", err)
+	}
+	if !d.Handles(ingest.KindLint) || !d.Handles(ingest.KindCI) {
+		t.Fatal("lint kinds should be registered")
+	}
+	_ = d.Dispatch(context.Background(), env(ingest.KindLint))
+	_ = d.Dispatch(context.Background(), env(ingest.KindCI))
+	if !called[ingest.KindLint] || !called[ingest.KindCI] {
+		t.Errorf("handlers not invoked: %v", called)
+	}
+}
+
 func TestBuildRootDispatcherWithoutSummary(t *testing.T) {
 	d, err := BuildRootDispatcher(Deps{SummaryAgent: nil})
 	if err != nil {

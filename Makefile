@@ -13,6 +13,9 @@ build: ## Compile all packages
 run: ## Run the agent service
 	go run ./cmd/agent
 
+playground: ## Launch the local web UI playground (dev only) at :8080
+	go run ./cmd/playground web api webui
+
 test: ## Run all tests
 	go test ./...
 
@@ -50,5 +53,8 @@ spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove
 	test -f $$src || { echo "no template: $$src"; exit 1; }; \
 	dst=specs/$$(date +%Y%m%d)-$(name).md; \
 	cp $$src $$dst && echo "created $$dst"
+
+docker: ## Build the production container image (cmd/agent only)
+	docker build -t automation-agent .
 
 ci: tidy vet arch test cover ## Full local CI gate

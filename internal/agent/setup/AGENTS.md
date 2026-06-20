@@ -3,6 +3,22 @@
 Shared utilities for building agents. **This is the only package allowed to import
 provider SDKs** (Ollama, Gemini, genai) — enforced by `ARCH/`.
 
+## Flow
+
+```mermaid
+flowchart TD
+    Cfg["config.Config"] --> BL["BuildLLM(ctx, cfg)"]
+    BL -->|ollama| OM["NewOllamaModel -> OllamaModel (model.LLM)"]
+    BL -->|gemini| GM["gemini.NewModel (model.LLM)"]
+    OM -->|"Chat(): genai.Content <-> api.Message, stream aggregate"| Oll[("Ollama / Gemma")]
+    GM --> Vtx[("Gemini / Vertex")]
+    Agents["root / summary / lintfixer"] -->|"model.LLM, GenerateText"| OM
+    Agents --> GM
+    Prompts["NewPrompts(embed.FS): Get / MustGet"] --> Agents
+    Runner["NewRunner + Drive / DriveCollectState"] --> Agents
+    Events["UserText / AssistantText / TextEvent / StateString"] --> Agents
+```
+
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
 - `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama Go
   client (`github.com/ollama/ollama/api`). Converts genai content ⇄ Ollama chat

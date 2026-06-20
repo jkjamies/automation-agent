@@ -2,6 +2,26 @@
 
 The summary workflow agent. Build-agent pattern:
 
+## Flow
+
+```mermaid
+flowchart TD
+    Build["BuildSummaryAgent(Deps{LLM, GH, Notify, Repos})"] --> Seq["SequentialAgent: summary_workflow"]
+    Seq --> Par["ParallelAgent: fetch_all"]
+    Par --> F1["fetch_<repo1> (code agent)"]
+    Par --> Fn["fetch_<repoN> (code agent)"]
+    F1 -->|"GH.ListCommitsSince(now-24h)"| GH[("GitHub")]
+    Fn -->|"GH.ListCommitsSince(now-24h)"| GH
+    F1 -->|"StateDelta commits:<repo1>"| St[("session state")]
+    Fn -->|"StateDelta commits:<repoN>"| St
+    Seq --> Smz["summarizer (llmagent)"]
+    St -->|"InstructionProvider reads commits:*"| Smz
+    Smz -->|"OutputKey: digest"| St
+    Seq --> Ntf["notify (code agent)"]
+    St -->|"reads digest"| Ntf
+    Ntf --> Chat[("Slack / Teams")]
+```
+
 - `agents_setup.go` — `BuildSummaryAgent(Deps)` wires
   `Sequential[ Parallel[fetch×N] -> summarize(LLM) -> notify ]`. Pure wiring.
 - `summary.go` — the testable logic: per-repo fetch code-agents, the notify
