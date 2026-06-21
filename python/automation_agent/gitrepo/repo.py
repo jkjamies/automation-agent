@@ -1,0 +1,145 @@
+"""Working-tree git operations the lint-fixer needs: clone, branch, stage-all,
+commit, push — via GitPython.
+
+Port of ``internal/gitrepo/gitrepo.go``. Deterministic tooling — no agent imports.
+
+Go's ``(T, error)`` becomes: return the value and RAISE on error. Go's sentinel
+``ErrNoChanges`` becomes :class:`NoChangesError`. The ``context.Context``
+parameter is dropped (GitPython is synchronous).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
+
+from git import Actor
+from git import Repo as GitRepo
+
+
+@dataclass
+class Author:
+    """Identifies the committer."""
+
+    name: str
+    email: str
+
+
+class NoChangesError(Exception):
+    """Raised by :meth:`Repo.commit_all` when the working tree is clean (the edits
+    produced no actual change), so callers can distinguish "nothing to do" from a
+    real failure. Analogue of Go's ``ErrNoChanges``.
+    """
+
+
+def _auth_url(url: str, token: str) -> str:
+    """Embed ``x-access-token:<token>@`` into https URLs to mirror Go's
+    ``BasicAuth{x-access-token, token}``. Non-https (local path/file) remotes used
+    in tests are returned unchanged.
+    """
+    if not token:
+        return url
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return url
+    host = parts.hostname or ""
+    if parts.port is not None:
+        host = f"{host}:{parts.port}"
+    netloc = f"x-access-token:{token}@{host}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+class Repo:
+    """A cloned working tree."""
+
+    def __init__(self, repo: GitRepo, dir_: str) -> None:
+        self._repo = repo
+        self._dir = dir_
+
+    @staticmethod
+    def clone(url: str, dir: str, token: str = "") -> Repo:
+        """Clone url into dir (which must not already exist). A non-empty token is
+        embedded as GitHub HTTP auth for https URLs.
+        """
+        clone_url = _auth_url(url, token)
+        try:
+            repo = GitRepo.clone_from(clone_url, dir)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"clone {url}: {exc}") from exc
+        return Repo(repo, dir)
+
+    def dir(self) -> str:
+        """Return the working-tree directory; callers write file edits under it."""
+        return self._dir
+
+    def path(self, rel: str) -> str:
+        """Join rel onto the working-tree directory."""
+        return os.path.join(self._dir, rel)
+
+    def checkout(self, branch: str, create: bool = False) -> None:
+        """Switch to branch, creating it from the current HEAD when create is True."""
+        try:
+            if create:
+                self._repo.git.checkout("-b", branch)
+            else:
+                self._repo.git.checkout(branch)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"checkout {branch}: {exc}") from exc
+
+    def checkout_remote(self, branch: str) -> None:
+        """Check out an existing remote branch (origin/<branch>) as a local branch
+        — used on retry iterations to add a commit onto the previous fix rather
+        than starting a new branch from the base.
+        """
+        remote_ref = f"origin/{branch}"
+        try:
+            ref = self._repo.refs[remote_ref]
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"resolve origin/{branch}: {exc}") from exc
+        try:
+            local = self._repo.create_head(branch, ref.commit)
+            local.checkout()
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"checkout {branch}: {exc}") from exc
+
+    def commit_all(self, msg: str, author: Author) -> str:
+        """Stage every change (including deletions) and commit, returning the new
+        commit SHA. Raise :class:`NoChangesError` if the tree is clean.
+
+        Invariant: one commit per attempt.
+        """
+        try:
+            self._repo.git.add("--all")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"stage changes: {exc}") from exc
+        if not self._repo.is_dirty(index=True, working_tree=True, untracked_files=True):
+            raise NoChangesError("gitrepo: no changes to commit")
+        actor = Actor(author.name, author.email)
+        # Go signs the commit with author.When = now(); GitPython defaults both the
+        # author and commit timestamps to the current time when none is supplied,
+        # which matches the Go default (now = time.Now).
+        try:
+            commit = self._repo.index.commit(msg, author=actor)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"commit: {exc}") from exc
+        return commit.hexsha
+
+    def push(self) -> None:
+        """Push the current branch to origin. An up-to-date push is not an error."""
+        try:
+            origin = self._repo.remote("origin")
+            branch = self._repo.active_branch.name
+            results = origin.push(refspec=f"{branch}:{branch}")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"push: {exc}") from exc
+        for info in results:
+            if info.flags & info.ERROR:
+                raise ValueError(f"push: {info.summary}")
+
+    def head(self) -> str:
+        """Return the current HEAD commit SHA."""
+        try:
+            return self._repo.head.commit.hexsha
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"head: {exc}") from exc
