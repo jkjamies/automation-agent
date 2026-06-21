@@ -1,0 +1,12 @@
+# Gradle
+.gradle/
+build/
+
+# Local env & secrets (mirrors the Go reference's .gitignore)
+.env
+*.local
+
+# OS / editor noise
+.DS_Store
+*.iml
+.idea/

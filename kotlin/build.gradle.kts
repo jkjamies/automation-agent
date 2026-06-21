@@ -1,0 +1,103 @@
+// Kotlin port of automation-agent. Mirrors the Go reference at the repo root 1:1 in
+// functionality (see ../.agents/standards/language-parity.md). Built on ADK for Kotlin.
+//
+// This root project is the service module (mirrors Go cmd/ + internal/). Architecture
+// tests live in the separate :konsist module, run via `./gradlew arch`.
+plugins {
+    kotlin("jvm") version "2.4.0"
+    kotlin("plugin.serialization") version "2.4.0"
+    id("org.jetbrains.kotlinx.kover") version "0.9.8"
+    application
+    // ADK for Kotlin generates tools from @Tool methods via KSP (KSP2 — now versioned on its
+    // own line, e.g. 2.3.9 for Kotlin 2.4.0). Enable when the agent.setup layer is ported
+    // (see the deferred dependencies block below):
+    // id("com.google.devtools.ksp") version "2.3.9"
+}
+
+group = "io.github.jkjamies"
+version = "0.1.0"
+
+val ktorVersion = "3.5.0"
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Coroutines (the goroutine equivalent) + JSON (encoding/json equivalent).
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+
+    // Cron parsing for the scheduler (the robfig/cron analogue).
+    implementation("com.cronutils:cron-utils:9.2.1")
+
+    // JGit for the working-tree operations the fixers need (the go-git analogue).
+    implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.0.202606012155-r")
+
+    // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`
+    // layer needs core only — it implements the `Model` interface for the Ollama adapter and
+    // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:
+    // KSP is only needed once a @Tool-annotated agent (root/summary) lands, and the webserver
+    // backs the cmd/playground web runner. (Gradle resolves the -jvm variant of this KMP lib.)
+    implementation("com.google.adk:google-adk-kotlin-core:0.2.0")
+
+    // Ktor — HTTP client (githubapi, the Ollama adapter) + server (webhook).
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-cio:$ktorVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+    implementation("io.ktor:ktor-server-core:$ktorVersion")
+    implementation("io.ktor:ktor-server-cio:$ktorVersion")
+
+    // Kotest — the test framework for all ports' Kotlin tests (BehaviorSpec, Given/When/Then).
+    testImplementation("io.kotest:kotest-runner-junit5:6.1.11")
+    testImplementation("io.kotest:kotest-assertions-core:6.1.11")
+    testImplementation("io.ktor:ktor-client-mock:$ktorVersion") // client tests (githubapi)
+    testImplementation("io.ktor:ktor-server-test-host:$ktorVersion") // server tests (webhook)
+
+    // --- Deferred: ADK KSP processor + webserver (mirrors adk-go's tool generation + web UI) ---
+    // Activated together with the KSP plugin above when an @Tool-annotated agent lands:
+    //   implementation("com.google.adk:google-adk-kotlin-webserver:0.2.0")
+    //   ksp("com.google.adk:google-adk-kotlin-processor:0.2.0")
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+application {
+    // The service entrypoint that wires and runs the agent.
+    mainClass.set("io.github.jkjamies.automationagent.app.MainKt")
+}
+
+// `./gradlew playground` — local-only interactive REPL over the configured model (dev only).
+tasks.register<JavaExec>("playground") {
+    group = "application"
+    description = "Run the local playground REPL over the configured model."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("io.github.jkjamies.automationagent.playground.PlaygroundKt")
+    standardInput = System.`in`
+}
+
+tasks.test {
+    useJUnitPlatform() // Kotest runs on the JUnit platform.
+}
+
+// Enforce an 80% line-coverage floor (see .agents/standards/testing.md).
+kover {
+    reports {
+        verify {
+            rule {
+                minBound(80)
+            }
+        }
+    }
+}
+
+// `./gradlew arch` — dedicated architecture-conformance command.
+// Runs the Konsist checks in the :konsist module, independent of the unit-test run.
+tasks.register("arch") {
+    group = "verification"
+    description = "Run Konsist architecture conformance tests (import boundaries + AGENTS.md presence)."
+    dependsOn(":konsist:test")
+}
