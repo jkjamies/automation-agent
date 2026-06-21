@@ -1,14 +1,14 @@
 """Per-file parallel analysis.
 
-Port of ``fixflow/analyze.go``. :func:`parallel_analyze` fans out one analyzer agent
-per file (ADK parallel agents, each writing distinct state keys so they never collide),
-calls the edit function for each, and returns the collected non-empty edits sorted by
-path. State-key scheme matches Go exactly: ``edit:<workPath>`` -> new content and
-``path:<workPath>`` -> target edit path.
+:func:`parallel_analyze` fans out one analyzer agent per file (ADK parallel agents,
+each writing distinct state keys so they never collide), calls the edit function for
+each, and returns the collected non-empty edits sorted by path. The state-key scheme is
+``edit:<workPath>`` -> new content and ``path:<workPath>`` -> target edit path.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import cast
 
@@ -21,6 +21,8 @@ from automation_agent.agent import setup
 from automation_agent.agent.fixflow.applyfix import FileEdit
 from automation_agent.agent.fixflow.engine import FileWork
 
+log = logging.getLogger(__name__)
+
 EDIT_PREFIX = "edit:"  # state key per file: edit:<workPath> -> new content
 PATH_PREFIX = "path:"  # state key per file: path:<workPath> -> target edit path
 
@@ -28,16 +30,6 @@ PATH_PREFIX = "path:"  # state key per file: path:<workPath> -> target edit path
 # the source path — e.g. a test file) and new content. Return a zero FileEdit (empty
 # path or content) to skip this file.
 EditFunc = Callable[[FileWork], Awaitable[FileEdit]]
-
-
-def _safe_name(s: str) -> str:
-    out = []
-    for ch in s:
-        if ch.isascii() and (ch.isalnum()):
-            out.append(ch)
-        else:
-            out.append("_")
-    return "".join(out)
 
 
 class _Analyzer(BaseAgent):
@@ -61,6 +53,7 @@ class _Analyzer(BaseAgent):
         try:
             edit = await self._fn(w)
         except Exception as exc:  # noqa: BLE001
+            log.warning("analyze %s failed: %s", w.path, exc)
             yield setup.text_event(self.name, f"analyze {w.path}: {exc}")
             return
         if edit.path == "" or edit.content.strip() == "":
@@ -81,7 +74,7 @@ async def parallel_analyze(work: list[FileWork], fn: EditFunc) -> list[FileEdit]
     sorted_work = sorted(work, key=lambda w: w.path)
 
     agents: list[BaseAgent] = [
-        _Analyzer("analyze_" + _safe_name(w.path), w, fn) for w in sorted_work
+        _Analyzer("analyze_" + setup.safe_name(w.path), w, fn) for w in sorted_work
     ]
     par = ParallelAgent(
         name="analyze_all",

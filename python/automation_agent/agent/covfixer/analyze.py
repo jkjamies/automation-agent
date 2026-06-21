@@ -1,6 +1,6 @@
 """Analyze: a two-phase test-generation step (explore a plan, then execute it).
 
-Port of ``covfixer/analyze.go``. :func:`explore` runs a tool-using agent that navigates
+:func:`explore` runs a tool-using agent that navigates
 the checkout itself (read_file / list_dir) to learn the repo's real test conventions and
 returns a per-file plan; :func:`execute` generates a test per file from that plan + the
 source, one parallel agent per file.
@@ -9,6 +9,7 @@ source, one parallel agent per file.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from automation_agent.agent import setup
@@ -24,6 +25,8 @@ from automation_agent.agent.fixflow import (
 from automation_agent.agent.fixflow import (
     explore as fixflow_explore,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,12 +63,15 @@ async def _execute(
     async def edit(w: FileWork) -> FileEdit:
         p = plan.get(w.path)
         if p is None or p.test_path.strip() == "":
+            log.warning("coverage analyze: explorer placed no test for %s -> skip", w.path)
             return FileEdit(path="", content="")  # explorer couldn't place it -> skip
         try:
             src = read_file(in_.repo_dir, w.path)
-        except (OSError, ValueError):
-            # Unreadable file (incl. a path escaping the repo root) -> skip,
-            # matching Go's "any read error -> skip" behavior.
+        except (OSError, ValueError) as exc:
+            # Unreadable file (incl. a path escaping the repo root) -> skip:
+            # any read error means skip. Log so a skip is distinguishable from
+            # "nothing to do".
+            log.warning("coverage analyze: skipping unreadable file %s: %s", w.path, exc)
             return FileEdit(path="", content="")
         out = await setup.generate_text(
             in_.coder(), prompts.must_get("analyze"), _build_execute_input(w, src, p, in_.feedback)

@@ -1,10 +1,12 @@
 """Analyze: rewrite each affected source file to fix its lint problems.
 
-Port of ``lintfixer/analyze.go``. One parallel agent per file, reading the current
-source from the checkout. Feedback (on retry) is the previous attempt's CI failure.
+One parallel agent per file, reading the current source from the checkout. Feedback
+(on retry) is the previous attempt's CI failure.
 """
 
 from __future__ import annotations
+
+import logging
 
 from automation_agent.agent import setup
 from automation_agent.agent.fixflow import (
@@ -17,6 +19,8 @@ from automation_agent.agent.fixflow import (
 )
 from automation_agent.agent.lintfixer.loader import prompts
 
+log = logging.getLogger(__name__)
+
 
 async def analyze(in_: AnalyzeInput) -> list[FileEdit]:
     """Rewrite each affected source file to fix its lint problems, in parallel."""
@@ -24,10 +28,11 @@ async def analyze(in_: AnalyzeInput) -> list[FileEdit]:
     async def edit(w: FileWork) -> FileEdit:
         try:
             src = read_file(in_.repo_dir, w.path)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
             # Unreadable file (incl. a path that escapes the repo root, which
-            # read_file rejects with ValueError) -> skip, matching Go's
-            # "any read error -> skip" behavior.
+            # read_file rejects with ValueError) -> skip: any read error means
+            # skip. Log it so a skip is distinguishable from "nothing to do".
+            log.warning("lint analyze: skipping unreadable file %s: %s", w.path, exc)
             return FileEdit(path="", content="")
         out = await setup.generate_text(
             in_.coder(), prompts.must_get("analyze"), _build_file_prompt(w, src, in_.feedback)

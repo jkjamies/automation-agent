@@ -1,4 +1,4 @@
-"""Port of internal/webhook/webhook_test.go using FastAPI's TestClient."""
+"""Tests for the webhook server using FastAPI's TestClient."""
 
 from __future__ import annotations
 
@@ -112,13 +112,23 @@ def test_method_not_allowed() -> None:
     assert resp.status_code == 405
 
 
-def test_oversize_body_is_truncated() -> None:
-    # Mirrors Go's io.LimitReader: a body larger than the cap is truncated to
-    # MAX_BODY_BYTES and still accepted (202), not rejected.
+def test_oversize_body_is_rejected() -> None:
+    # A body larger than the cap is rejected with 413 (not truncated): a truncated
+    # body would fail HMAC and could feed malformed JSON downstream.
     c = Capture()
     client = TestClient(Server(c.ingest).app)
     oversize = "x" * ((5 << 20) + 100)
     resp = client.post("/webhooks/lint", content=oversize)
+    assert resp.status_code == 413
+    assert c.env is None  # never dispatched
+
+
+def test_at_cap_body_is_accepted() -> None:
+    # A body exactly at the cap is accepted in full.
+    c = Capture()
+    client = TestClient(Server(c.ingest).app)
+    body = "x" * (5 << 20)
+    resp = client.post("/webhooks/lint", content=body)
     assert resp.status_code == 202
     assert c.env is not None
     assert len(c.env.payload) == (5 << 20)

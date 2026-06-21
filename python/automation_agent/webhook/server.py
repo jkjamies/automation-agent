@@ -19,6 +19,10 @@ from automation_agent.ingest import Envelope, Kind, new
 # maxBodyBytes caps how much of a webhook body we read.
 MAX_BODY_BYTES = 5 << 20  # 5 MiB
 
+
+class _BodyTooLarge(Exception):
+    """Raised when a request body exceeds MAX_BODY_BYTES (caller returns 413)."""
+
 # IngestFunc consumes a normalized envelope. It should enqueue work and return
 # quickly; a raised error becomes a 500 to the caller.
 IngestFunc = Callable[[Envelope], Awaitable[None]]
@@ -51,7 +55,7 @@ class Server:
 
     @property
     def app(self) -> FastAPI:
-        """Return the FastAPI app to mount (the ``Handler()`` analogue)."""
+        """Return the FastAPI app to mount."""
         return self._app
 
     def _build_app(self) -> FastAPI:
@@ -63,27 +67,27 @@ class Server:
 
         @app.post("/webhooks/lint")
         async def lint(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            body = await self._read_body(request)
-            if body is None:
-                return Response(content="read body", status_code=400)
+            body = await self._take_body(request)
+            if isinstance(body, Response):
+                return body
             return await self._dispatch(
                 new(Kind.LINT, "webhook:/lint", body, self.now())
             )
 
         @app.post("/webhooks/coverage")
         async def coverage(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            body = await self._read_body(request)
-            if body is None:
-                return Response(content="read body", status_code=400)
+            body = await self._take_body(request)
+            if isinstance(body, Response):
+                return body
             return await self._dispatch(
                 new(Kind.COVERAGE, "webhook:/coverage", body, self.now())
             )
 
         @app.post("/webhooks/github")
         async def github(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            body = await self._read_body(request)
-            if body is None:
-                return Response(content="read body", status_code=400)
+            body = await self._take_body(request)
+            if isinstance(body, Response):
+                return body
             if self.secret != "" and not verify_signature(
                 self.secret,
                 request.headers.get("X-Hub-Signature-256", ""),
@@ -96,22 +100,38 @@ class Server:
 
         return app
 
+    async def _take_body(self, request: Request) -> bytes | Response:
+        """Read the request body, or return the error response to send: a transport read
+        error -> 400, an oversize body -> 413. Callers ``isinstance``-check the result."""
+        try:
+            body = await self._read_body(request)
+        except _BodyTooLarge:
+            return Response(content="payload too large", status_code=413)
+        if body is None:
+            return Response(content="read body", status_code=400)
+        return body
+
     async def _read_body(self, request: Request) -> bytes | None:
-        """Read up to MAX_BODY_BYTES, truncating anything larger (mirrors Go's
-        ``io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))``: oversize bodies are
-        capped, not rejected). Streams so an oversize body never buffers in full.
-        Returns None only on a transport read error."""
+        """Read up to MAX_BODY_BYTES. Streams so an oversize body never buffers in
+        full: as soon as the cap is exceeded it raises :class:`_BodyTooLarge` (the
+        caller returns 413) rather than truncating — a truncated body would fail
+        HMAC and could feed malformed JSON downstream. Returns None only on a
+        transport read error."""
         chunks: list[bytes] = []
         total = 0
+        too_large = False
         try:
             async for chunk in request.stream():
-                chunks.append(chunk)
                 total += len(chunk)
-                if total >= MAX_BODY_BYTES:
+                if total > MAX_BODY_BYTES:
+                    too_large = True
                     break
+                chunks.append(chunk)
         except Exception:
             return None
-        return b"".join(chunks)[:MAX_BODY_BYTES]
+        if too_large:
+            raise _BodyTooLarge
+        return b"".join(chunks)
 
     async def _dispatch(self, env: Envelope) -> Response:
         try:

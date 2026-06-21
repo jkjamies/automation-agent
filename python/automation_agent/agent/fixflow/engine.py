@@ -1,6 +1,6 @@
 """The reusable engine behind the PR-fixing agents (lint-fixer, coverage-fixer, …).
 
-Port of ``fixflow/engine.go``. It owns the event-driven loop — kickoff -> suspend ->
+It owns the event-driven loop — kickoff -> suspend ->
 CI resume -> loop or finish — plus the apply mechanics and attempt counting. Each
 concrete agent supplies a :class:`Spec` (triage fn, analyze fn, branch/label/check
 names). State lives on GitHub; there is no local store. The CI-wait suspend/resume
@@ -166,7 +166,14 @@ class Engine:
     async def attempt_once(self, rp: RunParams) -> ApplyResult:
         """Run a single fix attempt: triage -> checkout -> analyze -> commit, returning
         the resulting PR. The body the apply_fix tool invokes."""
-        work = await self.spec.triage(self.d.llm, rp.report)  # type: ignore[arg-type]
+        if self.d.gh is None:
+            raise ValueError("engine: github client is not configured")
+        # Triage depends only on the (immutable) report, so cache it on the run: a retry
+        # changes only the analyze feedback, not the triage, and re-running it would pay
+        # for an identical LLM call each attempt.
+        if rp.work is None:
+            rp.work = await self.spec.triage(self.d.llm, rp.report)  # type: ignore[arg-type]
+        work = rp.work
 
         cfg = ApplyConfig(
             owner=rp.owner,
@@ -194,7 +201,6 @@ class Engine:
                     feedback=rp.feedback,
                 )
             )
-            assert self.d.gh is not None
             return commit(self.d.gh, git_repo, cfg, edits)
         finally:
             import shutil

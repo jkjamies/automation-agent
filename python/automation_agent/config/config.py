@@ -82,6 +82,12 @@ class Config:
             )
         if self.max_iterations < 1:
             raise ValueError(f"MAX_ITERATIONS must be >= 1, got {self.max_iterations}")
+        try:
+            port = int(self.port)
+        except ValueError as exc:
+            raise ValueError(f"PORT must be numeric, got {self.port!r}") from exc
+        if not (0 < port < 65536):
+            raise ValueError(f"PORT must be in 1..65535, got {port}")
 
 
 def load() -> Config:
@@ -150,7 +156,7 @@ def _split_list(s: str) -> list[str]:
     return [t.strip() for t in s.split(",") if t.strip()]
 
 
-# Go's time.ParseDuration unit table (subset that matters for CI_TIMEOUT).
+# Duration unit table (subset that matters for CI_TIMEOUT).
 _DURATION_UNITS: dict[str, float] = {
     "ns": 1e-9,
     "us": 1e-6,
@@ -163,9 +169,9 @@ _DURATION_UNITS: dict[str, float] = {
 
 
 def _parse_duration(s: str) -> timedelta:
-    """Parse a Go-style duration string (e.g. ``90m``, ``1h30m``) into a timedelta.
+    """Parse a duration string (e.g. ``90m``, ``1h30m``) into a timedelta.
 
-    Mirrors the subset of ``time.ParseDuration`` needed for CI_TIMEOUT.
+    Supports the subset of unit suffixes needed for CI_TIMEOUT.
 
     Raises:
         ValueError: if the string is empty or malformed.

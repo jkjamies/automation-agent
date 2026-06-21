@@ -1,7 +1,7 @@
 """The summary workflow's code agents and formatting helpers.
 
-Port of ``internal/agent/summary/summary.go``. The fetch agents write per-repo commit
-data to ``commits:<owner/repo>`` state keys; the summarizer's instruction provider reads
+The fetch agents write per-repo commit data to ``commits:<owner/repo>`` state keys;
+the summarizer's instruction provider reads
 them and appends them to the prompt; the notifier posts the ``digest`` state key.
 """
 
@@ -18,6 +18,7 @@ from google.adk.events import Event
 from typing_extensions import override
 
 from automation_agent.agent import setup
+from automation_agent.agent.setup import safe_name
 from automation_agent.githubapi import Commit
 from automation_agent.notify import Message, Notifier
 
@@ -167,7 +168,7 @@ def build_instruction(prompt_body: str, state: object) -> str:
 
 
 def format_commits(repo: str, commits: list[Commit]) -> str:
-    """Format a repo's commits exactly like Go's ``formatCommits``."""
+    """Format a repo's commits for the digest."""
     if not commits:
         return f"Repository {repo}: no commits in the window."
     lines = [f"Repository {repo} ({len(commits)} commits):\n"]
@@ -199,14 +200,3 @@ def split_repo(s: str) -> tuple[str, str] | None:
     if not sep or owner == "" or repo == "":
         return None
     return owner, repo
-
-
-def safe_name(s: str) -> str:
-    """Map ``s`` to an agent-name-safe string (non-alphanumerics become ``_``)."""
-    out = []
-    for ch in s:
-        if ch.isascii() and ch.isalnum():
-            out.append(ch)
-        else:
-            out.append("_")
-    return "".join(out)

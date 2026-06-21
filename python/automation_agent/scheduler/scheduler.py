@@ -18,6 +18,10 @@ from automation_agent.ingest import Envelope, Kind, new
 # EmitFunc receives an envelope when a schedule fires.
 EmitFunc = Callable[[Envelope], None]
 
+# Cron schedules are interpreted in UTC so "0 9 * * *" means 09:00 UTC regardless of the
+# host timezone (which would otherwise be an undocumented, deploy-dependent zone).
+_CRON_TZ = UTC
+
 
 class Scheduler:
     """Registers cron specs that emit ingest envelopes."""
@@ -30,14 +34,14 @@ class Scheduler:
     ) -> None:
         self.emit = emit
         self.now = now if now is not None else (lambda: datetime.now(UTC))
-        self._cron = BackgroundScheduler()
+        self._cron = BackgroundScheduler(timezone=_CRON_TZ)
 
     def add(self, spec: str, kind: Kind) -> None:
         """Register a 5-field cron spec (minute hour dom month dow).
 
         Raises for an invalid spec.
         """
-        trigger = CronTrigger.from_crontab(spec)
+        trigger = CronTrigger.from_crontab(spec, timezone=_CRON_TZ)
         self._cron.add_job(self._trigger, trigger=trigger, args=[kind])
 
     def _trigger(self, kind: Kind) -> None:

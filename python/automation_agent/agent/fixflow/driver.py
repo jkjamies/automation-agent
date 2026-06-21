@@ -1,6 +1,6 @@
 """The CI-wait suspend/resume loop on ADK long-running tools.
 
-Port of ``fixflow/driver.go``. The Driver owns the long-run agent, the in-memory
+The Driver owns the long-run agent, the in-memory
 parked-run registry, and each session's run params. All policy — retry vs give up,
 attempt counting, the per-run timeout — lives here; the agent's Sequencer model only
 emits a fixed apply_fix -> await_ci sequence.
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, LongRunningFunctionTool
@@ -29,7 +29,7 @@ from automation_agent.agent import setup
 from automation_agent.agent.fixflow.registry import ParkedRun, RunRegistry
 
 if TYPE_CHECKING:
-    from automation_agent.agent.fixflow.engine import Engine, ResumeInput
+    from automation_agent.agent.fixflow.engine import Engine, FileWork, ResumeInput
     from automation_agent.agent.fixflow.envelope import Kickoff
 
 TOOL_APPLY_FIX = "apply_fix"
@@ -49,6 +49,9 @@ class RunParams:
     report: str
     feedback: str = ""  # previous attempt's CI failure, on retry
     new_branch: bool = True  # True on kickoff (create from base); False on retry
+    # Triage output, cached on first attempt and reused across retries (triage depends
+    # only on the immutable report; only the analyze feedback changes between attempts).
+    work: list[FileWork] | None = None
 
 
 class Driver:
@@ -240,21 +243,12 @@ class Driver:
         (and its timeout) under its PR key."""
         apply = res.tool_responses.get(TOOL_APPLY_FIX)
         if apply is not None and "error" in apply:
-            self._clear(sid)
-            raise RuntimeError(
-                f"{full_repo} {self.engine.spec.name}: {apply['error']}"
-            )
+            self._fail(sid, full_repo, _pr_number_from(apply), str(apply["error"]))
         if res.parked_call_id == "":
-            self._clear(sid)
-            raise RuntimeError(
-                f"{full_repo} {self.engine.spec.name}: run did not park on CI wait"
-            )
+            self._fail(sid, full_repo, _pr_number_from(apply), "run did not park on CI wait")
         pr = _pr_number_from(apply)
         if pr == 0:
-            self._clear(sid)
-            raise RuntimeError(
-                f"{full_repo} {self.engine.spec.name}: parked without a PR number"
-            )
+            self._fail(sid, full_repo, pr, "parked without a PR number")
         self.reg.park(
             _pr_key(full_repo, pr),
             ParkedRun(session_id=sid, call_id=res.parked_call_id, attempts=attempt),
@@ -270,8 +264,8 @@ class Driver:
         )
 
     def _log(self, level: int, msg: str, **fields: Any) -> None:
-        """Mirror the Go driver's slog calls: no-op when no logger is configured,
-        otherwise emit with the workflow name and the given structured fields."""
+        """Structured logging: no-op when no logger is configured, otherwise emit
+        with the workflow name and the given structured fields."""
         log = self.engine.d.log
         if log is not None:
             log.log(level, msg, extra={"workflow": self.engine.spec.name, **fields})
@@ -285,6 +279,19 @@ class Driver:
         if rp is not None:
             rp.feedback = "The previous attempt failed CI with:\n" + feedback
             rp.new_branch = False
+
+    def _fail(self, sid: str, full_repo: str, pr: int, reason: str) -> NoReturn:
+        """Terminal apply failure: free the run, ask a human to review (so a fix that
+        can never even open its PR doesn't vanish silently), and raise."""
+        self._clear(sid)
+        link = _pull_url(full_repo, pr) if pr else ""
+        self.engine.notify(
+            self.engine.spec.review_title,
+            f"{full_repo}: the {self.engine.spec.name} fix could not be applied "
+            f"({reason}). Please review.",
+            link,
+        )
+        raise RuntimeError(f"{full_repo} {self.engine.spec.name}: {reason}")
 
     def _clear(self, sid: str) -> None:
         self._runs.pop(sid, None)

@@ -1,4 +1,4 @@
-"""Port of internal/config/config_test.go."""
+"""Tests for config loading."""
 
 from __future__ import annotations
 
@@ -62,3 +62,13 @@ def test_max_iterations_unparseable() -> None:
 def test_duration_compound() -> None:
     c = load_from(map_lookup({"CI_TIMEOUT": "1h30m"}))
     assert c.ci_timeout.total_seconds() == 90 * 60
+
+
+def test_invalid_port_non_numeric() -> None:
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"PORT": "abc"}))
+
+
+def test_invalid_port_out_of_range() -> None:
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"PORT": "70000"}))

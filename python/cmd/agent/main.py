@@ -2,7 +2,6 @@
 
 Wires configuration, tooling, agents, the scheduler, and the webhook server together,
 then runs until interrupted. Composition only — logic lives in ``automation_agent/``.
-This is the Python twin of ``cmd/agent/main.go``.
 
 Run with ``python cmd/agent/main.py`` (it is intentionally NOT an importable package:
 a top-level ``cmd`` package would shadow the stdlib ``cmd`` module).
@@ -75,7 +74,7 @@ def _ci_resume_handler(engines: list[Engine]):
         for eng in engines:
             try:
                 await eng.resume(e.payload)
-            except Exception as exc:  # noqa: BLE001 - collect & continue, mirror errors.Join
+            except Exception as exc:  # noqa: BLE001 - collect & continue
                 errors.append(exc)
         if errors:
             raise ExceptionGroup("ci resume failed", errors)
@@ -121,6 +120,13 @@ async def run() -> None:
 
     loop = asyncio.get_running_loop()
 
+    # In-flight webhook-dispatch tasks. CPython holds only a weak reference to a bare
+    # task created by ``loop.create_task``, so a fire-and-forget task can be garbage-
+    # collected mid-flight ("Task was destroyed but it is pending!"). Keeping a strong
+    # reference here both prevents that and lets the shutdown path drain outstanding work
+    # instead of dropping it.
+    pending: set[asyncio.Task[None]] = set()
+
     async def _safe_dispatch(e: Envelope) -> None:
         try:
             await dispatcher.dispatch(e)
@@ -128,6 +134,8 @@ async def run() -> None:
             log.error("dispatch failed: kind=%s err=%s", e.kind, exc)
 
     # Scheduler: cron fires on a background thread → marshal the coroutine onto the loop.
+    # run_coroutine_threadsafe keeps the coroutine alive via the returned future, so this
+    # path is not a GC hazard.
     def _emit(e: Envelope) -> None:
         asyncio.run_coroutine_threadsafe(_safe_dispatch(e), loop)
 
@@ -137,7 +145,9 @@ async def run() -> None:
 
     # Webhooks enqueue asynchronously and return fast.
     async def _ingest(e: Envelope) -> None:
-        loop.create_task(_safe_dispatch(e))
+        task = loop.create_task(_safe_dispatch(e))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
 
     srv = Server(_ingest, secret=cfg.github_webhook_secret)
 
@@ -159,6 +169,16 @@ async def run() -> None:
     finally:
         log.info("shutting down")
         sched.stop()
+        # Drain in-flight webhook dispatches so a clean SIGTERM finishes outstanding
+        # work instead of dropping it. Bounded so a stuck dispatch can't hang exit.
+        if pending:
+            log.info("draining %d in-flight dispatch(es)", len(pending))
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True), timeout=30
+                )
+            except TimeoutError:
+                log.warning("drain timed out; %d dispatch(es) abandoned", len(pending))
 
 
 def main() -> None:

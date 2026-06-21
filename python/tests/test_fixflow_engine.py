@@ -1,4 +1,4 @@
-"""Port of fixflow engine_test.go: the full kickoff -> park -> resume loop driven
+"""Tests for the fixflow engine: the full kickoff -> park -> resume loop driven
 through the REAL setup.LongRunDriver, with fake (non-LLM) triage/analyze, a seed remote,
 a fake GitHub, and a fake Notifier.
 """
@@ -233,6 +233,56 @@ async def test_engine_kickoff_triage_error(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         await e.kickoff(b'{"repo":"acme/api","report":"r"}')
     assert e.driver.reg.len() == 0
+
+
+async def test_engine_kickoff_apply_failure_notifies(tmp_path) -> None:
+    # An apply-step failure (here: PR creation) must ask a human to review rather than
+    # vanishing silently. (C2)
+    remote = _seed_remote(tmp_path)
+    gh = FakeGH()
+
+    def boom_create_pr(owner, repo, in_):  # type: ignore[no-untyped-def]
+        raise RuntimeError("create PR exploded")
+
+    gh.create_pr = boom_create_pr  # type: ignore[assignment]
+    n = FakeNotifier()
+    e = _new_engine(remote, gh, n)
+
+    with pytest.raises(RuntimeError):
+        await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
+    assert len(n.msgs) == 1 and "review" in n.msgs[0].title.lower()
+    assert e.driver.reg.len() == 0
+
+
+async def test_engine_triage_cached_across_retries(tmp_path) -> None:
+    # Triage runs once and is reused on retry; only analyze re-runs. (S6)
+    remote = _seed_remote(tmp_path)
+    gh = FakeGH()
+    n = FakeNotifier()
+    spec = _spec()
+    triage_calls = {"n": 0}
+
+    async def counting_triage(_llm, _report) -> list[FileWork]:
+        triage_calls["n"] += 1
+        return [FileWork(path="a.go", items=["x"])]
+
+    spec.triage = counting_triage
+    e = new_engine(
+        spec,
+        Deps(gh=gh, notify=n, max_iter=3, ci_timeout=timedelta(hours=1),
+             clone_url=lambda _o, _r: remote),
+    )
+
+    await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
+
+    async def retry_analyze(_in: AnalyzeInput) -> list[FileEdit]:
+        return [FileEdit(path="a.go", content="package a\n\n// retry\n")]
+
+    e.spec.analyze = retry_analyze
+    gh.existing = [PR(number=42, title="", branch="agent/fix", head_sha="", url="")]
+    await e.resume(_check_body("failure", 42, "still failing"))
+    assert triage_calls["n"] == 1  # not re-run on retry
+    assert e.driver.reg.len() == 1
 
 
 def test_engine_label_and_check_name(tmp_path) -> None:

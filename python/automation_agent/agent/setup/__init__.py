@@ -19,6 +19,7 @@ from automation_agent.agent.setup.longrun import (
     LongRunDriver,
     Sequencer,
 )
+from automation_agent.agent.setup.names import safe_name
 from automation_agent.agent.setup.prompt import Prompts
 from automation_agent.agent.setup.runner import (
     drive,
@@ -42,6 +43,7 @@ __all__ = [
     "generate_text",
     "last_text",
     "new_runner",
+    "safe_name",
     "state_string",
     "text_event",
     "user_text",
