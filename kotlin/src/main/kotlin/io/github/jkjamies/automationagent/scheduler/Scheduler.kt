@@ -21,7 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Instant
-import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -103,7 +103,9 @@ private sealed interface Entry {
 
     class Cron(private val exec: ExecutionTime, override val kind: Kind) : Entry {
         override fun nextDelayMillis(): Long {
-            val nowZ = ZonedDateTime.now(ZoneId.systemDefault())
+            // Cron fields are interpreted in UTC, not the (undocumented) host zone, so "0 9 * * *"
+            // means 09:00 UTC on every deployment regardless of the container's local timezone.
+            val nowZ = ZonedDateTime.now(ZoneOffset.UTC)
             val next = exec.nextExecution(nowZ).orElse(null) ?: return 60_000
             return java.time.Duration.between(nowZ, next).toMillis().coerceAtLeast(1)
         }

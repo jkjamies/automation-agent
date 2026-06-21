@@ -5,6 +5,8 @@ import io.github.jkjamies.automationagent.githubapi.Client
 import io.github.jkjamies.automationagent.gitrepo.Author
 import io.github.jkjamies.automationagent.notify.Message
 import io.github.jkjamies.automationagent.notify.Notifier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -128,7 +130,7 @@ class Engine(val spec: Spec, val deps: Deps) {
             val edits = spec.analyze(AnalyzeInput(llm = deps.llm, codeLlm = codeLlm, repoDir = repo.dir(), work = work, feedback = rp.feedback))
             commit(deps.gh, repo, cfg, edits)
         } finally {
-            File(repo.dir()).deleteRecursively()
+            withContext(Dispatchers.IO) { File(repo.dir()).deleteRecursively() }
         }
     }
 

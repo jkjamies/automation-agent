@@ -31,11 +31,27 @@ import io.github.jkjamies.automationagent.webhook.webhookServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.System.Logger.Level
+import java.time.Duration
 import kotlin.system.exitProcess
 
 private val log: System.Logger = System.getLogger("automation-agent")
+
+/** Caps how many webhook/cron dispatches run concurrently, so a burst can't spawn unbounded work. */
+private const val MAX_CONCURRENT_DISPATCH = 16
+
+/** On SIGTERM: stop accepting requests within this grace, then this hard timeout, then drain. */
+private const val SERVER_GRACE_MS = 5_000L
+private const val SERVER_TIMEOUT_MS = 15_000L
+
+/** How long to wait for in-flight dispatches to finish before abandoning them at shutdown. */
+private const val DRAIN_TIMEOUT_MS = 20_000L
 
 fun main() {
     try {
@@ -57,7 +73,8 @@ private fun run() {
     val gh = githubAdapter(client)
     val notifier = buildNotifier(cfg)
 
-    val summaryAgent = buildSummary(cfg, llm, commitLister, notifier)
+    val summaryDaily = buildSummary(cfg, llm, commitLister, notifier, Duration.ofHours(24), "Daily commit digest")
+    val summaryWeekly = buildSummary(cfg, llm, commitLister, notifier, Duration.ofDays(7), "Weekly commit digest")
 
     // Fix engines are event-driven and work without a notifier — they just won't post results.
     val fixDeps =
@@ -69,13 +86,15 @@ private fun run() {
     val coverageEngine = newCoverageEngine(fixDeps)
     val engines = listOf(lintEngine, coverageEngine)
 
-    // Background scope for async dispatch from cron fires and webhook deliveries.
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Background scope for async dispatch from cron fires and webhook deliveries. Parallelism is
+    // bounded so a burst of deliveries can't spawn unbounded coroutines.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(MAX_CONCURRENT_DISPATCH))
 
     val dispatcher =
         buildRootDispatcher(
             RootDeps(
-                summaryAgent = summaryAgent,
+                summaryDaily = summaryDaily,
+                summaryWeekly = summaryWeekly,
                 lintKickoff = payloadHandler { lintEngine.kickoff(it) },
                 coverageKickoff = payloadHandler { coverageEngine.kickoff(it) },
                 ciResume = ciResumeHandler(engines),
@@ -94,7 +113,6 @@ private fun run() {
     scheduler.add(cfg.cronDaily, Kind.CRON_DAILY)
     scheduler.add(cfg.cronWeekly, Kind.CRON_WEEKLY)
     scheduler.start()
-    Runtime.getRuntime().addShutdownHook(Thread { scheduler.stop() })
 
     // Webhooks enqueue asynchronously and return fast.
     val server =
@@ -109,9 +127,24 @@ private fun run() {
             secret = cfg.githubWebhookSecret,
         )
 
+    // Graceful shutdown: stop firing crons, stop accepting requests, then drain in-flight
+    // dispatches before exiting. Parked CI-wait runs still live only in memory and are abandoned on
+    // restart (the documented in-memory trade); this only drains work already running.
+    Runtime.getRuntime().addShutdownHook(
+        Thread {
+            log.log(Level.INFO, "shutting down: draining in-flight dispatches")
+            scheduler.stop()
+            server.stop(gracePeriodMillis = SERVER_GRACE_MS, timeoutMillis = SERVER_TIMEOUT_MS)
+            runBlocking {
+                withTimeoutOrNull(DRAIN_TIMEOUT_MS) { scope.coroutineContext.job.children.toList().joinAll() }
+            }
+            scope.cancel()
+        },
+    )
+
     log.log(
         Level.INFO,
-        "automation-agent listening port=${cfg.port} llmProvider=${cfg.llmProvider} repos=${cfg.repos.size} notify=${cfg.notifyProvider} summaryEnabled=${summaryAgent != null}",
+        "automation-agent listening port=${cfg.port} llmProvider=${cfg.llmProvider} repos=${cfg.repos.size} notify=${cfg.notifyProvider} summaryEnabled=${summaryDaily != null}",
     )
     server.start(wait = true)
 }
@@ -125,15 +158,19 @@ private fun buildNotifier(cfg: Config): Notifier? =
         null
     }
 
-/** Returns the summary workflow agent, or null if it can't be fully configured (no repos / notifier). */
-private fun buildSummary(cfg: Config, llm: Model, gh: CommitLister, notifier: Notifier?): BaseAgent? {
+/**
+ * Returns a summary workflow agent for the given look-back [window] and digest [title], or null if
+ * it can't be fully configured (no repos / notifier). Daily and weekly each get their own agent so
+ * the weekly cron produces a 7-day, "Weekly"-titled digest rather than a daily one.
+ */
+private fun buildSummary(cfg: Config, llm: Model, gh: CommitLister, notifier: Notifier?, window: Duration, title: String): BaseAgent? {
     if (cfg.repos.isEmpty()) {
         log.log(Level.WARNING, "no REPOS configured; summary workflow disabled")
         return null
     }
     if (notifier == null) return null // buildNotifier already warned
     return try {
-        buildSummaryAgent(SummaryDeps(llm = llm, gh = gh, notifier = notifier, repos = cfg.repos))
+        buildSummaryAgent(SummaryDeps(llm = llm, gh = gh, notifier = notifier, repos = cfg.repos, window = window, title = title))
     } catch (e: Exception) {
         log.log(Level.WARNING, "summary workflow disabled: ${e.message}")
         null

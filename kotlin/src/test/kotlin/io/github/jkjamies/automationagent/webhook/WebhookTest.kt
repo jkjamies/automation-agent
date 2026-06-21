@@ -120,6 +120,21 @@ class WebhookTest : BehaviorSpec({
         }
     }
 
+    Given("an oversized request body") {
+        When("POSTing more than the 5 MiB cap to /webhooks/lint") {
+            Then("it is rejected with 413 and never dispatched") {
+                val c = Capture()
+                val tooBig = "x".repeat(5 * 1024 * 1024 + 1)
+                testApplication {
+                    application { webhookRoutes(c.ingest) }
+                    val resp = client.post("/webhooks/lint") { setBody(tooBig) }
+                    resp.status shouldBe HttpStatusCode.PayloadTooLarge
+                }
+                c.env shouldBe null
+            }
+        }
+    }
+
     Given("a health check") {
         When("GETting /healthz") {
             Then("it returns 200 ok") {

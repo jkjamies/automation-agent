@@ -8,6 +8,8 @@ import io.github.jkjamies.automationagent.agent.fixflow.readFile
 import io.github.jkjamies.automationagent.agent.fixflow.stripFences
 import io.github.jkjamies.automationagent.agent.setup.generateText
 
+private val log: System.Logger = System.getLogger("automation-agent.lintfixer")
+
 /**
  * Rewrites each affected source file to fix its lint problems, one parallel agent per file, reading
  * the current source from the checkout. Feedback (from a retry) is the previous attempt's CI
@@ -17,6 +19,7 @@ suspend fun analyze(input: AnalyzeInput): List<FileEdit> =
     parallelAnalyze(input.work) { w ->
         val src = runCatching { readFile(input.repoDir, w.path) }.getOrNull()
         if (src == null) {
+            log.log(System.Logger.Level.WARNING, "lint analyze: skipping unreadable file ${w.path}")
             FileEdit("", "") // unreadable file -> skip
         } else {
             val model = requireNotNull(input.coder()) { "analyze: an LLM is required" }

@@ -28,6 +28,7 @@ data class SummaryDeps(
     val notifier: Notifier,
     val repos: List<String>, // owner/repo entries; one parallel fetcher each
     val window: Duration = Duration.ofHours(24),
+    val title: String = "Daily commit digest", // notification heading; varies daily vs weekly
     val now: () -> Instant = { Instant.now() },
 )
 
@@ -51,10 +52,10 @@ fun buildSummaryAgent(deps: SummaryDeps): BaseAgent {
             description = "Fetches recent commits for all configured repositories",
             subAgents = fetchers,
         )
-    val summarizeNotify = SummarizeAndNotifyAgent(deps.llm, deps.notifier, prompts.get("summarize"))
+    val summarizeNotify = SummarizeAndNotifyAgent(deps.llm, deps.notifier, prompts.get("summarize"), deps.title)
     return SequentialAgent(
         name = "summary_workflow",
-        description = "Daily commit digest workflow",
+        description = "Commit digest workflow",
         subAgents = listOf(parallel, summarizeNotify),
     )
 }
@@ -68,11 +69,12 @@ internal class SummarizeAndNotifyAgent(
     private val llm: Model,
     private val notifier: Notifier,
     private val promptBody: String,
+    private val title: String,
 ) : BaseAgent(name = "summarize_notify", description = "Summarizes recent commits and posts the digest") {
     override fun runAsyncImpl(context: InvocationContext): Flow<Event> = flow {
         val instruction = buildInstruction(promptBody, context.session.state)
         val digest = generateText(llm, instruction, "Summarize the recent commits.").trim().ifEmpty { "(no digest was produced)" }
-        notifier.notify(Message(title = "Daily commit digest", text = digest))
+        notifier.notify(Message(title = title, text = digest))
         emit(textEvent(name, "Posted digest to chat."))
     }
 }

@@ -94,15 +94,6 @@ class GitHubApiTest : BehaviorSpec({
         }
     }
 
-    Given("a PR with two commits") {
-        When("counting attempts") {
-            Then("it returns the commit count") {
-                val c = client(mapOf("GET /repos/o/r/pulls/7/commits" to """[{"sha":"a"},{"sha":"b"}]"""))
-                c.attemptCount("o", "r", 7) shouldBe 2
-            }
-        }
-    }
-
     Given("a base64-encoded file") {
         When("getting its content") {
             Then("it decodes to the original text") {

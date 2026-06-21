@@ -6,7 +6,7 @@ The dispatcher kicked off for every ingest.
 
 ```mermaid
 flowchart TD
-    Build["buildRootDispatcher(RootDeps)"] -->|"summaryAgent != null"| RegC["register CRON_DAILY/WEEKLY"]
+    Build["buildRootDispatcher(RootDeps)"] -->|"summaryDaily/summaryWeekly != null"| RegC["register CRON_DAILY/WEEKLY"]
     Build -->|"lint/coverage/ci handlers"| RegL["register LINT / COVERAGE / CI"]
     RegC --> D["Dispatcher{handlers, log}"]
     RegL --> D

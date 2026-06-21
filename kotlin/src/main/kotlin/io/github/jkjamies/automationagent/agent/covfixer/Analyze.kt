@@ -15,6 +15,8 @@ import kotlinx.serialization.json.Json
 
 private val planJson = Json { ignoreUnknownKeys = true }
 
+private val log: System.Logger = System.getLogger("automation-agent.covfixer")
+
 /**
  * Plans test placement by having a tool-using agent examine the checked-out repo's real conventions,
  * then generates a test per file in parallel from that plan.
@@ -51,6 +53,8 @@ private suspend fun execute(input: AnalyzeInput, plan: Map<String, PlanEntry>): 
         val entry = plan[w.path]
         val src = if (entry == null || entry.testPath.isBlank()) null else runCatching { readFile(input.repoDir, w.path) }.getOrNull()
         if (entry == null || src == null) {
+            val reason = if (entry == null) "no test placement from explorer" else "unreadable source"
+            log.log(System.Logger.Level.WARNING, "coverage analyze: skipping ${w.path} ($reason)")
             FileEdit("", "") // explorer couldn't place it, or unreadable -> skip
         } else {
             val model = requireNotNull(input.coder()) { "execute: an LLM is required" }

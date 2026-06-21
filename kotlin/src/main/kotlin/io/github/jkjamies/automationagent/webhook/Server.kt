@@ -9,17 +9,28 @@ import io.github.jkjamies.automationagent.ingest.Envelope
 import io.github.jkjamies.automationagent.ingest.Kind
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.cio.CIO
+import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.EngineConnectorBuilder
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.header
-import io.ktor.server.request.receive
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
 import java.time.Instant
+
+/** The largest request body accepted on any webhook endpoint (matches the Go reference's 5 MiB). */
+private const val MAX_BODY_BYTES = 5 * 1024 * 1024
+
+/** Idle connections are closed after this many seconds, blunting slow-client (Slowloris) holds. */
+private const val CONNECTION_IDLE_TIMEOUT_SECONDS = 30
 
 /**
  * Consumes a normalized envelope. It should enqueue work and return quickly; a thrown
@@ -43,15 +54,17 @@ fun Application.webhookRoutes(
         get("/healthz") { call.respondText("ok") }
 
         post("/webhooks/lint") {
-            dispatch(ingest, Envelope.new(Kind.LINT, "webhook:/lint", call.receive<ByteArray>(), now()))
+            val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
+            dispatch(ingest, Envelope.new(Kind.LINT, "webhook:/lint", body, now()))
         }
 
         post("/webhooks/coverage") {
-            dispatch(ingest, Envelope.new(Kind.COVERAGE, "webhook:/coverage", call.receive<ByteArray>(), now()))
+            val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
+            dispatch(ingest, Envelope.new(Kind.COVERAGE, "webhook:/coverage", body, now()))
         }
 
         post("/webhooks/github") {
-            val body = call.receive<ByteArray>()
+            val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
             val sig = call.request.header("X-Hub-Signature-256") ?: ""
             if (secret.isNotEmpty() && !verifySignature(secret, sig, body)) {
                 call.respond(HttpStatusCode.Unauthorized, "invalid signature")
@@ -60,6 +73,17 @@ fun Application.webhookRoutes(
             dispatch(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
         }
     }
+}
+
+/**
+ * Reads the request body, bounded at [MAX_BODY_BYTES]. Returns null when the body exceeds the cap,
+ * so the caller can reply 413 — unlike the Go reference's `io.LimitReader`, an oversized body is
+ * rejected outright rather than silently truncated (which would only fail HMAC later). Memory is
+ * bounded: at most `MAX_BODY_BYTES + 1` bytes are ever read.
+ */
+private suspend fun ApplicationCall.receiveCapped(): ByteArray? {
+    val bytes = receiveChannel().readRemaining((MAX_BODY_BYTES + 1).toLong()).readByteArray()
+    return if (bytes.size > MAX_BODY_BYTES) null else bytes
 }
 
 private suspend fun RoutingContext.dispatch(ingest: IngestFunc, e: Envelope) {
@@ -80,4 +104,14 @@ fun webhookServer(
     ingest: IngestFunc,
     secret: String = "",
     now: () -> Instant = Instant::now,
-) = embeddedServer(CIO, port = port) { webhookRoutes(ingest, secret, now) }
+): EmbeddedServer<*, *> {
+    val bindPort = port
+    return embeddedServer(
+        CIO,
+        configure = {
+            connectors.add(EngineConnectorBuilder().apply { this.port = bindPort })
+            connectionIdleTimeoutSeconds = CONNECTION_IDLE_TIMEOUT_SECONDS
+        },
+        module = { webhookRoutes(ingest, secret, now) },
+    )
+}

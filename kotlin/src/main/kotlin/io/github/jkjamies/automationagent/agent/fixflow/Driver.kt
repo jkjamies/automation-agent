@@ -177,24 +177,33 @@ class Driver private constructor(private val engine: Engine) {
     }
 
     /** Surfaces an apply error or parks the run (and its timeout) under its PR key. */
-    private fun afterDrive(sid: String, fullRepo: String, res: DriveResult, attempt: Int) {
+    private suspend fun afterDrive(sid: String, fullRepo: String, res: DriveResult, attempt: Int) {
         val apply = res.toolResponses[TOOL_APPLY_FIX]
         if (apply != null && apply.containsKey("error")) {
-            clear(sid)
-            throw RuntimeException("$fullRepo ${engine.spec.name}: ${apply["error"]}")
+            fail(sid, fullRepo, "the fix could not be applied: ${apply["error"]}")
         }
         val parkedCallId = res.parkedCallId
         if (parkedCallId == null) {
-            clear(sid)
-            throw RuntimeException("$fullRepo ${engine.spec.name}: run did not park on CI wait")
+            fail(sid, fullRepo, "run did not park on CI wait")
         }
         val pr = prNumberFrom(apply)
         if (pr == 0) {
-            clear(sid)
-            throw RuntimeException("$fullRepo ${engine.spec.name}: parked without a PR number")
+            fail(sid, fullRepo, "parked without a PR number")
         }
         reg.park(prKey(fullRepo, pr), ParkedRun(sessionId = sid, callId = parkedCallId, attempts = attempt), engine.ciTimeout, ::onTimeout)
         engine.log.log(System.Logger.Level.INFO, "fix applied; awaiting CI workflow=${engine.spec.name} repo=$fullRepo pr=$pr attempt=$attempt")
+    }
+
+    /**
+     * Clears the run, notifies a human that the fix needs review, and throws. A failed apply (no PR,
+     * push rejected, analyze error) is terminal: without this, the error would only be logged at the
+     * dispatch edge and the run would vanish with no notification.
+     */
+    private suspend fun fail(sid: String, fullRepo: String, reason: String): Nothing {
+        clear(sid)
+        val msg = "$fullRepo ${engine.spec.name}: $reason"
+        engine.notify(engine.spec.reviewTitle, "$msg. Please review.", "")
+        throw RuntimeException(msg)
     }
 
     private fun newSessionId(): String = "run-${seq.incrementAndGet()}"

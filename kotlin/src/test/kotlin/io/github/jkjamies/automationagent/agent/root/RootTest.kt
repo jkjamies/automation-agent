@@ -55,13 +55,24 @@ class RootTest : BehaviorSpec({
         }
     }
 
-    Given("a root dispatcher built with a summary agent") {
+    Given("a root dispatcher built with daily and weekly summary agents") {
         When("inspecting and dispatching cron kinds") {
-            Then("cron kinds route to the summary workflow") {
-                val d = buildRootDispatcher(RootDeps(summaryAgent = TrivialAgent()))
+            Then("each cron kind routes to its summary workflow") {
+                val d = buildRootDispatcher(RootDeps(summaryDaily = TrivialAgent(), summaryWeekly = TrivialAgent()))
                 d.handles(Kind.CRON_DAILY) shouldBe true
                 d.handles(Kind.CRON_WEEKLY) shouldBe true
                 d.dispatch(env(Kind.CRON_DAILY)) // drives a real runner, must not throw
+                d.dispatch(env(Kind.CRON_WEEKLY))
+            }
+        }
+    }
+
+    Given("a root dispatcher built with only a daily summary agent") {
+        When("checking cron kinds") {
+            Then("weekly is unhandled when no weekly agent is supplied") {
+                val d = buildRootDispatcher(RootDeps(summaryDaily = TrivialAgent()))
+                d.handles(Kind.CRON_DAILY) shouldBe true
+                d.handles(Kind.CRON_WEEKLY) shouldBe false
             }
         }
     }
@@ -81,11 +92,12 @@ class RootTest : BehaviorSpec({
         }
     }
 
-    Given("a root dispatcher built without a summary agent") {
+    Given("a root dispatcher built without any summary agent") {
         When("checking cron kinds") {
             Then("they are unhandled") {
-                val d = buildRootDispatcher(RootDeps(summaryAgent = null))
+                val d = buildRootDispatcher(RootDeps(summaryDaily = null, summaryWeekly = null))
                 d.handles(Kind.CRON_DAILY) shouldBe false
+                d.handles(Kind.CRON_WEEKLY) shouldBe false
             }
         }
     }

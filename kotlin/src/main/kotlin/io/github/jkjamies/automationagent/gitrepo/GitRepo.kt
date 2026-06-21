@@ -37,8 +37,9 @@ class Repo internal constructor(
     fun path(rel: String): String = File(dir, rel).path
 
     /** Switches to [branch], creating it from the current HEAD when [create] is true. */
-    fun checkout(branch: String, create: Boolean) {
+    suspend fun checkout(branch: String, create: Boolean) = withContext(Dispatchers.IO) {
         git.checkout().setName(branch).setCreateBranch(create).call()
+        Unit
     }
 
     /**
@@ -46,25 +47,26 @@ class Repo internal constructor(
      * retry iterations to add a commit onto the previous fix rather than starting a new
      * branch from the base. Throws if origin/<branch> does not exist.
      */
-    fun checkoutRemote(branch: String) {
+    suspend fun checkoutRemote(branch: String) = withContext(Dispatchers.IO) {
         git.checkout()
             .setName(branch)
             .setCreateBranch(true)
             .setStartPoint("origin/$branch")
             .setUpstreamMode(SetupUpstreamMode.TRACK)
             .call()
+        Unit
     }
 
     /**
      * Stages every change (including deletions) and commits, returning the new commit SHA.
      * Throws [NoChangesException] if the tree is clean.
      */
-    fun commitAll(msg: String, a: Author): String {
+    suspend fun commitAll(msg: String, a: Author): String = withContext(Dispatchers.IO) {
         git.add().addFilepattern(".").call() // new + modified
         git.add().setUpdate(true).addFilepattern(".").call() // deletions of tracked files
         if (git.status().call().isClean) throw NoChangesException()
         val who = PersonIdent(a.name, a.email, now(), ZoneId.systemDefault())
-        return git.commit().setMessage(msg).setAuthor(who).setCommitter(who).call().name
+        git.commit().setMessage(msg).setAuthor(who).setCommitter(who).call().name
     }
 
     /** Pushes the current branch to origin. An up-to-date push is not an error. */
@@ -77,8 +79,9 @@ class Repo internal constructor(
     }
 
     /** The current HEAD commit SHA. */
-    fun head(): String =
+    suspend fun head(): String = withContext(Dispatchers.IO) {
         git.repository.resolve(Constants.HEAD)?.name ?: error("head: no HEAD")
+    }
 
     companion object {
         /**

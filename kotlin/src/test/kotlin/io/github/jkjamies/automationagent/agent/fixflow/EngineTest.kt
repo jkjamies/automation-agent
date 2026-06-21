@@ -152,6 +152,22 @@ class EngineTest : BehaviorSpec({
         }
     }
 
+    Given("an apply step that fails") {
+        When("handling a kickoff with a notifier") {
+            Then("a human is asked to review rather than the failure vanishing silently") {
+                val n = FakeNotifier()
+                val e = Engine(
+                    fixSpec(AtomicInteger(0), triageThrows = true),
+                    Deps(gh = FakeGitHub(), notifier = n, ciTimeout = 1.hours, cloneUrl = { _, _ -> seedRemote() }),
+                )
+                shouldThrow<Exception> { e.kickoff("""{"repo":"acme/api","report":"r"}""".toByteArray()) }
+                n.msgs shouldHaveSize 1
+                n.msgs[0].title shouldContain "review"
+                e.driver.reg.size() shouldBe 0
+            }
+        }
+    }
+
     Given("an engine") {
         When("reading its label and check name") {
             Then("they match the spec") {

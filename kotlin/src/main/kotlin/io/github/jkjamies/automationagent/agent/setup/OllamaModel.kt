@@ -12,6 +12,7 @@ import com.google.adk.kt.types.Role
 import com.google.adk.kt.types.Schema
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -42,10 +43,12 @@ import java.io.IOException
 
 /**
  * `defaultNumCtx` is the context window requested from Ollama. Gemma is served with a 32k window;
- * setting it (with truncate=false) avoids the server default (~4k) that would silently chop large
- * file prompts.
+ * setting it avoids the server default (~4k) that would silently chop large file prompts.
  */
 private const val DEFAULT_NUM_CTX = 32768
+
+/** Bounds how long the client waits to establish a TCP connection to the Ollama server. */
+private const val OLLAMA_CONNECT_TIMEOUT_MS = 10_000L
 
 private val ollamaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
@@ -75,6 +78,9 @@ class OllamaModel(
     private val http: HttpClient =
         httpClient ?: HttpClient(CIO) {
             install(ContentNegotiation) { json(ollamaJson) }
+            // Bound only the connect phase: request/socket timeouts are intentionally left open
+            // because a local generation can legitimately stream for minutes.
+            install(HttpTimeout) { connectTimeoutMillis = OLLAMA_CONNECT_TIMEOUT_MS }
         }
 
     /**
@@ -91,7 +97,6 @@ class OllamaModel(
                 put("options", generationOptions(request.config))
                 toOllamaTools(request.config)?.let { put("tools", it) }
                 if (wantsJSON(request.config)) put("format", "json")
-                put("truncate", false) // fail loudly rather than silently truncate an oversized prompt
             }
 
         val response =

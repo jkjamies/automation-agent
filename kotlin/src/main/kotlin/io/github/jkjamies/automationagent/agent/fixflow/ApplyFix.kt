@@ -4,6 +4,8 @@ import io.github.jkjamies.automationagent.githubapi.Pr
 import io.github.jkjamies.automationagent.githubapi.PrInput
 import io.github.jkjamies.automationagent.gitrepo.Author
 import io.github.jkjamies.automationagent.gitrepo.Repo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 
@@ -43,18 +45,18 @@ data class ApplyResult(val pr: Pr, val headSha: String)
  * caller must delete `repo.dir()` when done.
  */
 suspend fun open(cfg: ApplyConfig): Repo {
-    val dir = Files.createTempDirectory("agentfix-").toFile()
+    val dir = withContext(Dispatchers.IO) { Files.createTempDirectory("agentfix-").toFile() }
     val repo =
         try {
             Repo.clone(cfg.cloneUrl, dir.path, cfg.token)
         } catch (e: Throwable) {
-            dir.deleteRecursively()
+            withContext(Dispatchers.IO) { dir.deleteRecursively() }
             throw e
         }
     try {
         if (cfg.newBranch) repo.checkout(cfg.branch, create = true) else repo.checkoutRemote(cfg.branch)
     } catch (e: Throwable) {
-        dir.deleteRecursively()
+        withContext(Dispatchers.IO) { dir.deleteRecursively() }
         throw e
     }
     return repo
@@ -79,11 +81,11 @@ suspend fun applyFix(gh: GitHub, cfg: ApplyConfig, edits: List<FileEdit>): Apply
     return try {
         commit(gh, repo, cfg, edits)
     } finally {
-        File(repo.dir()).deleteRecursively()
+        withContext(Dispatchers.IO) { File(repo.dir()).deleteRecursively() }
     }
 }
 
-private fun writeEdits(repo: Repo, edits: List<FileEdit>) {
+private suspend fun writeEdits(repo: Repo, edits: List<FileEdit>) = withContext(Dispatchers.IO) {
     for (edit in edits) {
         // Reject LLM-controlled paths that escape the checkout (path traversal).
         val full =

@@ -1,7 +1,7 @@
 /*
  * Package githubapi wraps the GitHub REST API with the narrow operations this service needs:
- * reading recent commits, opening/labeling/finding agent PRs, counting attempts, and reading
- * the agent verify check. Deterministic tooling — no agent imports.
+ * reading recent commits, opening/labeling/finding agent PRs, and reading the agent verify check.
+ * Deterministic tooling — no agent imports.
  *
  * The base URL is injectable so tests can point the client at a Ktor MockEngine.
  */
@@ -10,6 +10,7 @@ package io.github.jkjamies.automationagent.githubapi
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.get
@@ -99,6 +100,11 @@ class Client(
 ) {
     private val http: HttpClient = httpClient ?: HttpClient(CIO) {
         install(ContentNegotiation) { json(githubJson) }
+        install(HttpTimeout) {
+            requestTimeoutMillis = REQUEST_TIMEOUT_MS
+            connectTimeoutMillis = CONNECT_TIMEOUT_MS
+            socketTimeoutMillis = SOCKET_TIMEOUT_MS
+        }
         defaultRequest {
             header(HttpHeaders.Accept, "application/vnd.github+json")
             if (token.isNotEmpty()) header(HttpHeaders.Authorization, "Bearer $token")
@@ -153,22 +159,6 @@ class Client(
         return out
     }
 
-    /**
-     * Returns the number of commits on a PR. With the invariant that the agent pushes
-     * exactly one commit per attempt, this equals the distinct agent-pushed head SHAs —
-     * re-run-safe, since a manual check re-run adds no commit.
-     */
-    suspend fun attemptCount(owner: String, repo: String, number: Int): Int {
-        var url: String? = url("repos/$owner/$repo/pulls/$number/commits", "per_page" to "100")
-        var n = 0
-        while (url != null) {
-            val resp = http.get(url).orThrow()
-            n += resp.body<List<PrCommitDto>>().size
-            url = resp.nextLink()
-        }
-        return n
-    }
-
     /** Returns the named check's state for ref, or found=false if absent. */
     suspend fun agentCheck(owner: String, repo: String, ref: String, checkName: String): CheckResult {
         val resp = http.get(url("repos/$owner/$repo/commits/$ref/check-runs", "check_name" to checkName)).orThrow()
@@ -221,6 +211,10 @@ class Client(
     }
 
     companion object {
+        private const val REQUEST_TIMEOUT_MS = 30_000L
+        private const val CONNECT_TIMEOUT_MS = 10_000L
+        private const val SOCKET_TIMEOUT_MS = 30_000L
+
         /** Parses a check_run webhook body. */
         fun parseCheckRunEvent(body: ByteArray): CheckEvent = parseCheckRunEvent(String(body))
 
@@ -300,9 +294,6 @@ private data class RefDto(val ref: String? = null, val sha: String? = null)
 
 @Serializable
 private data class LabelDto(val name: String? = null)
-
-@Serializable
-private data class PrCommitDto(val sha: String? = null)
 
 @Serializable
 private data class CheckRunsDto(
