@@ -158,7 +158,13 @@ func toGenaiFunctionCall(tc api.ToolCall) *genai.FunctionCall {
 	if b, err := json.Marshal(tc.Function.Arguments); err == nil {
 		_ = json.Unmarshal(b, &args)
 	}
-	return &genai.FunctionCall{Name: tc.Function.Name, Args: args}
+	// The ID must be preserved: the flow keys long-running tool tracking and
+	// function-response correlation on it.
+	id := tc.ID
+	if id == "" {
+		id = tc.Function.Name
+	}
+	return &genai.FunctionCall{ID: id, Name: tc.Function.Name, Args: args}
 }
 
 // toOllamaTools converts genai function declarations into Ollama tool definitions.
