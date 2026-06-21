@@ -59,8 +59,6 @@ type Config struct {
 	// it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
 	CITimeout           time.Duration
 	GitHubWebhookSecret string
-	AgentPRLabel        string
-	AgentCheckName      string
 }
 
 // Load reads configuration from the process environment, applying defaults.
@@ -87,8 +85,6 @@ func loadFrom(get lookup) (Config, error) {
 		CronDaily:           getOr(get, "CRON_DAILY", "0 9 * * *"),
 		CronWeekly:          getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
-		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),
-		AgentCheckName:      getOr(get, "AGENT_CHECK_NAME", "agent-lint-verify"),
 	}
 
 	var err error

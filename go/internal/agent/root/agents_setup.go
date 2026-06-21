@@ -14,11 +14,14 @@ import (
 
 // Deps wires the dispatcher. Each handler is optional. CIResume handles KindCI for
 // every fix workflow (lint, coverage) — each engine no-ops unless its check matches.
+// SummaryDaily and SummaryWeekly are distinct agents (different commit windows and
+// titles) so the Monday cron posts a real weekly digest, not a daily one.
 type Deps struct {
-	SummaryAgent    agent.Agent
-	LintKickoff     Handler // KindLint
-	CoverageKickoff Handler // KindCoverage
-	CIResume        Handler // KindCI (dispatched to all fix engines)
+	SummaryDaily    agent.Agent // KindCronDaily
+	SummaryWeekly   agent.Agent // KindCronWeekly
+	LintKickoff     Handler     // KindLint
+	CoverageKickoff Handler     // KindCoverage
+	CIResume        Handler     // KindCI (dispatched to all fix engines)
 	Log             *slog.Logger
 }
 
@@ -28,14 +31,15 @@ type Deps struct {
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	disp := NewDispatcher(d.Log)
 
-	if d.SummaryAgent != nil {
-		r, err := setup.NewRunner("automation-agent", d.SummaryAgent)
-		if err != nil {
-			return nil, fmt.Errorf("build summary runner: %w", err)
+	if d.SummaryDaily != nil {
+		if err := registerSummary(disp, d.SummaryDaily, ingest.KindCronDaily, "Run the daily commit digest."); err != nil {
+			return nil, err
 		}
-		h := summaryHandler(r)
-		disp.Register(ingest.KindCronDaily, h)
-		disp.Register(ingest.KindCronWeekly, h)
+	}
+	if d.SummaryWeekly != nil {
+		if err := registerSummary(disp, d.SummaryWeekly, ingest.KindCronWeekly, "Run the weekly commit digest."); err != nil {
+			return nil, err
+		}
 	}
 	if d.LintKickoff != nil {
 		disp.Register(ingest.KindLint, d.LintKickoff)
@@ -49,11 +53,22 @@ func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	return disp, nil
 }
 
+// registerSummary builds a runner for a summary agent and registers it under kind,
+// driving it with the given trigger text.
+func registerSummary(disp *Dispatcher, a agent.Agent, kind ingest.Kind, trigger string) error {
+	r, err := setup.NewRunner("automation-agent", a)
+	if err != nil {
+		return fmt.Errorf("build summary runner: %w", err)
+	}
+	disp.Register(kind, summaryHandler(r, trigger))
+	return nil
+}
+
 // summaryHandler drives the summary workflow runner for a cron envelope, using a
 // fresh session per fire.
-func summaryHandler(r *runner.Runner) Handler {
+func summaryHandler(r *runner.Runner, trigger string) Handler {
 	return func(ctx context.Context, e ingest.Envelope) error {
 		sessionID := fmt.Sprintf("summary-%d", e.ReceivedAt.UnixNano())
-		return setup.Drive(ctx, r, "system", sessionID, "Run the daily commit digest.")
+		return setup.Drive(ctx, r, "system", sessionID, trigger)
 	}
 }

@@ -27,6 +27,7 @@ type Deps struct {
 	Notify notify.Notifier
 	Repos  []string         // owner/repo entries; one parallel fetcher each
 	Window time.Duration    // commit window; defaults to 24h
+	Title  string           // digest notification title; defaults to "Daily commit digest"
 	Now    func() time.Time // injectable clock; defaults to time.Now
 }
 
@@ -51,10 +52,18 @@ func BuildSummaryAgent(d Deps) (agent.Agent, error) {
 	if window == 0 {
 		window = 24 * time.Hour
 	}
+	title := d.Title
+	if title == "" {
+		title = "Daily commit digest"
+	}
 
 	fetchers := make([]agent.Agent, 0, len(d.Repos))
 	for _, repo := range d.Repos {
-		fetchers = append(fetchers, newFetchAgent(repo, d.GH, window, now))
+		fetcher, err := newFetchAgent(repo, d.GH, window, now)
+		if err != nil {
+			return nil, fmt.Errorf("build fetcher for %s: %w", repo, err)
+		}
+		fetchers = append(fetchers, fetcher)
 	}
 	parallel, err := parallelagent.New(parallelagent.Config{AgentConfig: agent.Config{
 		Name:        "fetch_all",
@@ -76,9 +85,14 @@ func BuildSummaryAgent(d Deps) (agent.Agent, error) {
 		return nil, fmt.Errorf("build summarizer: %w", err)
 	}
 
+	notifier, err := newNotifyAgent(d.Notify, title)
+	if err != nil {
+		return nil, fmt.Errorf("build notifier: %w", err)
+	}
+
 	return sequentialagent.New(sequentialagent.Config{AgentConfig: agent.Config{
 		Name:        "summary_workflow",
-		Description: "Daily commit digest workflow",
-		SubAgents:   []agent.Agent{parallel, summarizer, newNotifyAgent(d.Notify)},
+		Description: "Commit digest workflow",
+		SubAgents:   []agent.Agent{parallel, summarizer, notifier},
 	}})
 }

@@ -25,6 +25,31 @@ to send a small, trusted envelope.
 The endpoint returns `202 Accepted` immediately and works asynchronously (the agent
 opens a PR, then waits for CI — see [the resume side](#the-resume-side-agent-lint-verify)).
 
+## Authenticating the kickoff (required when `GITHUB_WEBHOOK_SECRET` is set)
+
+A kickoff selects a caller-supplied `repo` and drives an LLM run that pushes to it and
+opens a PR — so when the agent is configured with `GITHUB_WEBHOOK_SECRET`, the
+**`/webhooks/lint` and `/webhooks/coverage` kickoffs are HMAC-authenticated with the
+same secret as `/webhooks/github`**. An unsigned or wrong-signature request gets `401`.
+
+Sign the **exact request body** with HMAC-SHA256 and send the digest in the
+`X-Hub-Signature-256: sha256=<hex>` header (identical to GitHub's webhook scheme):
+
+```bash
+# body is the JSON you POST; AGENT_SECRET == the agent's GITHUB_WEBHOOK_SECRET
+sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$AGENT_SECRET" | awk '{print $2}')"
+curl -sf -X POST "$AGENT_URL/webhooks/lint" \
+  -H 'content-type: application/json' \
+  -H "X-Hub-Signature-256: $sig" \
+  --data "$body"
+```
+
+If the agent runs **without** `GITHUB_WEBHOOK_SECRET` (local dev only), verification is
+skipped and the header is not required — but do not run unauthenticated where the
+kickoff endpoints are reachable, since anyone could drive a PR on any repo the agent's
+`GITHUB_TOKEN` can reach. The per-language examples below omit the header for brevity;
+add it as shown above whenever a secret is configured.
+
 ## Cap the number of problems (`MAX_LINT_ERRORS`, default 5)
 
 **Send at most `MAX_LINT_ERRORS` problems per kickoff (default 5).** Why:
@@ -49,7 +74,7 @@ sequenceDiagram
     CI->>CI: run linter -> JSON
     CI->>CI: slice to MAX_LINT_ERRORS (jq)
     CI->>CI: build {repo, base, report}
-    CI->>Agent: POST /webhooks/lint (202)
+    CI->>Agent: POST /webhooks/lint (HMAC if secret set, 202)
     Agent->>Agent: triage (LLM) + analyze per file
     Agent->>GH: open PR on automation-agent/lint-fix + label
     GH->>Verify: pull_request [labeled, synchronize]
@@ -62,9 +87,11 @@ sequenceDiagram
 
 ## Examples (GitHub Actions)
 
-Each example assumes two secrets/vars: `AGENT_URL` (the agent base URL) and an
-optional shared secret if you front the webhook with auth. Set `MAX_LINT_ERRORS`
-as desired (default 5).
+Each example assumes `AGENT_URL` (the agent base URL) and, when the agent has
+`GITHUB_WEBHOOK_SECRET` set, `AGENT_SECRET` for signing the kickoff (see
+[Authenticating the kickoff](#authenticating-the-kickoff-required-when-github_webhook_secret-is-set)).
+Set `MAX_LINT_ERRORS` as desired (default 5). The examples omit the signature header
+for brevity — add `-H "X-Hub-Signature-256: $sig"` as shown above when a secret is set.
 
 ### Go — `golangci-lint`
 

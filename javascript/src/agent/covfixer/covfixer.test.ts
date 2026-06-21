@@ -1,0 +1,114 @@
+// Tests for covfixer: triage, explore-plan parse, two-phase analyze, and engine identity.
+// The ScriptedLlm routes by system instruction (triage / explore-plan / execute); we
+// assert on structure (paths, plan keys), never on LLM-authored content.
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BaseLlm, type LlmRequest, type LlmResponse } from '@google/adk';
+import type { Content } from '@google/genai';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import type { AnalyzeInput, Deps, FileWork } from '../fixflow/index';
+import { FakeLlm } from '../../testutil/fakes';
+import { contentText } from '../setup/events';
+import { analyze, buildExecuteInput, parsePlan, type PlanEntry } from './analyze';
+import { newCoverageEngine } from './coverage';
+import { parseTriage, triage } from './triage';
+
+// Routes by the system instruction: triage, explore (plan), or execute (test).
+class ScriptedLlm extends BaseLlm {
+  constructor(
+    private readonly scripts: { triage?: string; plan?: string; test?: string } = {},
+  ) {
+    super({ model: 'scripted' });
+  }
+  override async *generateContentAsync(req: LlmRequest): AsyncGenerator<LlmResponse, void> {
+    const si = req.config?.systemInstruction;
+    const sys = typeof si === 'string' ? si : contentText(si as Content);
+    let resp = this.scripts.test ?? '';
+    if (sys.includes('triaging')) {
+      resp = this.scripts.triage ?? '';
+    } else if (sys.includes('planning where to add')) {
+      resp = this.scripts.plan ?? '';
+    }
+    yield { content: { role: 'model', parts: [{ text: resp }] }, turnComplete: true };
+  }
+  override async connect(): Promise<never> {
+    throw new Error('not supported');
+  }
+}
+
+describe('covfixer triage', () => {
+  it('parses a triage JSON array', () => {
+    const work = parseTriage(
+      '[{"path":"calc.ts","uncovered":["divide error path","add edge cases"]},{"path":"","uncovered":[]}]',
+    );
+    expect(work).toHaveLength(1);
+    expect(work[0]!.path).toBe('calc.ts');
+    expect(work[0]!.items).toHaveLength(2);
+  });
+
+  it('runs triage and rejects an empty result', async () => {
+    const work = await triage(new ScriptedLlm({ triage: '[{"path":"calc.ts","uncovered":["divide"]}]' }), 'report');
+    expect(work).toHaveLength(1);
+    expect(work[0]!.path).toBe('calc.ts');
+    await expect(triage(new ScriptedLlm({ triage: '[]' }), 'report')).rejects.toThrow();
+  });
+});
+
+describe('covfixer plan', () => {
+  it('parses an explorer plan', () => {
+    const plan = parsePlan(
+      'prose [{"source":"calc.ts","test_path":"calc.test.ts","framework":"vitest","notes":"colocated"},{"source":"","test_path":"x"}] more',
+    );
+    expect(plan.size).toBe(1);
+    expect(plan.get('calc.ts')?.testPath).toBe('calc.test.ts');
+    expect(plan.get('calc.ts')?.framework).toBe('vitest');
+  });
+
+  it('builds an execute input with all the fields', () => {
+    const p: PlanEntry = { source: 'calc.ts', testPath: 'calc.test.ts', framework: 'vitest', notes: 'colocated' };
+    const got = buildExecuteInput({ path: 'calc.ts', items: ['divide'] }, 'export const x = 1;', p, 'ci failed');
+    for (const w of ['calc.test.ts', 'vitest', 'colocated', 'divide', 'export const x = 1;', 'ci failed']) {
+      expect(got).toContain(w);
+    }
+  });
+});
+
+describe('covfixer analyze', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cov-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('plans then generates a test per file', async () => {
+    writeFileSync(join(dir, 'calc.ts'), 'export function divide(a: number, b: number) { return a / b; }');
+    writeFileSync(join(dir, 'existing.test.ts'), "import { it } from 'vitest';");
+    const llm = new ScriptedLlm({
+      plan: '[{"source":"calc.ts","test_path":"calc.test.ts","framework":"vitest","notes":"colocated"}]',
+      test: "import { describe } from 'vitest';\n// covers divide\n",
+    });
+    const input: AnalyzeInput = {
+      llm,
+      codeLlm: null,
+      repoDir: dir,
+      work: [{ path: 'calc.ts', items: ['divide'] }] as FileWork[],
+      feedback: '',
+    };
+    const edits = await analyze(input);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.path).toBe('calc.test.ts');
+    expect(edits[0]!.content).toContain('covers divide');
+  });
+});
+
+describe('covfixer engine', () => {
+  it('exposes the coverage identity', () => {
+    const e = newCoverageEngine({ llm: new FakeLlm(), gh: {} as Deps['gh'] });
+    expect(e.checkName()).toBe('agent-coverage-verify');
+    expect(e.label()).toBe('automation-agent-coverage');
+  });
+});

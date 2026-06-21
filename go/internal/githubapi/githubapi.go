@@ -7,10 +7,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/go-github/v78/github"
 )
+
+// httpTimeout bounds every GitHub request. Without it the client relies solely on the
+// caller's context, and a stalled connection could otherwise hang a long-running poll.
+const httpTimeout = 30 * time.Second
 
 // Client is a thin wrapper over *github.Client. Owner/repo are passed per call so
 // one client serves many repositories.
@@ -21,7 +27,7 @@ type Client struct {
 // New builds a Client. An empty token yields an unauthenticated client (fine for
 // public reads and tests).
 func New(token string) *Client {
-	gh := github.NewClient(nil)
+	gh := github.NewClient(&http.Client{Timeout: httpTimeout})
 	if token != "" {
 		gh = gh.WithAuthToken(token)
 	}
@@ -119,7 +125,7 @@ func (c *Client) FindAgentPRs(ctx context.Context, owner, repo, label string) ([
 		}
 		for _, pr := range prs {
 			p := toPR(pr)
-			if hasLabel(p.Labels, label) {
+			if slices.Contains(p.Labels, label) {
 				out = append(out, p)
 			}
 		}
@@ -135,6 +141,7 @@ func (c *Client) FindAgentPRs(ctx context.Context, owner, repo, label string) ([
 func (c *Client) AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (CheckResult, error) {
 	res, _, err := c.gh.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, &github.ListCheckRunsOptions{
 		CheckName: ptr(checkName),
+		Filter:    ptr("latest"), // on a re-run, return only the most recent run per check
 	})
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("list check runs %s/%s@%s: %w", owner, repo, ref, err)
@@ -242,13 +249,4 @@ func toPR(pr *github.PullRequest) PR {
 		URL:     pr.GetHTMLURL(),
 		Labels:  labels,
 	}
-}
-
-func hasLabel(labels []string, want string) bool {
-	for _, l := range labels {
-		if l == want {
-			return true
-		}
-	}
-	return false
 }

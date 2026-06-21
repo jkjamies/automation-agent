@@ -32,9 +32,6 @@ func TestLoadDefaults(t *testing.T) {
 	if c.CITimeout.Minutes() != 90 {
 		t.Errorf("CITimeout = %v, want 90m", c.CITimeout)
 	}
-	if c.AgentPRLabel != "automation-agent" {
-		t.Errorf("AgentPRLabel = %q", c.AgentPRLabel)
-	}
 }
 
 func TestReposParsing(t *testing.T) {

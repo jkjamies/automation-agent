@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -24,41 +25,51 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, "ok")
 }
 
-// handleLint is the lint-fixer kickoff: an agnostic lint JSON payload.
+// handleLint is the lint-fixer kickoff: an agnostic lint JSON payload. A kickoff selects
+// the caller-supplied target repo, so it is HMAC-authenticated with the same shared
+// secret as the GitHub webhook (verification is skipped only when no secret is set).
 func (s *Server) handleLint(w http.ResponseWriter, r *http.Request) {
-	body, err := readBody(r)
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+	body, ok := s.readBody(w, r)
+	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
-	s.dispatch(w, r.Context(), ingest.New(ingest.KindLint, "webhook:/lint", body, s.now()))
+	s.dispatch(r.Context(), w, ingest.New(ingest.KindLint, "webhook:/lint", body, s.now()))
 }
 
-// handleCoverage is the coverage-fixer kickoff: an agnostic coverage report.
+// handleCoverage is the coverage-fixer kickoff: an agnostic coverage report. Like the
+// lint kickoff it is HMAC-authenticated when a secret is configured.
 func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
-	body, err := readBody(r)
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+	body, ok := s.readBody(w, r)
+	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
-	s.dispatch(w, r.Context(), ingest.New(ingest.KindCoverage, "webhook:/coverage", body, s.now()))
+	s.dispatch(r.Context(), w, ingest.New(ingest.KindCoverage, "webhook:/coverage", body, s.now()))
 }
 
 // handleGitHub is the lint/coverage-fixer resume: GitHub check_run events.
 func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
-	body, err := readBody(r)
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
+	body, ok := s.readBody(w, r)
+	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
-	if s.secret != "" && !verifySignature(s.secret, r.Header.Get("X-Hub-Signature-256"), body) {
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
-		return
-	}
-	s.dispatch(w, r.Context(), ingest.New(ingest.KindCI, "webhook:/github", body, s.now()))
+	s.dispatch(r.Context(), w, ingest.New(ingest.KindCI, "webhook:/github", body, s.now()))
 }
 
-func (s *Server) dispatch(w http.ResponseWriter, ctx context.Context, e ingest.Envelope) {
+// authenticated verifies the request's HMAC signature when a secret is configured,
+// writing a 401 and returning false on mismatch. With no secret (local dev only) every
+// request passes.
+func (s *Server) authenticated(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	if s.secret == "" {
+		return true
+	}
+	if !verifySignature(s.secret, r.Header.Get("X-Hub-Signature-256"), body) {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, e ingest.Envelope) {
 	if err := s.ingest(ctx, e); err != nil {
 		http.Error(w, "ingest failed", http.StatusInternalServerError)
 		return
@@ -66,9 +77,23 @@ func (s *Server) dispatch(w http.ResponseWriter, ctx context.Context, e ingest.E
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func readBody(r *http.Request) ([]byte, error) {
+// readBody reads up to maxBodyBytes. A body over the cap is rejected with 413 rather
+// than silently truncated — a truncated body would both fail HMAC verification and feed
+// malformed JSON downstream. Returns false (after writing the error response) on failure.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer r.Body.Close()
-	return io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "read body", http.StatusBadRequest)
+		}
+		return nil, false
+	}
+	return body, true
 }
 
 // verifySignature checks a GitHub "sha256=<hex>" HMAC over the request body.

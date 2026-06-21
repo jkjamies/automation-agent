@@ -31,6 +31,11 @@ type DriveResult struct {
 // domain policy (what to apply, whether to retry, how long to wait) lives in the caller;
 // this type only knows how to run-to-park and resume-with-a-result. Keeping it here also
 // keeps the genai dependency inside internal/agent/setup (see ARCH).
+//
+// Concurrency: a single driver (one runner + one in-memory session service) is shared
+// across all of an engine's kickoffs and resumes. Each Start/Resume operates on a
+// distinct session id, and the in-memory session service is keyed by session id, so
+// concurrent drives for different runs do not interfere.
 type LongRunDriver struct {
 	r      *runner.Runner
 	userID string

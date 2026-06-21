@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -65,8 +66,10 @@ func run(logger *slog.Logger) error {
 	gh := githubapi.New(cfg.GitHubToken)
 	notifier := buildNotifier(logger, cfg)
 
-	// Summary workflow (needs repos + a notifier).
-	summaryAgent := buildSummaryAgent(logger, cfg, llm, gh, notifier)
+	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents
+	// so the weekly cron posts a real 7-day digest, not a copy of the daily one.
+	summaryDaily := buildSummaryAgent(logger, cfg, llm, gh, notifier, 24*time.Hour, "Daily commit digest")
+	summaryWeekly := buildSummaryAgent(logger, cfg, llm, gh, notifier, 7*24*time.Hour, "Weekly commit digest")
 
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
@@ -78,7 +81,8 @@ func run(logger *slog.Logger) error {
 	engines := []*fixflow.Engine{lintEngine, covEngine}
 
 	dispatcher, err := root.BuildRootDispatcher(root.Deps{
-		SummaryAgent:    summaryAgent,
+		SummaryDaily:    summaryDaily,
+		SummaryWeekly:   summaryWeekly,
 		LintKickoff:     payloadHandler(lintEngine.Kickoff),
 		CoverageKickoff: payloadHandler(covEngine.Kickoff),
 		CIResume:        ciResumeHandler(engines),
@@ -101,9 +105,17 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("schedule weekly: %w", err)
 	}
 
-	// Webhooks enqueue asynchronously and return fast.
+	// Webhooks enqueue asynchronously and return fast. Dispatches run on a bounded pool
+	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (Parked
+	// runs are still in-memory, so a restart strands them — an accepted trade.)
+	var dispatchWG sync.WaitGroup
+	dispatchSem := make(chan struct{}, maxConcurrentDispatch)
 	srv := webhook.New(func(_ context.Context, e ingest.Envelope) error {
+		dispatchSem <- struct{}{} // bound concurrency (backpressure under burst)
+		dispatchWG.Add(1)
 		go func() {
+			defer dispatchWG.Done()
+			defer func() { <-dispatchSem }()
 			if err := dispatcher.Dispatch(context.Background(), e); err != nil {
 				logger.Error("webhook dispatch failed", "kind", e.Kind, "err", err)
 			}
@@ -115,10 +127,12 @@ func run(logger *slog.Logger) error {
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	sched.Start()
-	defer sched.Stop()
 
 	go func() {
 		logger.Info("automation-agent listening",
@@ -126,7 +140,7 @@ func run(logger *slog.Logger) error {
 			"llm_provider", cfg.LLMProvider,
 			"repos", len(cfg.Repos),
 			"notify", cfg.NotifyProvider,
-			"summary_enabled", summaryAgent != nil,
+			"summary_enabled", summaryDaily != nil,
 		)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server stopped", "err", err)
@@ -137,7 +151,36 @@ func run(logger *slog.Logger) error {
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return httpServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("http shutdown", "err", err)
+	}
+	drain(logger, sched.Stop(), &dispatchWG, drainTimeout)
+	return nil
+}
+
+// maxConcurrentDispatch bounds in-flight webhook dispatches; drainTimeout caps how long
+// shutdown waits for in-flight dispatches and scheduled jobs to finish.
+const (
+	maxConcurrentDispatch = 32
+	drainTimeout          = 15 * time.Second
+)
+
+// drain waits for in-flight webhook dispatches (wg) and running scheduled jobs (stopCtx,
+// from cron.Stop) to finish, bounded by timeout, so a clean SIGTERM completes work in
+// flight rather than abandoning it.
+func drain(logger *slog.Logger, stopCtx context.Context, wg *sync.WaitGroup, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		<-stopCtx.Done()
+		close(done)
+	}()
+	select {
+	case <-done:
+		logger.Info("drained in-flight work")
+	case <-time.After(timeout):
+		logger.Warn("drain timed out; exiting with work still in flight")
+	}
 }
 
 // buildNotifier returns a Notifier, or nil (with a warning) if not configured.
@@ -150,9 +193,9 @@ func buildNotifier(logger *slog.Logger, cfg config.Config) notify.Notifier {
 	return n
 }
 
-// buildSummaryAgent returns the summary workflow agent, or nil if it can't be fully
-// configured (no repos or no notifier).
-func buildSummaryAgent(logger *slog.Logger, cfg config.Config, llm model.LLM, gh summary.CommitLister, notifier notify.Notifier) agent.Agent {
+// buildSummaryAgent returns a summary workflow agent for the given commit window and
+// notification title, or nil if it can't be fully configured (no repos or no notifier).
+func buildSummaryAgent(logger *slog.Logger, cfg config.Config, llm model.LLM, gh summary.CommitLister, notifier notify.Notifier, window time.Duration, title string) agent.Agent {
 	if len(cfg.Repos) == 0 {
 		logger.Warn("no REPOS configured; summary workflow disabled")
 		return nil
@@ -160,7 +203,7 @@ func buildSummaryAgent(logger *slog.Logger, cfg config.Config, llm model.LLM, gh
 	if notifier == nil {
 		return nil // buildNotifier already warned
 	}
-	a, err := summary.BuildSummaryAgent(summary.Deps{LLM: llm, GH: gh, Notify: notifier, Repos: cfg.Repos})
+	a, err := summary.BuildSummaryAgent(summary.Deps{LLM: llm, GH: gh, Notify: notifier, Repos: cfg.Repos, Window: window, Title: title})
 	if err != nil {
 		logger.Warn("summary workflow disabled", "err", err)
 		return nil
@@ -186,4 +229,3 @@ func ciResumeHandler(engines []*fixflow.Engine) root.Handler {
 		return errors.Join(errs...)
 	}
 }
-

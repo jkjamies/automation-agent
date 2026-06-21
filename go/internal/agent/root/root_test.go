@@ -75,7 +75,7 @@ func trivialAgent(t *testing.T) agent.Agent {
 }
 
 func TestBuildRootDispatcherWithSummary(t *testing.T) {
-	d, err := BuildRootDispatcher(Deps{SummaryAgent: trivialAgent(t)})
+	d, err := BuildRootDispatcher(Deps{SummaryDaily: trivialAgent(t), SummaryWeekly: trivialAgent(t)})
 	if err != nil {
 		t.Fatalf("BuildRootDispatcher: %v", err)
 	}
@@ -110,11 +110,11 @@ func TestBuildRootDispatcherFixHandlers(t *testing.T) {
 }
 
 func TestBuildRootDispatcherWithoutSummary(t *testing.T) {
-	d, err := BuildRootDispatcher(Deps{SummaryAgent: nil})
+	d, err := BuildRootDispatcher(Deps{})
 	if err != nil {
 		t.Fatalf("BuildRootDispatcher: %v", err)
 	}
-	if d.Handles(ingest.KindCronDaily) {
+	if d.Handles(ingest.KindCronDaily) || d.Handles(ingest.KindCronWeekly) {
 		t.Error("no summary agent -> cron kinds unhandled")
 	}
 }

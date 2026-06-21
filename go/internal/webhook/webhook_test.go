@@ -127,17 +127,45 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// A body larger than the cap is truncated to maxBodyBytes (io.LimitReader) and still
-// accepted — never rejected on size.
-func TestOversizeBodyIsTruncated(t *testing.T) {
+// A body larger than the cap is rejected with 413 rather than silently truncated.
+func TestOversizeBodyIsRejected(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest)
 	oversize := strings.Repeat("x", maxBodyBytes+100)
 	rec := do(t, s, http.MethodPost, "/webhooks/lint", oversize, nil)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
 	}
-	if len(c.env.Payload) != maxBodyBytes {
-		t.Errorf("payload len = %d, want %d (truncated to cap)", len(c.env.Payload), maxBodyBytes)
+	if c.env.Payload != nil {
+		t.Errorf("oversize body should not be dispatched, got %d bytes", len(c.env.Payload))
+	}
+}
+
+// Kickoff endpoints select a caller-supplied repo, so they require the HMAC signature
+// when a secret is configured.
+func TestLintKickoffRequiresSignature(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest, WithGitHubSecret("topsecret"))
+	body := `{"problems":[]}`
+
+	rec := do(t, s, http.MethodPost, "/webhooks/lint", body, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned status = %d, want 401", rec.Code)
+	}
+
+	rec = do(t, s, http.MethodPost, "/webhooks/lint", body, map[string]string{
+		"X-Hub-Signature-256": sign("topsecret", body),
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("signed status = %d, want 202", rec.Code)
+	}
+}
+
+func TestCoverageKickoffRequiresSignature(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest, WithGitHubSecret("topsecret"))
+	rec := do(t, s, http.MethodPost, "/webhooks/coverage", `{"report":"jacoco"}`, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned status = %d, want 401", rec.Code)
 	}
 }

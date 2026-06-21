@@ -235,6 +235,28 @@ func TestEngineKickoffTriageError(t *testing.T) {
 	}
 }
 
+// An apply-step failure (here: analyze errors before a PR can be opened) frees the run
+// and notifies a human for review — it must not vanish with only a log line.
+func TestEngineApplyFailureNotifies(t *testing.T) {
+	remote := seedRemote(t)
+	gh := &fakeGH{}
+	n := &fakeNotifier{}
+	e := newEngine(remote, gh, n)
+	e.spec.Analyze = func(_ context.Context, _ AnalyzeInput) ([]FileEdit, error) {
+		return nil, errors.New("analyze boom")
+	}
+
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err == nil {
+		t.Fatal("expected apply failure to propagate")
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("expected a needs-review notification on apply failure, got %+v", n.msgs)
+	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("a failed apply should not leave a parked run, got %d", e.driver.reg.Len())
+	}
+}
+
 func TestEngineLabelAndCheckName(t *testing.T) {
 	e := newEngine("x", &fakeGH{}, &fakeNotifier{})
 	if e.Label() != "automation-agent" || e.CheckName() != "agent-test-verify" {

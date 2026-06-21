@@ -22,9 +22,11 @@ type Scheduler struct {
 	now  func() time.Time
 }
 
-// New builds a Scheduler that calls emit on each fire.
+// New builds a Scheduler that calls emit on each fire. Schedules are interpreted in
+// UTC (not the host's local zone) so "0 9 * * *" means 09:00 UTC regardless of where
+// the process runs.
 func New(emit EmitFunc) *Scheduler {
-	return &Scheduler{cron: cron.New(), emit: emit, now: time.Now}
+	return &Scheduler{cron: cron.New(cron.WithLocation(time.UTC)), emit: emit, now: time.Now}
 }
 
 // Add registers a 5-field cron spec (minute hour dom month dow) that emits an

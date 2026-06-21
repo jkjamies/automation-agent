@@ -36,7 +36,11 @@ func ParallelAnalyze(ctx context.Context, work []FileWork, fn EditFunc) ([]FileE
 
 	agents := make([]agent.Agent, 0, len(sorted))
 	for _, w := range sorted {
-		agents = append(agents, newAnalyzer(w, fn))
+		a, err := newAnalyzer(w, fn)
+		if err != nil {
+			return nil, fmt.Errorf("build analyzer for %s: %w", w.Path, err)
+		}
+		agents = append(agents, a)
 	}
 	par, err := parallelagent.New(parallelagent.Config{AgentConfig: agent.Config{
 		Name: "analyze_all", Description: "Per-file analysis in parallel", SubAgents: agents,
@@ -67,9 +71,9 @@ func ParallelAnalyze(ctx context.Context, work []FileWork, fn EditFunc) ([]FileE
 	return edits, nil
 }
 
-func newAnalyzer(w FileWork, fn EditFunc) agent.Agent {
-	name := "analyze_" + safeName(w.Path)
-	a, _ := agent.New(agent.Config{
+func newAnalyzer(w FileWork, fn EditFunc) (agent.Agent, error) {
+	name := "analyze_" + setup.SafeName(w.Path)
+	return agent.New(agent.Config{
 		Name:        name,
 		Description: "Analyzes " + w.Path,
 		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
@@ -90,18 +94,4 @@ func newAnalyzer(w FileWork, fn EditFunc) agent.Agent {
 			}
 		},
 	})
-	return a
-}
-
-func safeName(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
 }

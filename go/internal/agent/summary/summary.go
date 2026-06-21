@@ -30,9 +30,9 @@ const (
 
 // newFetchAgent returns a code agent that fetches the last `window` of commits for
 // repo and writes a formatted digest to state under commits:<repo>.
-func newFetchAgent(repo string, gh CommitLister, window time.Duration, now func() time.Time) agent.Agent {
-	name := "fetch_" + safeName(repo)
-	a, _ := agent.New(agent.Config{
+func newFetchAgent(repo string, gh CommitLister, window time.Duration, now func() time.Time) (agent.Agent, error) {
+	name := "fetch_" + setup.SafeName(repo)
+	return agent.New(agent.Config{
 		Name:        name,
 		Description: "Fetches recent commits for " + repo,
 		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
@@ -52,12 +52,12 @@ func newFetchAgent(repo string, gh CommitLister, window time.Duration, now func(
 			}
 		},
 	})
-	return a
 }
 
-// newNotifyAgent returns a code agent that posts the summarizer's digest to chat.
-func newNotifyAgent(n notify.Notifier) agent.Agent {
-	a, _ := agent.New(agent.Config{
+// newNotifyAgent returns a code agent that posts the summarizer's digest to chat under
+// the given title (e.g. "Daily commit digest" / "Weekly commit digest").
+func newNotifyAgent(n notify.Notifier, title string) (agent.Agent, error) {
+	return agent.New(agent.Config{
 		Name:        "notify",
 		Description: "Posts the commit digest to Slack or Teams",
 		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
@@ -66,7 +66,7 @@ func newNotifyAgent(n notify.Notifier) agent.Agent {
 				if digest == "" {
 					digest = "(no digest was produced)"
 				}
-				if err := n.Notify(ctx, notify.Message{Title: "Daily commit digest", Text: digest}); err != nil {
+				if err := n.Notify(ctx, notify.Message{Title: title, Text: digest}); err != nil {
 					yield(nil, fmt.Errorf("notify: %w", err))
 					return
 				}
@@ -74,7 +74,6 @@ func newNotifyAgent(n notify.Notifier) agent.Agent {
 			}
 		},
 	})
-	return a
 }
 
 // summaryInstruction is the dynamic instruction for the summarizer: it reads the
@@ -147,17 +146,4 @@ func splitRepo(s string) (owner, repo string, ok bool) {
 		return "", "", false
 	}
 	return owner, repo, true
-}
-
-func safeName(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
 }

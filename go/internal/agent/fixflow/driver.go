@@ -156,7 +156,7 @@ func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
 		dr.clear(sid)
 		return err
 	}
-	return dr.afterDrive(sid, k.Repo, res, 1)
+	return dr.afterDrive(ctx, sid, k.Repo, res, 1)
 }
 
 // Resume reacts to a CI conclusion for a parked run.
@@ -203,7 +203,7 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 		return err
 	}
 	dr.engine.d.Log.Info("fix retrying", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber, "attempt", run.Attempts+1)
-	return dr.afterDrive(run.SessionID, in.FullRepo, res, run.Attempts+1)
+	return dr.afterDrive(ctx, run.SessionID, in.FullRepo, res, run.Attempts+1)
 }
 
 // onTimeout fires (from the registry timer) when a parked run's CI never reports. It
@@ -223,25 +223,33 @@ func (dr *Driver) onTimeout(key string) {
 
 // afterDrive inspects a drive's outcome and either surfaces an apply error or parks the
 // run (and its timeout) under its PR key.
-func (dr *Driver) afterDrive(sid, fullRepo string, res setup.DriveResult, attempt int) error {
+func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setup.DriveResult, attempt int) error {
 	if apply := res.ToolResponses[toolApplyFix]; apply != nil {
 		if msg, bad := apply["error"]; bad {
-			dr.clear(sid)
-			return fmt.Errorf("%s %s: %v", fullRepo, dr.engine.spec.Name, msg)
+			return dr.failApply(ctx, sid, fullRepo, fmt.Sprintf("%v", msg))
 		}
 	}
 	if res.ParkedCallID == "" {
-		dr.clear(sid)
-		return fmt.Errorf("%s %s: run did not park on CI wait", fullRepo, dr.engine.spec.Name)
+		return dr.failApply(ctx, sid, fullRepo, "run did not park on CI wait")
 	}
 	pr := prNumberFrom(res.ToolResponses[toolApplyFix])
 	if pr == 0 {
-		dr.clear(sid)
-		return fmt.Errorf("%s %s: parked without a PR number", fullRepo, dr.engine.spec.Name)
+		return dr.failApply(ctx, sid, fullRepo, "parked without a PR number")
 	}
 	dr.reg.Park(prKey(fullRepo, pr), &ParkedRun{SessionID: sid, CallID: res.ParkedCallID, Attempts: attempt}, dr.timeout, dr.onTimeout)
 	dr.engine.d.Log.Info("fix applied; awaiting CI", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "attempt", attempt)
 	return nil
+}
+
+// failApply frees a run that errored before it could park on CI (a push/PR/analyze
+// failure, not a CI failure) and notifies a human. Without this, an apply error would
+// only bubble up to the dispatcher's logger and never reach the review channel — a fix
+// that can't even open its PR would vanish silently.
+func (dr *Driver) failApply(ctx context.Context, sid, fullRepo, reason string) error {
+	dr.clear(sid)
+	_ = dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
+		fmt.Sprintf("%s: the %s fix could not be applied (%s). Please review.", fullRepo, dr.engine.spec.Name, reason), "")
+	return fmt.Errorf("%s %s: %s", fullRepo, dr.engine.spec.Name, reason)
 }
 
 func (dr *Driver) newSessionID() string {

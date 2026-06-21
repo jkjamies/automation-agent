@@ -105,8 +105,8 @@ func TestSplitRepoAndSafeName(t *testing.T) {
 	if _, _, ok := splitRepo("bad"); ok {
 		t.Error("invalid repo accepted")
 	}
-	if got := safeName("a/b:c"); got != "a_b_c" {
-		t.Errorf("safeName = %q, want a_b_c", got)
+	if got := setup.SafeName("a/b:c"); got != "a_b_c" {
+		t.Errorf("SafeName = %q, want a_b_c", got)
 	}
 }
 
