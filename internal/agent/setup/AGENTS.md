@@ -28,6 +28,13 @@ flowchart TD
 - `prompt.go` — `Prompts`, a markdown loader over an `fs.FS` (each agent embeds its
   own `prompts/` dir).
 - `events.go` — small genai content helpers (`UserText`, `ContentText`, `LastText`).
+- `runner.go` — in-memory runner helpers (`NewRunner`, `Drive`, `DriveText`,
+  `DriveCollectState`).
+- `longrun.go` — generic ADK **IsLongRunning** suspend/resume plumbing: `LongRunDriver`
+  (`Start`/`Resume` returning a plain `DriveResult`) and `NewSequencerModel`, a
+  deterministic Action→Wait `model.LLM` for two-phase wait loops. Lives here because it
+  touches `genai`; callers (e.g. `fixflow`) stay genai-free. Verified end-to-end in
+  `suspend_resume_test.go` + `longrun_test.go`.
 
 Tests stub the Ollama HTTP server (`httptest`) and use `fstest.MapFS` for prompts —
 no real network, no live model. Never assert on LLM output content.

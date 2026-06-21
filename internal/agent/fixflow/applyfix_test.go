@@ -26,7 +26,6 @@ type fakeGH struct {
 	findErr      error
 	createErr    error
 	fileContents map[string]string
-	attempts     int
 }
 
 func (f *fakeGH) FindAgentPRs(context.Context, string, string, string) ([]githubapi.PR, error) {
@@ -51,10 +50,6 @@ func (f *fakeGH) GetFileContent(_ context.Context, _, _, path, _ string) (string
 		return c, nil
 	}
 	return "", fmt.Errorf("no content for %s", path)
-}
-
-func (f *fakeGH) AttemptCount(context.Context, string, string, int) (int, error) {
-	return f.attempts, nil
 }
 
 type fakeNotifier struct{ msgs []notify.Message }

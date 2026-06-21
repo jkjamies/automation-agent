@@ -3,8 +3,10 @@ package fixflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/model"
 
@@ -29,11 +31,20 @@ func testSpec() Spec {
 
 func newEngine(remote string, gh *fakeGH, n *fakeNotifier) *Engine {
 	return NewEngine(testSpec(), Deps{
-		GH: gh, Notify: n, MaxIter: 3, CloneURL: func(_, _ string) string { return remote },
+		GH: gh, Notify: n, MaxIter: 3, CITimeout: time.Hour,
+		CloneURL: func(_, _ string) string { return remote },
 	})
 }
 
-func TestEngineKickoff(t *testing.T) {
+// checkBody builds a check_run webhook payload for the test engine's check.
+func checkBody(conclusion string, pr int, output string) []byte {
+	return []byte(fmt.Sprintf(
+		`{"action":"completed","check_run":{"name":"agent-test-verify","status":"completed","conclusion":%q,"pull_requests":[{"number":%d,"head":{"ref":"agent/fix"}}],"output":{"text":%q}},"repository":{"full_name":"acme/api"}}`,
+		conclusion, pr, output))
+}
+
+// Kickoff applies a fix (creating the PR) and parks the run awaiting CI.
+func TestEngineKickoffParks(t *testing.T) {
 	remote := seedRemote(t)
 	gh := &fakeGH{}
 	e := newEngine(remote, gh, &fakeNotifier{})
@@ -48,43 +59,54 @@ func TestEngineKickoff(t *testing.T) {
 	if len(gh.labeled) != 1 {
 		t.Errorf("expected label, got %v", gh.labeled)
 	}
+	if e.driver.reg.Len() != 1 {
+		t.Errorf("expected one parked run awaiting CI, got %d", e.driver.reg.Len())
+	}
 }
 
+// A successful CI conclusion resolves the parked run and notifies success.
 func TestEngineResumeSuccess(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
-	err := e.HandleResume(context.Background(), ResumeInput{
-		Owner: "acme", Repo: "api", FullRepo: "acme/api", PRNumber: 5, Conclusion: "success",
-	})
-	if err != nil {
-		t.Fatalf("HandleResume: %v", err)
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if err := e.Resume(context.Background(), checkBody("success", 42, "")); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "succeeded") {
 		t.Errorf("expected success notification, got %+v", n.msgs)
 	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("success should free the parked run, got %d", e.driver.reg.Len())
+	}
 }
 
+// A CI failure that has exhausted MaxIter asks for human review.
 func TestEngineResumeExhausted(t *testing.T) {
 	n := &fakeNotifier{}
-	e := newEngine(seedRemote(t), &fakeGH{attempts: 3}, n)
-	err := e.HandleResume(context.Background(), ResumeInput{
-		Owner: "acme", Repo: "api", FullRepo: "acme/api", PRNumber: 5, Conclusion: "failure",
-	})
-	if err != nil {
-		t.Fatalf("HandleResume: %v", err)
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	// Park a run that has already used all attempts.
+	e.driver.reg.Park("acme/api#42", &ParkedRun{SessionID: "run-x", CallID: "c", Attempts: 3}, time.Hour, e.driver.onTimeout)
+
+	if err := e.Resume(context.Background(), checkBody("failure", 42, "still broken")); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
 		t.Errorf("expected needs-review notification, got %+v", n.msgs)
 	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("exhausted run should be freed, got %d", e.driver.reg.Len())
+	}
 }
 
+// A CI failure with attempts remaining re-applies on the same PR and re-parks.
 func TestEngineResumeRetry(t *testing.T) {
 	remote := seedRemote(t)
-	gh := &fakeGH{attempts: 1}
+	gh := &fakeGH{}
 	n := &fakeNotifier{}
 	e := newEngine(remote, gh, n)
 
-	// Kickoff to create the branch on the remote.
 	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
 		t.Fatalf("Kickoff: %v", err)
 	}
@@ -92,13 +114,11 @@ func TestEngineResumeRetry(t *testing.T) {
 	e.spec.Analyze = func(_ context.Context, _ AnalyzeInput) ([]FileEdit, error) {
 		return []FileEdit{{Path: "a.go", Content: "package a\n\n// retry\n"}}, nil
 	}
-	gh.existing = []githubapi.PR{{Number: 5, Branch: "agent/fix"}}
+	gh.existing = []githubapi.PR{{Number: 42, Branch: "agent/fix"}}
 	gh.created = nil
-	err := e.HandleResume(context.Background(), ResumeInput{
-		Owner: "acme", Repo: "api", FullRepo: "acme/api", PRNumber: 5, Conclusion: "failure", OutputText: "still failing",
-	})
-	if err != nil {
-		t.Fatalf("HandleResume retry: %v", err)
+
+	if err := e.Resume(context.Background(), checkBody("failure", 42, "still failing")); err != nil {
+		t.Fatalf("Resume retry: %v", err)
 	}
 	if gh.created != nil {
 		t.Error("retry should reuse the PR, not create a new one")
@@ -106,17 +126,86 @@ func TestEngineResumeRetry(t *testing.T) {
 	if len(n.msgs) != 0 {
 		t.Errorf("retry should not notify, got %+v", n.msgs)
 	}
+	if e.driver.reg.Len() != 1 {
+		t.Errorf("retry should leave the run parked, got %d", e.driver.reg.Len())
+	}
 }
 
-func TestEngineResumeWebhook(t *testing.T) {
+// The full loop: kickoff → fail → fail → fail counts attempts in memory and gives up at
+// MaxIter, proving tries are counted by the registry (not from GitHub).
+func TestEngineFullLoopExhausts(t *testing.T) {
+	remote := seedRemote(t)
+	gh := &fakeGH{existing: []githubapi.PR{{Number: 42, Branch: "agent/fix"}}}
+	n := &fakeNotifier{}
+	spec := testSpec()
+	calls := 0
+	spec.Analyze = func(_ context.Context, _ AnalyzeInput) ([]FileEdit, error) {
+		calls++ // vary content so every attempt is a real commit
+		return []FileEdit{{Path: "a.go", Content: fmt.Sprintf("package a\n// v%d\n", calls)}}, nil
+	}
+	e := NewEngine(spec, Deps{GH: gh, Notify: n, MaxIter: 3, CITimeout: time.Hour,
+		CloneURL: func(_, _ string) string { return remote }})
+
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	// Two failures are retried (attempts 2, 3); the third gives up.
+	for i := 0; i < 2; i++ {
+		if err := e.Resume(context.Background(), checkBody("failure", 42, "boom")); err != nil {
+			t.Fatalf("Resume #%d: %v", i+1, err)
+		}
+		if len(n.msgs) != 0 {
+			t.Fatalf("attempt %d should not notify yet, got %+v", i+2, n.msgs)
+		}
+		if e.driver.reg.Len() != 1 {
+			t.Fatalf("attempt %d should re-park, got %d", i+2, e.driver.reg.Len())
+		}
+	}
+	if err := e.Resume(context.Background(), checkBody("failure", 42, "boom")); err != nil {
+		t.Fatalf("Resume final: %v", err)
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("expected needs-review after MaxIter, got %+v", n.msgs)
+	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("run should be freed after giving up, got %d", e.driver.reg.Len())
+	}
+	if calls != 3 {
+		t.Errorf("expected exactly 3 apply attempts, got %d", calls)
+	}
+}
+
+// When CI never reports, the per-run timeout frees the run and asks for review.
+func TestEngineTimeoutFreesRun(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
-	body := `{"action":"completed","check_run":{"name":"agent-test-verify","status":"completed","conclusion":"success","pull_requests":[{"number":5,"head":{"ref":"agent/fix"}}]},"repository":{"full_name":"acme/api"}}`
-	if err := e.Resume(context.Background(), []byte(body)); err != nil {
-		t.Fatalf("Resume: %v", err)
+	e.driver.reg.Park("acme/api#42", &ParkedRun{SessionID: "run-x", CallID: "c", Attempts: 1}, time.Hour, e.driver.onTimeout)
+
+	e.driver.onTimeout("acme/api#42")
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("expected timeout review notification, got %+v", n.msgs)
+	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("timeout should free the run, got %d", e.driver.reg.Len())
+	}
+	// A late webhook after the timeout is a benign no-op.
+	if err := e.Resume(context.Background(), checkBody("success", 42, "")); err != nil {
+		t.Fatalf("late resume: %v", err)
 	}
 	if len(n.msgs) != 1 {
-		t.Fatalf("expected a notification, got %d", len(n.msgs))
+		t.Errorf("late webhook after timeout should not notify again, got %+v", n.msgs)
+	}
+}
+
+// A conclusion for an unknown/already-resolved PR is a no-op.
+func TestEngineResumeUnknownPR(t *testing.T) {
+	n := &fakeNotifier{}
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	if err := e.Resume(context.Background(), checkBody("success", 99, "")); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if len(n.msgs) != 0 {
+		t.Errorf("unknown PR should be ignored, got %+v", n.msgs)
 	}
 }
 
@@ -137,9 +226,12 @@ func TestEngineKickoffTriageError(t *testing.T) {
 	spec.Triage = func(context.Context, model.LLM, string) ([]FileWork, error) {
 		return nil, errors.New("triage boom")
 	}
-	e := NewEngine(spec, Deps{GH: &fakeGH{}, CloneURL: func(_, _ string) string { return seedRemote(t) }})
+	e := NewEngine(spec, Deps{GH: &fakeGH{}, CITimeout: time.Hour, CloneURL: func(_, _ string) string { return seedRemote(t) }})
 	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","report":"r"}`)); err == nil {
 		t.Fatal("expected triage error to propagate")
+	}
+	if e.driver.reg.Len() != 0 {
+		t.Errorf("a failed apply should not park a run, got %d", e.driver.reg.Len())
 	}
 }
 

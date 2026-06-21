@@ -1,6 +1,6 @@
 // Command agent is the automation-agent service entrypoint. It wires configuration,
-// tooling, agents, the scheduler, the webhook server, and the reconcile loop
-// together, then runs until interrupted. Composition only — logic lives in internal/.
+// tooling, agents, the scheduler, and the webhook server together, then runs until
+// interrupted. Composition only — logic lives in internal/.
 package main
 
 import (
@@ -71,7 +71,7 @@ func run(logger *slog.Logger) error {
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
-		MaxIter: cfg.MaxIterations, Log: logger,
+		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Log: logger,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)
