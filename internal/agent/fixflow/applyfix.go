@@ -107,7 +107,11 @@ func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit)
 
 func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
 	for _, e := range edits {
-		full := repo.Path(e.Path)
+		// Reject LLM-controlled paths that escape the checkout (path traversal).
+		full, err := safeJoin(repo.Dir(), e.Path)
+		if err != nil {
+			return fmt.Errorf("reject edit %q: %w", e.Path, err)
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return fmt.Errorf("mkdir for %s: %w", e.Path, err)
 		}

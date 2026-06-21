@@ -40,10 +40,23 @@ func TestListDirEntries(t *testing.T) {
 	if strings.Contains(got, ".git") {
 		t.Errorf(".git should be hidden: %v", ents)
 	}
-	// path-escape attempts are clamped to the repo root, not errored
-	clamped, err := listDirEntries(dir, "../..")
-	if err != nil || !strings.Contains(strings.Join(clamped, ","), "f.go") {
-		t.Errorf("escape should clamp to root: %v %v", clamped, err)
+	// path-escape attempts are rejected
+	if _, err := listDirEntries(dir, "../.."); err == nil {
+		t.Error("escape should be rejected")
+	}
+}
+
+func TestSafeJoinRejectsEscapes(t *testing.T) {
+	root := t.TempDir()
+	for _, bad := range []string{"../escape", "../../etc/cron.d/x", "/etc/passwd", "a/../../b"} {
+		if _, err := safeJoin(root, bad); err == nil {
+			t.Errorf("safeJoin should reject %q (path traversal / absolute)", bad)
+		}
+	}
+	for _, ok := range []string{"a.go", "sub/dir/b_test.go", "."} {
+		if _, err := safeJoin(root, ok); err != nil {
+			t.Errorf("safeJoin rejected a safe path %q: %v", ok, err)
+		}
 	}
 }
 
