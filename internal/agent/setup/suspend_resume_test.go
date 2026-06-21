@@ -141,6 +141,39 @@ func TestLongRunningSuspendResume(t *testing.T) {
 	t.Logf("resumed and concluded: %q", final)
 }
 
+// TestLateWebhookAfterTimeout proves the race is safe at the runner level (defense in
+// depth behind the registry's atomic claim): after a timeout has concluded the run, a
+// LATE CI webhook replaying the same call id must NOT re-park or leak a new parked
+// run. (In production the registry drops it before it ever reaches the runner.)
+func TestLateWebhookAfterTimeout(t *testing.T) {
+	r := newCIWaiter(t)
+	id := park(t, r, "u", "s")
+
+	if _, reparked := resumeWith(t, r, "u", "s", id, "timeout"); reparked {
+		t.Fatal("timeout resume re-parked")
+	}
+
+	// Late webhook replays the same (now stale) call id.
+	resume := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{
+		FunctionResponse: &genai.FunctionResponse{ID: id, Name: "await_ci", Response: map[string]any{"conclusion": "success"}},
+	}}}
+	var reparked bool
+	var runErr error
+	for ev, err := range r.Run(context.Background(), "u", "s", resume, agent.RunConfig{}) {
+		if err != nil {
+			runErr = err
+			break
+		}
+		if len(ev.LongRunningToolIDs) > 0 {
+			reparked = true
+		}
+	}
+	if reparked {
+		t.Fatal("late webhook re-parked the run — would leak a parked run")
+	}
+	t.Logf("late webhook after timeout handled at runner level (err=%v, no re-park)", runErr)
+}
+
 // TestLongRunningTimeoutResume proves the kill path: when CI never reports, the
 // CI_TIMEOUT timer fires and resumes the parked run with a timeout outcome, which
 // concludes it cleanly — final message emitted, NO re-park. The run is freed, not
