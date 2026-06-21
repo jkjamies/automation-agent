@@ -87,6 +87,40 @@ describe('webhook server', () => {
     expect(c.env!.kind).toBe(Kind.CI);
   });
 
+  it('lint kickoff requires HMAC when a secret is set -> 401 without a signature', async () => {
+    // A kickoff selects the caller-supplied target repo, so it is authenticated like the
+    // GitHub webhook when a secret is configured.
+    const c = new Capture();
+    const resp = await request(new Server(c.ingest, { secret: 'topsecret' }).app)
+      .post('/webhooks/lint')
+      .send('{"problems":[]}');
+
+    expect(resp.status).toBe(401);
+    expect(c.env).toBeNull();
+  });
+
+  it('lint kickoff with a valid signature -> 202', async () => {
+    const c = new Capture();
+    const body = '{"problems":[]}';
+    const resp = await request(new Server(c.ingest, { secret: 'topsecret' }).app)
+      .post('/webhooks/lint')
+      .set('X-Hub-Signature-256', sign('topsecret', body))
+      .send(body);
+
+    expect(resp.status).toBe(202);
+    expect(c.env!.kind).toBe(Kind.Lint);
+  });
+
+  it('coverage kickoff requires HMAC when a secret is set -> 401 without a signature', async () => {
+    const c = new Capture();
+    const resp = await request(new Server(c.ingest, { secret: 'topsecret' }).app)
+      .post('/webhooks/coverage')
+      .send('{"report":"jacoco"}');
+
+    expect(resp.status).toBe(401);
+    expect(c.env).toBeNull();
+  });
+
   it('an ingest error becomes a 500', async () => {
     const c = new Capture(new Error('boom'));
     const resp = await request(new Server(c.ingest).app).post('/webhooks/lint').send('{}');
@@ -114,9 +148,9 @@ describe('webhook server', () => {
     expect(resp.status).toBe(404);
   });
 
-  it('an oversize body is truncated to the cap and still accepted', async () => {
-    // A body larger than the cap is truncated to MAX_BODY_BYTES and still accepted
-    // (202), not rejected.
+  it('an oversize body is rejected with 413, not truncated', async () => {
+    // A body larger than the cap is rejected with 413 rather than silently truncated — a
+    // truncated body would both fail HMAC and feed malformed JSON downstream.
     const c = new Capture();
     const oversize = 'x'.repeat(MAX_BODY_BYTES + 100);
     const resp = await request(new Server(c.ingest).app)
@@ -124,8 +158,8 @@ describe('webhook server', () => {
       .set('Content-Type', 'text/plain')
       .send(oversize);
 
-    expect(resp.status).toBe(202);
-    expect(c.env!.payload.length).toBe(MAX_BODY_BYTES);
+    expect(resp.status).toBe(413);
+    expect(c.env).toBeNull();
   });
 
   it('uses the injected clock for receivedAt', async () => {

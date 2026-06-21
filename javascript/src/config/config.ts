@@ -54,8 +54,6 @@ export interface Config {
   // it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
   ciTimeoutMs: number;
   githubWebhookSecret: string;
-  agentPrLabel: string;
-  agentCheckName: string;
 }
 
 /** Read configuration from the process environment, applying defaults. */
@@ -94,8 +92,6 @@ export function loadFrom(get: Lookup): Config {
     maxIterations,
     ciTimeoutMs: parseDuration(getOr(get, 'CI_TIMEOUT', '90m')),
     githubWebhookSecret: getOr(get, 'GITHUB_WEBHOOK_SECRET', ''),
-    agentPrLabel: getOr(get, 'AGENT_PR_LABEL', 'automation-agent'),
-    agentCheckName: getOr(get, 'AGENT_CHECK_NAME', 'agent-lint-verify'),
   };
 
   // Code models default to the base models when unset.

@@ -44,6 +44,13 @@ export interface DriveResult {
  *
  * All domain policy (what to apply, whether to retry, how long to wait) lives in
  * the caller; this type only knows how to run-to-park and resume-with-a-result.
+ *
+ * Concurrency: one driver (one {@link Runner} + one {@link InMemorySessionService}) is
+ * driven concurrently for distinct session ids (concurrent kickoffs and resumes). This
+ * relies on `runAsync` and the in-memory session service being safe under concurrent
+ * invocations on different sessions in the pinned adk-js — each invocation touches only
+ * its own session, and JS's single-threaded event loop serializes the map mutations the
+ * session service performs.
  */
 export class LongRunDriver {
   private readonly sessionService = new InMemorySessionService();

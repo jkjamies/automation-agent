@@ -2,8 +2,10 @@
 
 Shared utilities for building agents.
 **This is the only package allowed to import provider SDKs** (the Ollama HTTP client,
-ADK-Kotlin's `Gemini` model, and the `com.google.adk.kt.models`/`com.google.genai`
-types) — enforced by the `:konsist` `ArchitectureTest`.
+ADK-Kotlin's concrete `Gemini` model class, and the `com.google.genai` backend
+types) — enforced by the `:konsist` `ArchitectureTest`. The `Model`/`LlmRequest`/
+`LlmResponse` abstractions in `com.google.adk.kt.models` are *not* provider SDKs;
+agents receive a `Model` directly, mirroring the Go reference's `adk/model.Model`.
 
 ## Flow
 

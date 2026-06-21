@@ -35,12 +35,17 @@ export class Scheduler {
    * Register a 5-field cron spec (minute hour dom month dow) that emits an
    * envelope of the given kind, e.g. `0 9 * * *` daily, `0 9 * * 1` Mondays.
    *
+   * Schedules are interpreted in UTC (not the host's local zone) so "0 9 * * *" means
+   * 09:00 UTC regardless of where the process runs.
+   *
    * Jobs are created paused and only begin firing once {@link start} is called.
    *
    * @throws Error for an invalid spec.
    */
   add(spec: string, kind: Kind): void {
-    const job = new Cron(spec, { paused: !this.running }, () => this.trigger(kind));
+    const job = new Cron(spec, { paused: !this.running, timezone: 'UTC' }, () =>
+      this.trigger(kind),
+    );
     this.jobs.push(job);
   }
 

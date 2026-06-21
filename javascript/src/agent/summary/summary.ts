@@ -70,7 +70,10 @@ class FetchAgent extends BaseAgent {
 
 /** Posts the summarizer's digest to chat. */
 class NotifyAgent extends BaseAgent {
-  constructor(private readonly notifier: Notifier) {
+  constructor(
+    private readonly notifier: Notifier,
+    private readonly title: string,
+  ) {
     super({ name: 'notify', description: 'Posts the commit digest to Slack or Teams' });
   }
 
@@ -79,7 +82,7 @@ class NotifyAgent extends BaseAgent {
     if (digest === '') {
       digest = '(no digest was produced)';
     }
-    const m: Message = { title: 'Daily commit digest', text: digest };
+    const m: Message = { title: this.title, text: digest };
     try {
       await this.notifier.notify(m);
     } catch (err) {
@@ -103,9 +106,12 @@ export function newFetchAgent(
   return new FetchAgent(repo, gh, windowMs, now);
 }
 
-/** Return a code agent that posts the digest to chat. */
-export function newNotifyAgent(notifier: Notifier): BaseAgent {
-  return new NotifyAgent(notifier);
+/**
+ * Return a code agent that posts the digest to chat under the given title (e.g.
+ * "Daily commit digest" / "Weekly commit digest").
+ */
+export function newNotifyAgent(notifier: Notifier, title: string): BaseAgent {
+  return new NotifyAgent(notifier, title);
 }
 
 /**

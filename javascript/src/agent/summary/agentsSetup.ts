@@ -24,6 +24,7 @@ import {
 const prompts = new Prompts(dirname(fileURLToPath(import.meta.url)));
 
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_TITLE = 'Daily commit digest';
 
 /** Injected dependencies for the summary workflow. */
 export interface Deps {
@@ -32,6 +33,7 @@ export interface Deps {
   notify: Notifier;
   repos: string[]; // owner/repo entries; one parallel fetcher each
   windowMs?: number; // commit window; defaults to 24h
+  title?: string; // digest notification title; defaults to "Daily commit digest"
   now?: () => Date; // injectable clock
 }
 
@@ -50,6 +52,7 @@ export function buildSummaryAgent(d: Deps): SequentialAgent {
 
   const now = d.now ?? defaultNow;
   const windowMs = d.windowMs && d.windowMs > 0 ? d.windowMs : DEFAULT_WINDOW_MS;
+  const title = d.title && d.title !== '' ? d.title : DEFAULT_TITLE;
 
   const fetchers: BaseAgent[] = d.repos.map((repo) => newFetchAgent(repo, d.gh, windowMs, now));
   const parallel = new ParallelAgent({
@@ -68,7 +71,7 @@ export function buildSummaryAgent(d: Deps): SequentialAgent {
 
   return new SequentialAgent({
     name: 'summary_workflow',
-    description: 'Daily commit digest workflow',
-    subAgents: [parallel, summarizer, newNotifyAgent(d.notify)],
+    description: 'Commit digest workflow',
+    subAgents: [parallel, summarizer, newNotifyAgent(d.notify, title)],
   });
 }

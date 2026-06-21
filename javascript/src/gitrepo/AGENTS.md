@@ -35,9 +35,9 @@ flowchart TD
 - `checkout(branch, create)`, `commitAll(msg, author)` (stages all, returns SHA),
   `push()`, `head()`, `path(rel)`.
 
-The lint-fixer writes file edits under `dir()`, then `commitAll` + `push`. The
-invariant **one commit per attempt** lets `githubapi.attemptCount` derive the
-iteration count. PR creation lives in `githubapi` (an API op, not a git op).
+The lint-fixer writes file edits under `dir()`, then `commitAll` + `push` (one commit
+per attempt). PR creation lives in `githubapi` (an API op, not a git op); attempt counts
+live in the in-memory parked-run registry, not in GitHub.
 
 Methods return a value or `throw`; committing a clean tree raises `NoChangesError`.
 The committer identity is supplied inline (`-c user.name/user.email` plus `--author`)

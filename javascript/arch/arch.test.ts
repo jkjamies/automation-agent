@@ -1,13 +1,19 @@
 // Import-boundary conformance tests:
 //  * deterministic tooling must never import agent modules;
 //  * the genai provider SDK (and the Gemini model) live only in agent/setup;
-//  * nothing imports the cmd entrypoints.
+//  * nothing imports the cmd entrypoints;
+//  * only config reads the environment.
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { collectImports, rel, repoRoot, tsFiles, under } from './helpers';
 
 const TOOLING = ['src/githubapi', 'src/gitrepo', 'src/webhook', 'src/notify', 'src/scheduler'];
+
+// process.env may be read only here; every other module receives config via injection.
+const CONFIG_FILE = 'src/config/config.ts';
+const ENV_READ_RE = /\bprocess\s*\.\s*env\b/;
 
 describe('import boundaries', () => {
   it('tooling does not import agents', () => {
@@ -38,6 +44,19 @@ describe('import boundaries', () => {
         if (imp.specifier === '@google/adk' && imp.names.includes('Gemini')) {
           errors.push(`${rel(file)} imports the Gemini model outside agent/setup`);
         }
+      }
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it('only config reads the environment', () => {
+    const errors: string[] = [];
+    for (const file of tsFiles(join(repoRoot(), 'src'))) {
+      if (under(file, 'src/config')) {
+        continue;
+      }
+      if (ENV_READ_RE.test(readFileSync(file, 'utf-8'))) {
+        errors.push(`${rel(file)} reads process.env — only ${CONFIG_FILE} may`);
       }
     }
     expect(errors).toEqual([]);

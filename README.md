@@ -21,16 +21,21 @@ cloud deployment.
 > **Design doc:** [`docs/architecture.md`](docs/architecture.md) is the source of
 > truth for the architecture and decisions.
 
-## Ports (Go · Kotlin · Python)
+## Ports (Go · Kotlin · Python · TypeScript)
 
 The Go implementation in [`go/`](go/) is the canonical reference. It is mirrored by
-sibling ports that must stay **1:1 in functionality** — same structure, public surface,
-config, and external contracts (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
+sibling ports that must **all stay 1:1 in functionality** — same structure, public
+surface, config, and external contracts. Every language is held to the same parity
+contract; a behavior change lands in Go first and is mirrored into every existing port in
+the same change (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
 - **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
   (`com.google.adk:google-adk-kotlin-core:0.2.0`). Port in progress; see
   [`kotlin/PORTING.md`](kotlin/PORTING.md).
 - **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
+  port (`make ci` green).
+- **TypeScript** — [`javascript/`](javascript/), built on the official
+  [ADK for JavaScript](https://github.com/google/adk-js) (`@google/adk`). A functional 1:1
   port (`make ci` green).
 
 Each port uses its language's **native ADK**, so parity is functional, not version-matched.

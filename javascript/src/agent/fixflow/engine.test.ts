@@ -220,6 +220,22 @@ describe('Engine', () => {
     expect(e.driver.reg.size()).toBe(0);
   });
 
+  it('notifies for review when the apply step fails, not just on CI failure', async () => {
+    // A fix that can never even open its PR (clone/analyze/push/PR error) must reach the
+    // review channel, not vanish into the dispatcher's log.
+    const n = new FakeNotifier();
+    const s = spec();
+    s.triage = async () => {
+      throw new Error('triage boom');
+    };
+    const e = newEngineFor(await seedRemote('r3'), new FakeGH(), n, s);
+    await expect(e.kickoff('{"repo":"acme/api","report":"r"}')).rejects.toThrow(/triage boom/);
+    expect(n.msgs).toHaveLength(1);
+    expect(n.msgs[0]!.title).toContain('review');
+    expect(n.msgs[0]!.text).toContain('could not be applied');
+    expect(e.driver.reg.size()).toBe(0);
+  });
+
   it('exposes the label and check name', async () => {
     const e = newEngineFor('x', new FakeGH(), new FakeNotifier());
     expect(e.label()).toBe('automation-agent');

@@ -30,14 +30,20 @@ export function parseTriage(out: string): FileWork[] {
     throw new Error(`triage: decode triage JSON: ${(err as Error).message}`);
   }
   const work: FileWork[] = [];
-  if (Array.isArray(files)) {
-    for (const f of files) {
-      const path = f && typeof f === 'object' && typeof f.path === 'string' ? f.path : '';
-      if (path.trim() !== '') {
-        const problems = Array.isArray(f.problems) ? f.problems.map(String) : [];
-        work.push({ path, items: problems });
-      }
+  if (!Array.isArray(files)) {
+    return work;
+  }
+  for (const entry of files) {
+    if (entry === null || typeof entry !== 'object') {
+      continue;
     }
+    const f = entry as Record<string, unknown>;
+    const path = typeof f.path === 'string' ? f.path : '';
+    if (path.trim() === '') {
+      continue;
+    }
+    const problems = Array.isArray(f.problems) ? f.problems.map(String) : [];
+    work.push({ path, items: problems });
   }
   return work;
 }

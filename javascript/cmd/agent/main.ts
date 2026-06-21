@@ -42,11 +42,17 @@ function buildNotifier(cfg: Config): Notifier | null {
   }
 }
 
+/**
+ * Build a summary workflow agent for the given commit window and notification title, or
+ * null if it can't be fully configured (no repos or no notifier).
+ */
 function buildSummary(
   cfg: Config,
   llm: ReturnType<typeof buildLLM>,
   gh: CommitLister,
   notifier: Notifier | null,
+  windowMs: number,
+  title: string,
 ): BaseAgent | null {
   if (cfg.repos.length === 0) {
     log.warn('no REPOS configured; summary workflow disabled');
@@ -56,12 +62,19 @@ function buildSummary(
     return null; // buildNotifier already warned
   }
   try {
-    return buildSummaryAgent({ llm, gh, notify: notifier, repos: cfg.repos });
+    return buildSummaryAgent({ llm, gh, notify: notifier, repos: cfg.repos, windowMs, title });
   } catch (err) {
     log.warn(`summary workflow disabled: ${(err as Error).message}`);
     return null;
   }
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// maxConcurrentDispatch bounds in-flight webhook/cron dispatches; drainTimeoutMs caps how
+// long shutdown waits for in-flight dispatches to finish before exiting anyway.
+const MAX_CONCURRENT_DISPATCH = 32;
+const DRAIN_TIMEOUT_MS = 15_000;
 
 /** Adapt a raw-payload kickoff/resume to a root Handler. */
 function payloadHandler(fn: (raw: Buffer | string) => Promise<void>) {
@@ -100,7 +113,10 @@ async function run(): Promise<void> {
   const gh = new Client(cfg.githubToken);
   const notifier = buildNotifier(cfg);
 
-  const summaryAgent = buildSummary(cfg, llm, gh, notifier);
+  // Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents so
+  // the weekly cron posts a real 7-day digest, not a copy of the daily one.
+  const summaryDaily = buildSummary(cfg, llm, gh, notifier, DAY_MS, 'Daily commit digest');
+  const summaryWeekly = buildSummary(cfg, llm, gh, notifier, 7 * DAY_MS, 'Weekly commit digest');
 
   // Fix engines (event-driven; work without a notifier — they just won't post results).
   const fixDeps: FixDeps = {
@@ -118,7 +134,8 @@ async function run(): Promise<void> {
   const engines = [lintEngine, covEngine];
 
   const dispatcher = buildRootDispatcher({
-    summaryAgent,
+    summaryDaily,
+    summaryWeekly,
     lintKickoff: payloadHandler((raw) => lintEngine.kickoff(raw)),
     coverageKickoff: payloadHandler((raw) => covEngine.kickoff(raw)),
     ciResume: ciResumeHandler(engines),
@@ -133,13 +150,46 @@ async function run(): Promise<void> {
     }
   };
 
-  // Scheduler: croner fires on the event loop; dispatch in the background.
-  const sched = new Scheduler((e) => void safeDispatch(e));
+  // Bounded, drainable dispatch pool. Webhook dispatches acquire a permit before the 202
+  // (backpressure under burst); every dispatch is tracked so a SIGTERM drains in-flight
+  // work instead of dropping it. (Parked runs are still in-memory, so a restart strands
+  // them — an accepted trade.)
+  let permits = MAX_CONCURRENT_DISPATCH;
+  const permitWaiters: Array<() => void> = [];
+  const acquire = (): Promise<void> => {
+    if (permits > 0) {
+      permits -= 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => permitWaiters.push(resolve));
+  };
+  const release = (): void => {
+    const next = permitWaiters.shift();
+    if (next) {
+      next(); // hand the permit directly to the next waiter
+    } else {
+      permits += 1;
+    }
+  };
+  const inFlight = new Set<Promise<void>>();
+  const track = (p: Promise<void>): void => {
+    inFlight.add(p);
+    void p.finally(() => inFlight.delete(p));
+  };
+
+  // Scheduler: croner fires on the event loop; dispatch in the background (tracked).
+  const sched = new Scheduler((e) => track(safeDispatch(e)));
   sched.add(cfg.cronDaily, Kind.CronDaily);
   sched.add(cfg.cronWeekly, Kind.CronWeekly);
 
-  // Webhooks enqueue asynchronously and return fast.
-  const srv = new Server(async (e) => void safeDispatch(e), { secret: cfg.githubWebhookSecret });
+  // Webhooks enqueue asynchronously and return fast; a permit bounds concurrency.
+  const srv = new Server(
+    async (e) => {
+      await acquire();
+      track(safeDispatch(e).finally(release));
+    },
+    { secret: cfg.githubWebhookSecret },
+  );
 
   sched.start();
   const httpServer = srv.app.listen(Number(cfg.port), '0.0.0.0', () => {
@@ -148,17 +198,46 @@ async function run(): Promise<void> {
       llmProvider: cfg.llmProvider,
       repos: cfg.repos.length,
       notify: cfg.notifyProvider,
-      summaryEnabled: summaryAgent !== null,
+      summaryEnabled: summaryDaily !== null,
     });
   });
+  // HTTP server timeouts (the http.Server analogue of Go's ReadHeaderTimeout / ReadTimeout
+  // / IdleTimeout) to blunt Slowloris and stalled connections.
+  httpServer.headersTimeout = 10_000;
+  httpServer.requestTimeout = 30_000;
+  httpServer.keepAliveTimeout = 120_000;
 
-  const shutdown = (): void => {
+  // drain waits for in-flight dispatches to finish, bounded by DRAIN_TIMEOUT_MS, so a
+  // clean SIGTERM completes work in flight rather than abandoning it.
+  const drain = async (): Promise<void> => {
+    if (inFlight.size === 0) {
+      return;
+    }
+    const done = Promise.allSettled([...inFlight]).then(() => 'done' as const);
+    const timeout = new Promise<'timeout'>((resolve) => {
+      const t = setTimeout(() => resolve('timeout'), DRAIN_TIMEOUT_MS);
+      t.unref?.();
+    });
+    if ((await Promise.race([done, timeout])) === 'timeout') {
+      log.warn('drain timed out; exiting with work still in flight');
+    } else {
+      log.info('drained in-flight work');
+    }
+  };
+
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
     log.info('shutting down');
     sched.stop();
-    httpServer.close();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await drain();
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
 }
 
 run().catch((err) => {

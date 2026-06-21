@@ -1,7 +1,7 @@
 /**
  * Thin wrapper over `@octokit/rest` exposing the narrow operations this service
- * needs: reading recent commits, opening/labeling/finding agent PRs, counting
- * attempts, and reading the agent verify check.
+ * needs: reading recent commits, opening/labeling/finding agent PRs, and reading
+ * the agent verify check.
  *
  * Deterministic tooling — no agent imports (an arch test enforces this).
  *
@@ -10,6 +10,9 @@
  */
 
 import { Octokit } from '@octokit/rest';
+
+/** Bounds every GitHub request so a stalled connection can't hang a long-running poll. */
+const HTTP_TIMEOUT_MS = 30_000;
 
 /** Minimal commit projection for digests. */
 export interface Commit {
@@ -101,12 +104,6 @@ export interface OctokitLike {
         state: 'open';
         per_page: number;
       }): Promise<{ data: unknown[] }>;
-      listCommits(params: {
-        owner: string;
-        repo: string;
-        pull_number: number;
-        per_page: number;
-      }): Promise<{ data: unknown[] }>;
     };
     issues: {
       addLabels(params: {
@@ -122,6 +119,7 @@ export interface OctokitLike {
         repo: string;
         ref: string;
         check_name: string;
+        filter: 'latest' | 'all';
       }): Promise<{ data: { total_count: number; check_runs: unknown[] } }>;
     };
   };
@@ -144,8 +142,10 @@ export class Client {
   constructor(token = '') {
     // A real Octokit's overloaded method/paginate signatures are narrower than
     // the OctokitLike shape used for test fakes; cast through unknown at this
-    // single trusted boundary.
-    const oct = token ? new Octokit({ auth: token }) : new Octokit();
+    // single trusted boundary. A 30s request timeout bounds every call so a stalled
+    // GitHub connection can't hang a long-running poll.
+    const opts = { request: { timeout: HTTP_TIMEOUT_MS } };
+    const oct = token ? new Octokit({ auth: token, ...opts }) : new Octokit(opts);
     this.gh = oct as unknown as OctokitLike;
   }
 
@@ -223,27 +223,6 @@ export class Client {
   }
 
   /**
-   * Return the number of commits on a PR.
-   *
-   * With the invariant that the agent pushes exactly one commit per attempt,
-   * this equals the distinct agent-pushed head SHAs — re-run-safe, since a manual
-   * check re-run adds no commit.
-   */
-  async attemptCount(owner: string, repo: string, number: number): Promise<number> {
-    try {
-      const data = await this.gh.paginate(this.gh.rest.pulls.listCommits, {
-        owner,
-        repo,
-        pull_number: number,
-        per_page: 100,
-      });
-      return data.length;
-    } catch (err) {
-      throw new Error(`list PR commits ${owner}/${repo}#${number}: ${errMsg(err)}`);
-    }
-  }
-
-  /**
    * Return the named check's state for ref, or `{ found: false }` if absent.
    */
   async agentCheck(
@@ -258,6 +237,7 @@ export class Client {
         repo,
         ref,
         check_name: checkName,
+        filter: 'latest', // on a re-run, return only the most recent run per check
       });
       // Guard on both the reported count and the actual page contents.
       if (data.total_count === 0 || data.check_runs.length === 0) {

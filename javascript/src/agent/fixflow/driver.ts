@@ -132,7 +132,7 @@ export class Driver {
       this.clear(sid);
       throw err;
     }
-    this.afterDrive(sid, k.repo, res, 1);
+    await this.afterDrive(sid, k.repo, res, 1);
   }
 
   /** React to a CI conclusion for a parked run. */
@@ -201,12 +201,14 @@ export class Driver {
       pr: input.prNumber,
       attempt: run.attempts + 1,
     });
-    this.afterDrive(run.sessionId, input.fullRepo, res, run.attempts + 1);
+    await this.afterDrive(run.sessionId, input.fullRepo, res, run.attempts + 1);
   }
 
   /**
    * Fires (from the registry timer) when a parked run's CI never reports. Claims the
-   * run, frees it, and asks for human review.
+   * run, frees it, and asks for human review. Invoked detached (`void onTimeout`) by the
+   * registry timer, so a notifier rejection is swallowed here rather than surfacing as a
+   * process-level unhandledRejection.
    */
   async onTimeout(key: string): Promise<void> {
     const run = this.reg.resolve(key);
@@ -221,11 +223,15 @@ export class Driver {
       pr,
       timeoutMs: this.timeoutMs,
     });
-    await this.engine.notify(
-      this.engine.spec.reviewTitle,
-      `${fullRepo}: the ${this.engine.spec.name} fix timed out after ${this.timeoutMs}ms waiting for CI. Please review.`,
-      link,
-    );
+    try {
+      await this.engine.notify(
+        this.engine.spec.reviewTitle,
+        `${fullRepo}: the ${this.engine.spec.name} fix timed out after ${this.timeoutMs}ms waiting for CI. Please review.`,
+        link,
+      );
+    } catch (err) {
+      this.log('warn', 'timeout notification failed', { repo: fullRepo, pr, err: String(err) });
+    }
   }
 
   // --- internals ---------------------------------------------------------
@@ -234,24 +240,49 @@ export class Driver {
    * Inspect a drive's outcome and either surface an apply error or park the run (and its
    * timeout) under its PR key.
    */
-  private afterDrive(sid: string, fullRepo: string, res: DriveResult, attempt: number): void {
+  private async afterDrive(
+    sid: string,
+    fullRepo: string,
+    res: DriveResult,
+    attempt: number,
+  ): Promise<void> {
     const apply = res.toolResponses[TOOL_APPLY_FIX];
     if (apply && 'error' in apply) {
-      this.clear(sid);
-      throw new Error(`${fullRepo} ${this.engine.spec.name}: ${String(apply.error)}`);
+      await this.failApply(sid, fullRepo, String(apply.error));
+      return;
     }
     if (res.parkedCallId === '') {
-      this.clear(sid);
-      throw new Error(`${fullRepo} ${this.engine.spec.name}: run did not park on CI wait`);
+      await this.failApply(sid, fullRepo, 'run did not park on CI wait');
+      return;
     }
     const pr = prNumberFrom(apply);
     if (pr === 0) {
-      this.clear(sid);
-      throw new Error(`${fullRepo} ${this.engine.spec.name}: parked without a PR number`);
+      await this.failApply(sid, fullRepo, 'parked without a PR number');
+      return;
     }
     const parked: ParkedRun = { sessionId: sid, callId: res.parkedCallId, attempts: attempt };
     this.reg.park(prKey(fullRepo, pr), parked, this.timeoutMs, (k) => this.onTimeout(k));
     this.log('info', 'fix applied; awaiting CI', { repo: fullRepo, pr, attempt });
+  }
+
+  /**
+   * Free a run that errored before it could park on CI (a push/PR/analyze failure, not a
+   * CI failure), notify a human, then throw. Without the notification an apply error would
+   * only reach the dispatcher's logger and never the review channel — a fix that can't even
+   * open its PR would vanish silently.
+   */
+  private async failApply(sid: string, fullRepo: string, reason: string): Promise<never> {
+    this.clear(sid);
+    try {
+      await this.engine.notify(
+        this.engine.spec.reviewTitle,
+        `${fullRepo}: the ${this.engine.spec.name} fix could not be applied (${reason}). Please review.`,
+        '',
+      );
+    } catch (err) {
+      this.log('warn', 'apply-failure notification failed', { repo: fullRepo, err: String(err) });
+    }
+    throw new Error(`${fullRepo} ${this.engine.spec.name}: ${reason}`);
   }
 
   private log(level: keyof Logger, msg: string, fields: Record<string, unknown>): void {

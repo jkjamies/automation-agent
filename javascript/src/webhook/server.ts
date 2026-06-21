@@ -77,25 +77,30 @@ export class Server {
       res.status(200).type('text/plain').send('ok');
     });
 
+    // A kickoff selects the caller-supplied target repo, so /webhooks/lint and
+    // /webhooks/coverage are HMAC-authenticated with the same shared secret as the
+    // GitHub webhook (verification is skipped only when no secret is set).
     app.post('/webhooks/lint', (req: Request, res: Response) => {
-      void this.handleBody(req, res, (body) =>
-        this.dispatch(res, newEnvelope(Kind.Lint, 'webhook:/lint', body, this.now())),
-      );
+      void this.handleBody(req, res, (body) => {
+        if (!this.authenticated(req, res, body)) {
+          return Promise.resolve();
+        }
+        return this.dispatch(res, newEnvelope(Kind.Lint, 'webhook:/lint', body, this.now()));
+      });
     });
 
     app.post('/webhooks/coverage', (req: Request, res: Response) => {
-      void this.handleBody(req, res, (body) =>
-        this.dispatch(res, newEnvelope(Kind.Coverage, 'webhook:/coverage', body, this.now())),
-      );
+      void this.handleBody(req, res, (body) => {
+        if (!this.authenticated(req, res, body)) {
+          return Promise.resolve();
+        }
+        return this.dispatch(res, newEnvelope(Kind.Coverage, 'webhook:/coverage', body, this.now()));
+      });
     });
 
     app.post('/webhooks/github', (req: Request, res: Response) => {
       void this.handleBody(req, res, (body) => {
-        if (
-          this.secret !== '' &&
-          !verifySignature(this.secret, headerValue(req, 'x-hub-signature-256'), body)
-        ) {
-          res.status(401).type('text/plain').send('invalid signature');
+        if (!this.authenticated(req, res, body)) {
           return Promise.resolve();
         }
         return this.dispatch(res, newEnvelope(Kind.CI, 'webhook:/github', body, this.now()));
@@ -105,7 +110,25 @@ export class Server {
     return app;
   }
 
-  /** Read the body (with the cap) then run `next`, mapping a read error to 400. */
+  /**
+   * Verify the request's HMAC signature when a secret is configured, writing a 401 and
+   * returning false on mismatch. With no secret (local dev only) every request passes.
+   */
+  private authenticated(req: Request, res: Response, body: Buffer): boolean {
+    if (this.secret === '') {
+      return true;
+    }
+    if (!verifySignature(this.secret, headerValue(req, 'x-hub-signature-256'), body)) {
+      res.status(401).type('text/plain').send('invalid signature');
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Read the body (with the cap) then run `next`, mapping an oversize body to 413 and any
+   * other read error to 400.
+   */
   private async handleBody(
     req: Request,
     res: Response,
@@ -114,8 +137,12 @@ export class Server {
     let body: Buffer;
     try {
       body = await readBody(req);
-    } catch {
-      res.status(400).type('text/plain').send('read body');
+    } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        res.status(413).type('text/plain').send('request body too large');
+      } else {
+        res.status(400).type('text/plain').send('read body');
+      }
       return;
     }
     await next(body);
@@ -141,9 +168,13 @@ function headerValue(req: Request, name: string): string {
   return v ?? '';
 }
 
+/** Raised by {@link readBody} when a body exceeds MAX_BODY_BYTES. Mapped to a 413. */
+class BodyTooLargeError extends Error {}
+
 /**
- * Read up to MAX_BODY_BYTES, truncating anything larger (oversize bodies are
- * capped, not rejected). Rejects only on a transport read error.
+ * Read up to MAX_BODY_BYTES. A body over the cap is rejected (BodyTooLargeError → 413)
+ * rather than silently truncated — a truncated body would both fail HMAC verification and
+ * feed malformed JSON downstream. Rejects with the transport error on a read failure.
  */
 function readBody(req: Request): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
@@ -151,31 +182,37 @@ function readBody(req: Request): Promise<Buffer> {
     let total = 0;
     let done = false;
 
-    const finish = (): void => {
+    const fail = (err: Error): void => {
       if (done) {
         return;
       }
       done = true;
-      resolve(Buffer.concat(chunks).subarray(0, MAX_BODY_BYTES));
+      // Stop buffering further data but leave the socket alone so the caller can still
+      // write its 413/400 response; destroying it here would surface as a socket hang-up.
+      req.resume();
+      reject(err);
     };
 
     req.on('data', (chunk: Buffer) => {
       if (done) {
         return;
       }
-      chunks.push(chunk);
       total += chunk.length;
-      if (total >= MAX_BODY_BYTES) {
-        finish();
+      if (total > MAX_BODY_BYTES) {
+        fail(new BodyTooLargeError('request body too large'));
+        return;
       }
+      chunks.push(chunk);
     });
-    req.on('end', finish);
-    req.on('error', (err: Error) => {
+    req.on('end', () => {
       if (done) {
         return;
       }
       done = true;
-      reject(err);
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (err: Error) => {
+      fail(err);
     });
   });
 }

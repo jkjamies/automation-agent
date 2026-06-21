@@ -128,6 +128,21 @@ describe('summary workflow behavior', () => {
     expect(notifier.msgs[0]!.text).toBe('THE DIGEST');
   });
 
+  it('posts under a custom title (weekly)', async () => {
+    const gh = new FakeLister({ 'o/r': [commit('abc1234', 'do the thing', 'X')] });
+    const notifier = new FakeNotifier();
+    const a = buildSummaryAgent({
+      llm: new FakeLlm('THE DIGEST'),
+      gh,
+      notify: notifier,
+      repos: ['o/r'],
+      title: 'Weekly commit digest',
+    });
+    const runner = newRunner('summary-test', a);
+    await drive(runner, 'u', 's', 'go');
+    expect(notifier.msgs[0]!.title).toBe('Weekly commit digest');
+  });
+
   it('surfaces a fetch error', async () => {
     const gh = new FakeLister({}, new Error('api down'));
     const a = buildSummaryAgent({ llm: new FakeLlm(''), gh, notify: new FakeNotifier(), repos: ['o/r'] });

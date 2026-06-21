@@ -43,10 +43,15 @@ class ArchitectureTest : BehaviorSpec({
     }
 
     Given("every source file outside agent.setup") {
-        // Confined to agent.setup: the Ollama client, the ADK Gemini model, and the genai types.
+        // Confined to agent.setup: the Ollama client, the concrete ADK Gemini provider, and the
+        // genai backend types. Mirrors the Go reference, which confines only `adk/model/gemini`
+        // (the concrete provider) — NOT the `adk/model.Model` abstraction. In ADK-Kotlin the
+        // `Model`/`LlmRequest`/`LlmResponse` abstractions share the `com.google.adk.kt.models`
+        // package with the concrete `Gemini` class, so confine the class, not the whole package:
+        // agents legitimately receive a `Model`, exactly as Go agents import `adk/model.Model`.
         fun isProviderSdk(name: String): Boolean =
             name.contains("ollama") ||
-                name.startsWith("com.google.adk.kt.models") ||
+                name == "com.google.adk.kt.models.Gemini" ||
                 name.contains("google.genai")
         When("inspecting provider-SDK imports") {
             val violations = files

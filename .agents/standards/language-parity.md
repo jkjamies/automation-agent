@@ -1,4 +1,4 @@
-# Language parity (Go · Kotlin · Python)
+# Language parity (Go · Kotlin · Python · TypeScript)
 
 `automation-agent` is maintained as **parallel ports of one design** that must remain
 **1:1 in functionality**. This document is the contract every port obeys.
@@ -10,8 +10,9 @@
 | Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | **reference (source of truth)** |
 | Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | port |
 | Python | `python/` | `google-adk` (PyPI) | port |
+| TypeScript | `javascript/` | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | port |
 
-Each language targets its **own native ADK** (adk-go, adk-kotlin, adk-python), so parity is
+Each language targets its **own native ADK** (adk-go, adk-kotlin, adk-python, adk-js), so parity is
 **functional, not version-matched** — the ADKs are at different versions and expose
 different idiomatic APIs. The shared contract is the *agent topology and behavior*, not the
 SDK calls.

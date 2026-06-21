@@ -9,21 +9,24 @@ flowchart TD
     Cfg --> LLM["buildLLM(cfg) + buildCodeLLM(cfg)"]
     LLM --> GH["new Client(githubToken)"]
     GH --> Notif["buildNotifier(cfg) -> Notifier | null"]
-    Notif --> SumA["buildSummary (null if no repos/notifier)"]
+    Notif --> SumA["buildSummary daily + weekly (null if no repos/notifier)"]
     SumA --> Eng["newLintEngine(FixDeps)\nnewCoverageEngine(FixDeps)\nengines = [lint, cov]"]
-    Eng --> Disp["buildRootDispatcher(Deps{summaryAgent,\nlintKickoff, coverageKickoff,\nciResume -> every engine})"]
-    Disp --> Sched["new Scheduler(emit -> safeDispatch)\nadd(cronDaily/Weekly)"]
-    Sched --> Web["new Server(ingest -> safeDispatch, secret)"]
-    Web --> Listen["sched.start(); app.listen(port)"]
+    Eng --> Disp["buildRootDispatcher(Deps{summaryDaily, summaryWeekly,\nlintKickoff, coverageKickoff,\nciResume -> every engine})"]
+    Disp --> Sched["new Scheduler(emit -> tracked safeDispatch)\nadd(cronDaily/Weekly)"]
+    Sched --> Web["new Server(ingest -> bounded+tracked safeDispatch, secret)"]
+    Web --> Listen["sched.start(); app.listen(port) + HTTP timeouts"]
     Listen --> Block["run until SIGINT/SIGTERM"]
-    Block --> Shutdown["sched.stop(); server.close()"]
+    Block --> Shutdown["sched.stop(); server.close(); drain in-flight"]
 ```
 
 1. Load `config`.
 2. Build the LLMs (`src/agent/setup`), tooling, and the root + summary agents plus the
    lint-fixer and coverage-fixer `fixflow` engines.
-3. Start the scheduler (croner) and the webhook HTTP server (Express).
-4. Run until interrupted, then stop the scheduler and close the server.
+3. Start the scheduler (croner) and the webhook HTTP server (Express, with header/request/
+   idle timeouts). Webhook dispatches run on a bounded pool (a permit is acquired before
+   the 202) and every dispatch is tracked.
+4. Run until interrupted, then stop the scheduler, close the server, and drain in-flight
+   dispatches (bounded by a 15s deadline) before exiting.
 
 The fix loop is non-durable and in-memory (ADK long-running suspend/resume + `fixflow`'s
 in-memory parked-run registry, with a per-run `CI_TIMEOUT` bounding each wait); there is

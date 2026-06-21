@@ -1,7 +1,7 @@
 /**
  * Tests for the GitHub API client. We inject an octokit-like fake via
  * `Client.withOctokit`, exercising the real logic paths (pagination, label filter,
- * attempt count, check projection, not-found, file decode/directory) with NO network.
+ * check projection, not-found, file decode/directory) with NO network.
  * `parseCheckRunEvent` is pure and tested directly.
  */
 
@@ -14,7 +14,6 @@ interface FakeOpts {
   commits?: unknown[];
   newPull?: unknown;
   pulls?: unknown[];
-  prCommits?: unknown[];
   checkRunsByRef?: Record<string, unknown[]>;
   contents?: unknown;
 }
@@ -24,6 +23,7 @@ interface Seen {
   labeled?: { number: number; labels: string[] };
   pullsState?: string;
   checkNameSeen?: string;
+  checkFilterSeen?: string;
   contentsRef?: string | undefined;
 }
 
@@ -49,7 +49,6 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       seen.pullsState = params.state;
       return { data: opts.pulls ?? [] };
     }),
-    listCommits: tag('prCommits', async () => ({ data: opts.prCommits ?? [] })),
   };
   const issues = {
     addLabels: async (params: { issue_number: number; labels: string[] }) => {
@@ -58,8 +57,9 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
     },
   };
   const checks = {
-    listForRef: async (params: { ref: string; check_name: string }) => {
+    listForRef: async (params: { ref: string; check_name: string; filter: string }) => {
       seen.checkNameSeen = params.check_name;
+      seen.checkFilterSeen = params.filter;
       const runs = opts.checkRunsByRef?.[params.ref] ?? [];
       return { data: { total_count: runs.length, check_runs: runs } };
     },
@@ -201,19 +201,6 @@ describe('findAgentPrs', () => {
   });
 });
 
-// --- attemptCount ------------------------------------------------------------
-
-describe('attemptCount', () => {
-  it('counts PR commits', async () => {
-    const { client } = makeClient({
-      prCommits: [commit('a', '', '', null, ''), commit('b', '', '', null, '')],
-    });
-
-    const n = await client.attemptCount('o', 'r', 7);
-    expect(n).toBe(2);
-  });
-});
-
 // --- agentCheck --------------------------------------------------------------
 
 describe('agentCheck', () => {
@@ -234,6 +221,7 @@ describe('agentCheck', () => {
     expect(res.outputText).toBe('all checks passed');
     expect(res.completedAt?.toISOString()).toBe('2026-06-19T11:00:00.000Z');
     expect(seen.checkNameSeen).toBe('agent-lint-verify');
+    expect(seen.checkFilterSeen).toBe('latest'); // re-run-safe: most recent run per check
   });
 
   it('prefers text over summary', async () => {

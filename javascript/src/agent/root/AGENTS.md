@@ -4,7 +4,7 @@ The dispatcher kicked off for every ingest. Build-agent pattern:
 
 ```mermaid
 flowchart TD
-    Build["buildRootDispatcher(Deps)"] -->|"summaryAgent set"| RegC["register CronDaily/Weekly"]
+    Build["buildRootDispatcher(Deps)"] -->|"summaryDaily/summaryWeekly set"| RegC["register CronDaily/Weekly"]
     Build -->|"lintKickoff/coverageKickoff/ciResume set"| RegL["register Lint / Coverage / CI"]
     RegC --> D["Dispatcher{handlers, log}"]
     RegL --> D
@@ -19,9 +19,11 @@ flowchart TD
 
 - `root.ts` — `Dispatcher`: routes an `ingest.Envelope` to a `Handler` by `Kind`.
   Unregistered kinds are logged and ignored (so a not-yet-wired ingress is a no-op).
-- `agentsSetup.ts` — `buildRootDispatcher(Deps)` registers the available workflows: cron
-  kinds → the summary workflow runner; `Lint`/`Coverage` → the fix engines' kickoff; `CI`
-  → resume (handed to every fix engine, each a no-op unless its check matches).
+- `agentsSetup.ts` — `buildRootDispatcher(Deps)` registers the available workflows: the
+  daily/weekly cron kinds → distinct summary workflow runners (different commit windows and
+  titles, so the Monday cron posts a real weekly digest, not a copy of the daily one);
+  `Lint`/`Coverage` → the fix engines' kickoff; `CI` → resume (handed to every fix engine,
+  each a no-op unless its check matches).
 
 Keeping a single entry point is the point of "root": new ingress sources and smarter
 routing (e.g. LLM-based) slot in here without restructuring. Today it is a deterministic

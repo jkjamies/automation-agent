@@ -15,8 +15,6 @@ describe('config', () => {
     expect(c.notifyProvider).toBe(NotifyProvider.Slack);
     expect(c.maxIterations).toBe(3);
     expect(c.ciTimeoutMs).toBe(90 * 60 * 1000);
-    expect(c.agentPrLabel).toBe('automation-agent');
-    expect(c.agentCheckName).toBe('agent-lint-verify');
   });
 
   it('parses the repos list', () => {

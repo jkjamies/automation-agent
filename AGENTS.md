@@ -5,18 +5,19 @@ The **Go** implementation in [`go/`](go/) is the canonical reference; sibling po
 live in their own top-level folders. Read [`docs/architecture.md`](docs/architecture.md)
 first — it is the authoritative, language-neutral design.
 
-## Language parity (Go · Kotlin · Python)
+## Language parity (Go · Kotlin · Python · TypeScript)
 
-This service is maintained as parallel ports that **must stay 1:1 in functionality**:
+This service is maintained as parallel ports that **must all stay 1:1 in functionality**:
 
 | Language | Location | ADK | Status |
 |---|---|---|---|
 | Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
 | Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | in progress — see [`kotlin/PORTING.md`](kotlin/PORTING.md) |
 | Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green |
+| TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | functional 1:1 port — `make ci` green |
 
 Each language uses its own native ADK; parity is **functional, not version-matched**
-(adk-go is v1.x, adk-kotlin is 0.2.x).
+(adk-go is v1.x, adk-kotlin is 0.2.x, adk-js is v1.x).
 
 **The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 

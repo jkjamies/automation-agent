@@ -49,11 +49,21 @@ describe('Dispatcher', () => {
 });
 
 describe('buildRootDispatcher', () => {
-  it('registers and drives the summary handler through a real runner', async () => {
-    const d = buildRootDispatcher({ summaryAgent: new TrivialAgent({ name: 'trivial' }) });
+  it('registers and drives the daily and weekly summary handlers through real runners', async () => {
+    const d = buildRootDispatcher({
+      summaryDaily: new TrivialAgent({ name: 'daily' }),
+      summaryWeekly: new TrivialAgent({ name: 'weekly' }),
+    });
     expect(d.handles(Kind.CronDaily)).toBe(true);
     expect(d.handles(Kind.CronWeekly)).toBe(true);
     await expect(d.dispatch(env(Kind.CronDaily))).resolves.toBeUndefined();
+    await expect(d.dispatch(env(Kind.CronWeekly))).resolves.toBeUndefined();
+  });
+
+  it('registers only the daily cron when no weekly agent is given', () => {
+    const d = buildRootDispatcher({ summaryDaily: new TrivialAgent({ name: 'daily' }) });
+    expect(d.handles(Kind.CronDaily)).toBe(true);
+    expect(d.handles(Kind.CronWeekly)).toBe(false);
   });
 
   it('registers the fix handlers', async () => {
@@ -69,8 +79,8 @@ describe('buildRootDispatcher', () => {
     }
   });
 
-  it('registers no cron handlers without a summary agent', () => {
-    const d = buildRootDispatcher({ summaryAgent: null });
+  it('registers no cron handlers without summary agents', () => {
+    const d = buildRootDispatcher({ summaryDaily: null, summaryWeekly: null });
     expect(d.handles(Kind.CronDaily)).toBe(false);
     expect(d.handles(Kind.CronWeekly)).toBe(false);
   });
