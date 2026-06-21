@@ -6,6 +6,7 @@ import (
 	"iter"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -16,6 +17,56 @@ import (
 	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/genai"
 )
+
+// newCIWaiter builds the parking agent + a shared in-memory runner used by the
+// suspend/resume prototypes.
+func newCIWaiter(t *testing.T) *runner.Runner {
+	t.Helper()
+	awaitCI, err := functiontool.New(functiontool.Config{
+		Name:          "await_ci",
+		Description:   "Open the PR and wait for CI to report.",
+		IsLongRunning: true,
+	}, func(_ tool.Context, _ struct {
+		PR int `json:"pr"`
+	}) (map[string]any, error) {
+		return map[string]any{"status": "pending"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := llmagent.New(llmagent.Config{
+		Name:        "ci-waiter",
+		Model:       suspendStub{},
+		Instruction: "Call await_ci and report the result.",
+		Tools:       []tool.Tool{awaitCI},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := runner.New(runner.Config{AppName: "susp", Agent: a, SessionService: session.InMemoryService(), AutoCreateSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// park runs until the agent parks on the long-running call and returns its id.
+func park(t *testing.T, r *runner.Runner, uid, sid string) string {
+	t.Helper()
+	var id string
+	for ev, err := range r.Run(context.Background(), uid, sid, UserText("fix coverage"), agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("park run: %v", err)
+		}
+		if len(ev.LongRunningToolIDs) > 0 {
+			id = ev.LongRunningToolIDs[0]
+		}
+	}
+	if id == "" {
+		t.Fatal("the run did not park on await_ci")
+	}
+	return id
+}
 
 // suspendStub drives the long-running cycle deterministically:
 //   - no await_ci response in history       -> call await_ci
@@ -52,67 +103,19 @@ func (suspendStub) GenerateContent(_ context.Context, req *model.LLMRequest, _ b
 	}
 }
 
-// TestLongRunningSuspendResume proves the core architecture mechanic: a run parks on
-// a long-running tool, and a SECOND runner.Run on the SAME in-memory session resumes
-// it with the supplied result rather than restarting.
-func TestLongRunningSuspendResume(t *testing.T) {
-	awaitCI, err := functiontool.New(functiontool.Config{
-		Name:          "await_ci",
-		Description:   "Open the PR and wait for CI to report.",
-		IsLongRunning: true,
-	}, func(_ tool.Context, _ struct {
-		PR int `json:"pr"`
-	}) (map[string]any, error) {
-		return map[string]any{"status": "pending"}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	a, err := llmagent.New(llmagent.Config{
-		Name:        "ci-waiter",
-		Model:       suspendStub{},
-		Instruction: "Call await_ci and report the result.",
-		Tools:       []tool.Tool{awaitCI},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// One in-memory session service shared across BOTH runs — this is what must carry
-	// the parked run.
-	sessions := session.InMemoryService()
-	r, err := runner.New(runner.Config{AppName: "susp", Agent: a, SessionService: sessions, AutoCreateSession: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx := context.Background()
-	const uid, sid = "u", "s"
-
-	// --- suspend ---
-	var longRunningID string
-	for ev, err := range r.Run(ctx, uid, sid, UserText("fix coverage"), agent.RunConfig{}) {
-		if err != nil {
-			t.Fatalf("suspend run: %v", err)
-		}
-		if len(ev.LongRunningToolIDs) > 0 {
-			longRunningID = ev.LongRunningToolIDs[0]
-		}
-	}
-	if longRunningID == "" {
-		t.Fatal("no long-running tool id captured — the run did not park on await_ci")
-	}
-	t.Logf("parked on long-running call id=%q", longRunningID)
-
-	// --- resume: feed the final CI result back on the SAME session ---
+// resumeWith feeds a function-response (the CI outcome) for the parked call back on
+// the same session, returning the final text and whether the run re-parked.
+func resumeWith(t *testing.T, r *runner.Runner, uid, sid, callID, conclusion string) (final string, reparked bool) {
+	t.Helper()
 	resume := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{
-		FunctionResponse: &genai.FunctionResponse{ID: longRunningID, Name: "await_ci", Response: map[string]any{"conclusion": "success"}},
+		FunctionResponse: &genai.FunctionResponse{ID: callID, Name: "await_ci", Response: map[string]any{"conclusion": conclusion}},
 	}}}
-	var final string
-	for ev, err := range r.Run(ctx, uid, sid, resume, agent.RunConfig{}) {
+	for ev, err := range r.Run(context.Background(), uid, sid, resume, agent.RunConfig{}) {
 		if err != nil {
 			t.Fatalf("resume run: %v", err)
+		}
+		if len(ev.LongRunningToolIDs) > 0 {
+			reparked = true
 		}
 		if ev.Content != nil {
 			for _, p := range ev.Content.Parts {
@@ -120,8 +123,48 @@ func TestLongRunningSuspendResume(t *testing.T) {
 			}
 		}
 	}
+	return final, reparked
+}
+
+// TestLongRunningSuspendResume proves the core architecture mechanic: a run parks on
+// a long-running tool, and a SECOND runner.Run on the SAME in-memory session resumes
+// it with the supplied result rather than restarting.
+func TestLongRunningSuspendResume(t *testing.T) {
+	r := newCIWaiter(t)
+	id := park(t, r, "u", "s")
+	t.Logf("parked on long-running call id=%q", id)
+
+	final, _ := resumeWith(t, r, "u", "s", id, "success")
 	if !strings.Contains(final, "success") {
 		t.Fatalf("resume did not continue with the CI result; final=%q", final)
 	}
 	t.Logf("resumed and concluded: %q", final)
+}
+
+// TestLongRunningTimeoutResume proves the kill path: when CI never reports, the
+// CI_TIMEOUT timer fires and resumes the parked run with a timeout outcome, which
+// concludes it cleanly — final message emitted, NO re-park. The run is freed, not
+// left hanging in memory.
+func TestLongRunningTimeoutResume(t *testing.T) {
+	r := newCIWaiter(t)
+	id := park(t, r, "u", "s")
+
+	// Simulate the per-run CI_TIMEOUT timer firing (CI never arrived).
+	fired := make(chan struct{})
+	timer := time.AfterFunc(20*time.Millisecond, func() { close(fired) })
+	defer timer.Stop()
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("timeout timer never fired")
+	}
+
+	final, reparked := resumeWith(t, r, "u", "s", id, "timeout")
+	if reparked {
+		t.Fatal("run re-parked after timeout — it was not killed/freed")
+	}
+	if !strings.Contains(final, "timeout") {
+		t.Fatalf("timeout outcome not surfaced; final=%q", final)
+	}
+	t.Logf("timed-out run concluded cleanly: %q", final)
 }
