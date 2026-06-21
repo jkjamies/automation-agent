@@ -22,8 +22,8 @@ flowchart TD
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
 - `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama Go
   client (`github.com/ollama/ollama/api`). Converts genai content ⇄ Ollama chat
-  messages and aggregates streaming chunks. adk-go has no built-in Ollama model
-  (that exists only in Python via LiteLLM), so this adapter is the Go path.
+  messages and aggregates streaming chunks. adk-go has no built-in Ollama model,
+  so this adapter provides one.
 - `gemini.go` — the Gemini-backed `model.LLM` for the cloud deployment.
 - `prompt.go` — `Prompts`, a markdown loader over an `fs.FS` (each agent embeds its
   own `prompts/` dir).

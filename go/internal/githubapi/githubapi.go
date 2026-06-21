@@ -131,26 +131,6 @@ func (c *Client) FindAgentPRs(ctx context.Context, owner, repo, label string) ([
 	return out, nil
 }
 
-// AttemptCount returns the number of commits on a PR. With the invariant that the
-// agent pushes exactly one commit per attempt, this equals the distinct
-// agent-pushed head SHAs — re-run-safe, since a manual check re-run adds no commit.
-func (c *Client) AttemptCount(ctx context.Context, owner, repo string, number int) (int, error) {
-	opts := &github.ListOptions{PerPage: 100}
-	n := 0
-	for {
-		commits, resp, err := c.gh.PullRequests.ListCommits(ctx, owner, repo, number, opts)
-		if err != nil {
-			return 0, fmt.Errorf("list PR commits %s/%s#%d: %w", owner, repo, number, err)
-		}
-		n += len(commits)
-		if resp == nil || resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-	return n, nil
-}
-
 // AgentCheck returns the named check's state for ref, or {Found:false} if absent.
 func (c *Client) AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (CheckResult, error) {
 	res, _, err := c.gh.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, &github.ListCheckRunsOptions{

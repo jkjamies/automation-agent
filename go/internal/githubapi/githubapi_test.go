@@ -93,22 +93,6 @@ func TestFindAgentPRs(t *testing.T) {
 	}
 }
 
-func TestAttemptCount(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /repos/o/r/pulls/7/commits", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[{"sha":"a"},{"sha":"b"}]`))
-	})
-	c := testClient(t, mux)
-
-	n, err := c.AttemptCount(context.Background(), "o", "r", 7)
-	if err != nil {
-		t.Fatalf("AttemptCount: %v", err)
-	}
-	if n != 2 {
-		t.Errorf("attempts = %d, want 2", n)
-	}
-}
-
 func TestGetFileContent(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("package foo\n"))
 	mux := http.NewServeMux()

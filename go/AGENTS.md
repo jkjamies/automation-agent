@@ -1,33 +1,8 @@
-# automation-agent
+# automation-agent (Go / ADK)
 
-This repository is an automation service built on the Agent Development Kit (ADK).
-The **Go** implementation in [`go/`](go/) is the canonical reference; sibling ports
-live in their own top-level folders. Read [`docs/architecture.md`](docs/architecture.md)
-first — it is the authoritative, language-neutral design.
-
-## Language parity (Go · Kotlin · Python)
-
-This service is maintained as parallel ports that **must stay 1:1 in functionality**:
-
-| Language | Location | ADK | Status |
-|---|---|---|---|
-| Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
-| Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | in progress — see [`kotlin/PORTING.md`](kotlin/PORTING.md) |
-| Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green |
-
-Each language uses its own native ADK; parity is **functional, not version-matched**
-(adk-go is v1.x, adk-kotlin is 0.2.x).
-
-**The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
-
-- Go is the source of truth. A behavior change lands in Go first, then is mirrored
-  into every existing port **in the same logical change** — ports never silently drift.
-- Parity is about *observable behavior and structure*, not syntax: same packages/dirs,
-  same public surface, same config keys, env vars, defaults, routes, and payloads.
-- Each port keeps the same conventions (per-directory `AGENTS.md`, build-agent pattern,
-  prompts-as-markdown, ≥80% coverage, no asserting on LLM output).
-- When you touch any port, check the others and update them or record the gap in that
-  port's `PORTING.md`.
+This module is an automation service built on the Agent Development Kit (ADK)
+(`google.golang.org/adk` v1.4.0). Read [`../docs/architecture.md`](../docs/architecture.md)
+first — it is the authoritative design.
 
 ## System flow
 
@@ -75,7 +50,7 @@ agents but never imports them.
 - **Every directory has an `AGENTS.md`.** Agent directories use one shared doc
   covering both `agents_setup.go` and `<name>.go`.
 - **Build-agent pattern:** `agents_setup.go` is pure wiring (`Build<Name>Agent`);
-  `<name>.go` holds testable logic. See `.agents/standards/agent-build-pattern.md`.
+  `<name>.go` holds testable logic. See `../.agents/standards/agent-build-pattern.md`.
 - **Import boundaries:** tooling must not import `internal/agent/...`; provider
   SDKs (Ollama/Gemini) only in `internal/agent/setup`; nothing imports `cmd`.
 - **Prompts are markdown** under each agent's `prompts/` dir, loaded via `embed.FS`.
@@ -84,6 +59,6 @@ agents but never imports them.
 
 ## Working here
 
-- `make help` lists targets. `make ci` is the full local gate.
-- New features/changes get a spec in `specs/` from a `.agents/templates` template
+- `make help` lists targets. `make ci` is the full local gate (run from this `go/` dir).
+- New features/changes get a spec in `../specs/` from a `../.agents/templates` template
   (`make spec name=<slug> kind=<add|remove|change|migrate>`). `specs/` is gitignored.

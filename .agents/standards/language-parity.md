@@ -7,7 +7,7 @@
 
 | Language | Location | ADK | Role |
 |---|---|---|---|
-| Go | repo root (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | **reference (source of truth)** |
+| Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | **reference (source of truth)** |
 | Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | port |
 | Python | `python/` | `google-adk` (PyPI) | port |
 

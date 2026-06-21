@@ -49,9 +49,9 @@ ollama-check: ## Verify the local Ollama server is reachable
 spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove|change|migrate>
 	@test -n "$(name)" || { echo "usage: make spec name=<slug> kind=<add|remove|change|migrate>"; exit 1; }
 	@kind=$${kind:-change}; \
-	src=.agents/templates/$$kind.spec.md; \
+	src=../.agents/templates/$$kind.spec.md; \
 	test -f $$src || { echo "no template: $$src"; exit 1; }; \
-	dst=specs/$$(date +%Y%m%d)-$(name).md; \
+	dst=../specs/$$(date +%Y%m%d)-$(name).md; \
 	cp $$src $$dst && echo "created $$dst"
 
 docker: ## Build the production container image (cmd/agent only)

@@ -23,7 +23,7 @@ cloud deployment.
 
 ## Ports (Go · Kotlin · Python)
 
-The Go implementation at the repo root is the canonical reference. It is mirrored by
+The Go implementation in [`go/`](go/) is the canonical reference. It is mirrored by
 sibling ports that must stay **1:1 in functionality** — same structure, public surface,
 config, and external contracts (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
@@ -31,7 +31,7 @@ config, and external contracts (see [`.agents/standards/language-parity.md`](.ag
   (`com.google.adk:google-adk-kotlin-core:0.2.0`). Port in progress; see
   [`kotlin/PORTING.md`](kotlin/PORTING.md).
 - **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
-  port (`make ci` green); see [`python/PORTING.md`](python/PORTING.md).
+  port (`make ci` green).
 
 Each port uses its language's **native ADK**, so parity is functional, not version-matched.
 
