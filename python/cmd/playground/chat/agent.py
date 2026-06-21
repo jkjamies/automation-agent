@@ -1,9 +1,8 @@
 """A simple chat agent over the configured model, for local development only.
 
-Launched via ``make playground`` (``adk web cmd/playground``). This is the Python twin
-of ``cmd/playground/main.go`` — development only, never part of a deployed artifact.
-Swap in the summary / lintfixer / covfixer agents here to drive the real workflows
-interactively.
+Launched via ``make playground`` (``adk web cmd/playground``). Development only, never
+part of a deployed artifact. Swap in the summary / lintfixer / covfixer agents here to
+drive the real workflows interactively.
 """
 
 from __future__ import annotations

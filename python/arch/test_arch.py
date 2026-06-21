@@ -1,4 +1,4 @@
-"""Import-boundary conformance tests (port of ``ARCH/arch_test.go``).
+"""Import-boundary conformance tests.
 
 Enforced rules:
   * deterministic tooling must never import agent packages;

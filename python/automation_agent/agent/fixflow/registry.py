@@ -1,14 +1,14 @@
 """In-memory parked-run registry — the fix-loop spine.
 
-Port of ``fixflow/registry.go``. Tracks suspended fix runs keyed by PR. Exactly one of
+Tracks suspended fix runs keyed by PR. Exactly one of
 {CI webhook, timeout timer} ever resolves a given run: :meth:`RunRegistry.resolve`
 removes the entry, so late/duplicate deliveries find nothing and no-op. The registry IS
 the in-flight record — no DB, no PR scan. Parked runs live only in memory.
 
-Go used ``time.AfterFunc`` + a mutex; here the whole driver runs in one asyncio event
-loop, so the timer is an ``asyncio`` ``call_later`` handle and ``resolve`` is naturally
-atomic (no preemption between dict lookup and delete). The TimerHandle is stored on the
-ParkedRun so resolve can cancel it.
+The whole driver runs in one asyncio event loop, so the timer is an ``asyncio``
+``call_later`` handle and ``resolve`` is naturally atomic (no preemption between dict
+lookup and delete). The TimerHandle is stored on the ParkedRun so resolve can cancel
+it.
 """
 
 from __future__ import annotations

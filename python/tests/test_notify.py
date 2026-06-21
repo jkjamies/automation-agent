@@ -1,4 +1,4 @@
-"""Port of internal/notify/notify_test.go using respx to capture posted bodies."""
+"""Tests for notify using respx to capture posted bodies."""
 
 from __future__ import annotations
 

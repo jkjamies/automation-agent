@@ -2,11 +2,10 @@
 reading recent commits, opening/labeling/finding agent PRs, counting attempts, and
 reading the agent verify check.
 
-Port of ``internal/githubapi/githubapi.go``. Deterministic tooling — no agent
-imports (an arch test enforces this).
+Deterministic tooling — no agent imports (an arch test enforces this).
 
-Go's ``(T, error)`` becomes: return the value and RAISE on error. The
-``context.Context`` parameter is dropped (PyGithub is synchronous).
+Functions return a value and RAISE on error. PyGithub is synchronous, so there
+is no request-context parameter to plumb through.
 """
 
 from __future__ import annotations
@@ -157,8 +156,7 @@ class Client:
             r = self._gh.get_repo(f"{owner}/{repo}")
             commit = r.get_commit(ref)
             runs = commit.get_check_runs(check_name=check_name)
-            # Guard on both the count and the actual page (mirrors Go's
-            # `total == 0 || len(check_runs) == 0`): a positive total with an
+            # Guard on both the count and the actual page: a positive total with an
             # empty first page would otherwise IndexError on runs[0].
             if runs.totalCount == 0:
                 return CheckResult(found=False)

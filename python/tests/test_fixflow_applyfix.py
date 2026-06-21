@@ -1,4 +1,4 @@
-"""Port of fixflow applyfix_test.go: a local seed git repo as the clone_url, a fake
+"""Tests for fixflow apply-fix: a local seed git repo as the clone_url, a fake
 GitHub capturing the created PR + labels, and the branch/commit/push/ensure_pr behavior
 (plus existing-PR reuse and error paths).
 """

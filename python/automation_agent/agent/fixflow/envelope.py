@@ -1,10 +1,9 @@
 """The kickoff envelope a CI job posts.
 
-Port of ``fixflow/envelope.go``. ``repo``/``base`` identify where to work (trusted);
-``report`` is arbitrary tool output (lint report, coverage report, …) the triage LLM
-reasons over. The report is kept as raw JSON text so :meth:`Kickoff.report_text`
-mirrors Go's ``json.RawMessage`` semantics: a JSON string is unquoted, any other JSON
-value is passed through verbatim.
+``repo``/``base`` identify where to work (trusted); ``report`` is arbitrary tool
+output (lint report, coverage report, …) the triage LLM reasons over. The report is
+kept as raw JSON text so :meth:`Kickoff.report_text` has predictable semantics: a JSON
+string is unquoted, any other JSON value is passed through verbatim.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ def _split_repo(s: str) -> tuple[str, str, bool]:
 @dataclass
 class Kickoff:
     """The trusted envelope a CI job posts. ``report`` is the raw JSON text of the
-    report value (mirrors Go's ``json.RawMessage``)."""
+    report value."""
 
     repo: str
     report: str
@@ -73,7 +72,7 @@ def parse_kickoff(b: bytes) -> Kickoff:
     base = raw.get("base")
     base = base if isinstance(base, str) and base != "" else "main"
 
-    # Preserve the report's raw JSON text so report_text() can mirror RawMessage.
+    # Preserve the report's raw JSON text so report_text() can return it verbatim.
     if "report" in raw and raw["report"] is not None:
         report = json.dumps(raw["report"], separators=(",", ":"))
     else:

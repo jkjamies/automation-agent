@@ -1,4 +1,4 @@
-"""Public API for the githubapi package (port of ``internal/githubapi``)."""
+"""Public API for the githubapi package."""
 
 from __future__ import annotations
 

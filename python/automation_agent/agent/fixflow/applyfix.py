@@ -1,6 +1,6 @@
 """The apply mechanics: checkout, write edits, commit, push, ensure a labeled PR.
 
-Port of ``fixflow/applyfix.go``. :func:`open_repo` clones into a fresh temp dir and
+:func:`open_repo` clones into a fresh temp dir and
 checks out the agent branch (created from base on kickoff, the existing remote branch
 on retry). :func:`commit` writes the edits path-safely, commits, pushes, and ensures a
 labeled PR exists. :func:`apply_fix` does both in one step (a test convenience).

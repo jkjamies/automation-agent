@@ -75,6 +75,5 @@ sequenceDiagram
   HMAC-verified via `X-Hub-Signature-256` when a secret is configured.
 
 FastAPI route methods give 405s for free. Each body is read with a 5 MiB cap: oversize
-bodies are **truncated** to the cap and still accepted (mirrors Go's
-`io.LimitReader`), not rejected. Deterministic tooling — no agent imports. Fully tested
-with the FastAPI `TestClient`.
+bodies are **truncated** to the cap and still accepted, not rejected. Deterministic
+tooling — no agent imports. Fully tested with the FastAPI `TestClient`.

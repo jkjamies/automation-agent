@@ -1,8 +1,8 @@
 """Path-safe checkout file access.
 
-Port of ``fixflow/files.go``: :func:`_safe_join` REJECTS (not clamps) absolute paths
-and any path escaping the checkout root via ``..``. Both reads and writes route through
-it, so LLM-controlled paths cannot touch host files.
+:func:`_safe_join` REJECTS (not clamps) absolute paths and any path escaping the
+checkout root via ``..``. Both reads and writes route through it, so LLM-controlled
+paths cannot touch host files.
 """
 
 from __future__ import annotations

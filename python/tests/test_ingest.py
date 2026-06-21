@@ -1,4 +1,4 @@
-"""Port of internal/ingest/envelope_test.py."""
+"""Tests for ingest envelope parsing."""
 
 from __future__ import annotations
 

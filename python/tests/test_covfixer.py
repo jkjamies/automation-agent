@@ -1,8 +1,8 @@
-"""Port of covfixer coverage_test.go: triage, explore-plan parse, and the two-phase
+"""Tests for covfixer coverage: triage, explore-plan parse, and the two-phase
 analyze (explore -> execute), plus engine identity.
 
-The ``ScriptedLlm`` routes by system instruction (triage / explore-plan / execute),
-mirroring Go's scriptedLLM. We assert on structure (paths, plan keys), never on
+The ``ScriptedLlm`` routes by system instruction (triage / explore-plan / execute).
+We assert on structure (paths, plan keys), never on
 LLM-authored content.
 """
 

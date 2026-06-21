@@ -1,6 +1,6 @@
 """Triage: normalize an arbitrary linter report into per-file work (LLM-backed).
 
-Port of ``lintfixer/triage.go``. Keeps the lint-fixer agnostic to the reporting format.
+Keeps the lint-fixer agnostic to the reporting format.
 """
 
 from __future__ import annotations

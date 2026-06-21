@@ -1,4 +1,4 @@
-"""Builds the summary workflow agent (port of ``summary/agents_setup.go``).
+"""Builds the summary workflow agent.
 
     Sequential[ Parallel[fetch×N] -> summarize(LLM) -> notify ]
 

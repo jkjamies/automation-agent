@@ -1,6 +1,6 @@
-"""Port of internal/gitrepo/gitrepo_test.go.
+"""Tests for gitrepo.
 
-Mirrors the Go test: uses a LOCAL seed repo (no network). A temp bare/non-bare
+Uses a LOCAL seed repo (no network). A temp bare/non-bare
 "remote" is seeded with one commit, then cloned, and clone/checkout/commit_all/
 push/head/checkout_remote are exercised against it.
 """
@@ -24,7 +24,7 @@ def seed_remote(tmp_path) -> str:
     repo.index.add(["README.md"])
     repo.index.commit("init")
     # Push targets a checked-out branch; allow it so Push() succeeds against a
-    # non-bare remote (mirrors go-git pushing to a local PlainInit remote).
+    # non-bare remote.
     repo.git.config("receive.denyCurrentBranch", "ignore")
     return str(d)
 

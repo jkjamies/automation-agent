@@ -1,7 +1,7 @@
-"""Port of internal/agent/setup/longrun_test.go (sequencer + LongRunDriver).
+"""Tests for setup long-run (sequencer + LongRunDriver).
 
 Python ADK propagates a raised tool exception instead of converting it to an
-``{"error": msg}`` response (as Go's functiontool does), so the ``apply`` tool here
+``{"error": msg}`` response, so the ``apply`` tool here
 returns ``{"error": ...}`` itself to exercise the sequencer's error branch — the same
 convention fixflow's real ``apply_fix`` tool uses.
 """

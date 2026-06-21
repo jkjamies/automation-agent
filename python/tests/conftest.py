@@ -1,6 +1,6 @@
 """Shared test fixtures.
 
-A ``FakeLlm`` (the BaseLlm analogue of Go's ``fakeLLM``) yields scripted text and
+A ``FakeLlm`` (a scripted BaseLlm) yields scripted text and
 records the requests it received, so we can test agent wiring and deterministic logic
 without a real model. We never assert on real LLM output content.
 """

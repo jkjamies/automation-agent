@@ -1,4 +1,4 @@
-"""Tests for the summary workflow (mirror of ``summary_test.go``)."""
+"""Tests for the summary workflow."""
 
 from __future__ import annotations
 

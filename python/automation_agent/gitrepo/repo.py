@@ -1,11 +1,11 @@
 """Working-tree git operations the lint-fixer needs: clone, branch, stage-all,
 commit, push — via GitPython.
 
-Port of ``internal/gitrepo/gitrepo.go``. Deterministic tooling — no agent imports.
+Deterministic tooling — no agent imports.
 
-Go's ``(T, error)`` becomes: return the value and RAISE on error. Go's sentinel
-``ErrNoChanges`` becomes :class:`NoChangesError`. The ``context.Context``
-parameter is dropped (GitPython is synchronous).
+Functions return a value and RAISE on error. A clean working tree raises the sentinel
+:class:`NoChangesError`. GitPython is synchronous, so there is no request-context
+parameter to plumb through.
 """
 
 from __future__ import annotations
@@ -29,14 +29,13 @@ class Author:
 class NoChangesError(Exception):
     """Raised by :meth:`Repo.commit_all` when the working tree is clean (the edits
     produced no actual change), so callers can distinguish "nothing to do" from a
-    real failure. Analogue of Go's ``ErrNoChanges``.
+    real failure.
     """
 
 
 def _auth_url(url: str, token: str) -> str:
-    """Embed ``x-access-token:<token>@`` into https URLs to mirror Go's
-    ``BasicAuth{x-access-token, token}``. Non-https (local path/file) remotes used
-    in tests are returned unchanged.
+    """Embed ``x-access-token:<token>@`` into https URLs for basic auth. Non-https
+    (local path/file) remotes used in tests are returned unchanged.
     """
     if not token:
         return url
@@ -116,9 +115,8 @@ class Repo:
         if not self._repo.is_dirty(index=True, working_tree=True, untracked_files=True):
             raise NoChangesError("gitrepo: no changes to commit")
         actor = Actor(author.name, author.email)
-        # Go signs the commit with author.When = now(); GitPython defaults both the
-        # author and commit timestamps to the current time when none is supplied,
-        # which matches the Go default (now = time.Now).
+        # GitPython defaults both the author and commit timestamps to the current
+        # time when none is supplied.
         try:
             commit = self._repo.index.commit(msg, author=actor)
         except Exception as exc:  # noqa: BLE001

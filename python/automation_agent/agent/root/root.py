@@ -1,4 +1,4 @@
-"""The dispatcher kicked off for every ingest (port of ``internal/agent/root``).
+"""The dispatcher kicked off for every ingest.
 
 It routes a normalized :class:`~automation_agent.ingest.Envelope` to the right workflow
 by :class:`~automation_agent.ingest.Kind`. Keeping a single entry point is why "root"
@@ -13,8 +13,8 @@ from collections.abc import Awaitable, Callable
 
 from automation_agent.ingest import Envelope, Kind
 
-# Handler runs the work for one ingest envelope (Go's ``Handler`` minus ctx; errors
-# raise instead of being returned).
+# Handler runs the work for one ingest envelope; errors raise instead of being
+# returned.
 Handler = Callable[[Envelope], Awaitable[None]]
 
 

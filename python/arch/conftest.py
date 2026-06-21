@@ -1,9 +1,8 @@
 """Shared helpers for the architecture-conformance tests, exposed as the ``archlib``
 fixture (so the tests need no package-relative imports under importlib mode).
 
-These mirror ``ARCH/arch_test.go`` and ``ARCH/docs_test.go`` from the Go variant:
-they parse every Python module's imports with the ``ast`` module (the analogue of
-Go's ``go/parser`` ImportsOnly walk) and assert the same import boundaries.
+They parse every Python module's imports with the ``ast`` module and assert the
+project's import boundaries.
 """
 
 from __future__ import annotations

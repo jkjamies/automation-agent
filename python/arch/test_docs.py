@@ -1,4 +1,4 @@
-"""AGENTS.md-presence conformance test (port of ``ARCH/docs_test.go``).
+"""AGENTS.md-presence conformance test.
 
 Every meaningful directory must carry an ``AGENTS.md``. ``specs/`` and hidden
 dirs (except ``.agents``) are exempt, as are an agent's content subdirs

@@ -1,4 +1,4 @@
-"""Port of fixflow units_test.go + tools_test.go: pure helpers, path-safety, envelope,
+"""Tests for fixflow units and tools: pure helpers, path-safety, envelope,
 and the repo tools.
 """
 

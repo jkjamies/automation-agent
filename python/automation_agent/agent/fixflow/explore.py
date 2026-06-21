@@ -1,6 +1,6 @@
 """A single tool-using agent that navigates the checkout to ground a plan.
 
-Port of ``fixflow/explore.go``. The model decides what to read (via read_file/list_dir);
+The model decides what to read (via read_file/list_dir);
 no Python code pre-selects files. Workflows use this to ground a plan (e.g. where tests
 belong) in the repo's actual conventions rather than a hardcoded rule.
 """

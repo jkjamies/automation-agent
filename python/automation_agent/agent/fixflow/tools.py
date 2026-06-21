@@ -1,6 +1,6 @@
 """Read-only repository tools for a tool-using agent.
 
-Port of ``fixflow/tools.go``: :func:`repo_tools` returns ``read_file`` and ``list_dir``
+:func:`repo_tools` returns ``read_file`` and ``list_dir``
 rooted at the checkout, so an agent can examine the real repository — its standards
 docs, existing tests, and layout — and ground decisions in what the repo actually does.
 Both tools are path-safe via :func:`_safe_join`.

@@ -1,11 +1,8 @@
 # tests
 
-The pytest unit-test suite. It **mirrors the Go `*_test.go` files one-to-one**: each
-Go `<pkg>_test.go` maps to `tests/test_<pkg>.py` (e.g. `config_test.go` ->
-`tests/test_config.py`, `engine_test.go` -> `tests/test_engine.py`,
-`applyfix_test.go` -> `tests/test_applyfix.py`). Keeping the mapping one-to-one is
-part of the parity contract — when a Go test changes, its Python twin changes in the
-same logical change.
+The pytest unit-test suite. One test module per package: `tests/test_<pkg>.py`
+covers `automation_agent/<pkg>` (e.g. `tests/test_config.py` covers `config`,
+`tests/test_engine.py` covers the fixflow engine).
 
 ## Tooling
 

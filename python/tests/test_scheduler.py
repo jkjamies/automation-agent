@@ -1,4 +1,4 @@
-"""Port of internal/scheduler/scheduler_test.go (no real-time cron waits)."""
+"""Tests for the scheduler (no real-time cron waits)."""
 
 from __future__ import annotations
 

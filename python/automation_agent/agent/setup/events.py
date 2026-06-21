@@ -1,7 +1,7 @@
 """Small genai/ADK content + event helpers used by code agents.
 
-These mirror the Go ``setup/events.go`` helpers. Code agents use :func:`text_event`
-to emit model-authored output and write workflow state in one shot.
+Code agents use :func:`text_event` to emit model-authored output and write workflow
+state in one shot.
 """
 
 from __future__ import annotations

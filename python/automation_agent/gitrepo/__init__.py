@@ -1,4 +1,4 @@
-"""Public API for the gitrepo package (port of ``internal/gitrepo``)."""
+"""Public API for the gitrepo package."""
 
 from __future__ import annotations
 

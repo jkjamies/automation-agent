@@ -1,7 +1,5 @@
 """Triage: normalize an arbitrary coverage report into source files with meaningful
 uncovered logic (LLM-backed).
-
-Port of ``covfixer/triage.go``.
 """
 
 from __future__ import annotations

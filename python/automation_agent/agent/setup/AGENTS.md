@@ -22,8 +22,7 @@ flowchart TD
 - `llm.py` — `build_llm(cfg)`: the provider switch returning a `BaseLlm`. Provider
   selection lives entirely here — Ollama is `LiteLlm(model="ollama_chat/<model>")`
   and the cloud path is Gemini. There are **no** separate `ollama.py`/`gemini.py`
-  adapter files; ADK's `LiteLlm` is the Ollama path (the Go variant hand-rolls an
-  Ollama adapter because adk-go has no built-in Ollama model).
+  adapter files; ADK's `LiteLlm` is the Ollama path.
 - `prompt.py` — `Prompts`, a markdown loader over package resources (each agent ships
   its own `prompts/` dir, read via `importlib.resources`).
 - `events.py` — small genai content helpers (`user_text`, `content_text`, `last_text`).

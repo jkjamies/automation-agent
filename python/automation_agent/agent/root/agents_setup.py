@@ -1,5 +1,4 @@
-"""Builds the root dispatcher and registers available workflows (port of
-``root/agents_setup.go``).
+"""Builds the root dispatcher and registers available workflows.
 
 Cron kinds → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume
 (all fix engines). Each handler is optional.

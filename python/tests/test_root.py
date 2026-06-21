@@ -1,4 +1,4 @@
-"""Tests for the root dispatcher (mirror of ``root_test.go``)."""
+"""Tests for the root dispatcher."""
 
 from __future__ import annotations
 

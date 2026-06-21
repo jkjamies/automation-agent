@@ -1,8 +1,7 @@
-"""Port of fixflow registry_test.go: atomic single-winner resolve, re-park, and the
+"""Tests for the fixflow registry: atomic single-winner resolve, re-park, and the
 asyncio timeout firing.
 
-Go used ``time.AfterFunc`` + a mutex and tested concurrent goroutines. Here the registry
-runs in a single asyncio event loop, so "atomicity" is the absence of preemption between
+The registry runs in a single asyncio event loop, so "atomicity" is the absence of preemption between
 the dict pop and the timer cancel — a second resolve in the same loop always finds
 nothing. The timeout is tested with a tiny ci_timeout and an ``await asyncio.sleep`` to
 let the loop's ``call_later`` fire.

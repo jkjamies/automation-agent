@@ -1,6 +1,6 @@
 """The lint-remediation configuration of the fixflow engine.
 
-Port of ``lintfixer/lint.go``. Supplies the triage step (normalize a linter report) and
+Supplies the triage step (normalize a linter report) and
 the analyze step (rewrite the affected source files), plus its branch/label/check
 identity. The loop itself lives in :mod:`automation_agent.agent.fixflow`.
 """

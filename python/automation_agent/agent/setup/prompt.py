@@ -2,8 +2,7 @@
 
 Each agent ships its own ``prompts/`` directory of markdown files and reads them
 through :class:`Prompts`, so prompts stay reviewable next to the agent that uses
-them. This mirrors Go's ``setup/prompt.go`` (which used ``embed.FS``); here we use
-``importlib.resources`` against the agent's package.
+them. Prompts are loaded with ``importlib.resources`` against the agent's package.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """Single-shot non-streaming text completion helper.
 
-Mirrors Go's ``setup/generate.go``. Lets callers outside ``setup`` use a model
-without importing genai directly.
+Lets callers outside ``setup`` use a model without importing genai directly.
 """
 
 from __future__ import annotations

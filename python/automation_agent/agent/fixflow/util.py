@@ -1,7 +1,7 @@
 """Text-recovery helpers for parsing model output.
 
-Port of ``fixflow/util.go``: pull a JSON array/object out of model output that may
-add prose or code fences, and strip surrounding markdown fences from generated code.
+Pull a JSON array/object out of model output that may add prose or code fences,
+and strip surrounding markdown fences from generated code.
 """
 
 from __future__ import annotations

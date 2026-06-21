@@ -5,9 +5,8 @@ local Ollama/Gemma path, Gemini for the cloud path) — enforced by the arch tes
 Agents depend only on the returned ``BaseLlm``, so switching providers is a config
 change, not a code change. See ``docs/architecture.md`` §4.
 
-Go used a hand-rolled Ollama ``model.LLM`` adapter because adk-go had no built-in
-Ollama model. ADK Python ships Ollama support via LiteLLM, so the idiomatic path is
-``LiteLlm(model="ollama_chat/<model>")`` — functionally identical.
+ADK Python ships Ollama support via LiteLLM, so the local path uses
+``LiteLlm(model="ollama_chat/<model>")``.
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ from google.adk.models.lite_llm import LiteLlm
 
 from automation_agent.config import Config, Provider
 
-# Match the Go Ollama adapter's deterministic generation settings: temperature 0
-# and a large context window to avoid silently truncating big source files.
+# Deterministic generation settings for the Ollama path: temperature 0 and a large
+# context window to avoid silently truncating big source files.
 _OLLAMA_TEMPERATURE = 0.0
 _OLLAMA_NUM_CTX = 32768
 

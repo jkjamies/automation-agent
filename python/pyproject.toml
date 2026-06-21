@@ -1,7 +1,7 @@
 [project]
 name = "automation-agent"
 version = "0.1.0"
-description = "Python/ADK 1:1 clone of the automation-agent Go service: ingests events, routes through a root dispatcher, and runs summary / lint-fixer / coverage-fixer workflows."
+description = "automation-agent on Python/ADK: ingests events, routes through a root dispatcher, and runs summary / lint-fixer / coverage-fixer workflows."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

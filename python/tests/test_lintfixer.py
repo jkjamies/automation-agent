@@ -1,4 +1,4 @@
-"""Port of lintfixer lint_test.go: triage parsing, analyze edits, and engine identity."""
+"""Tests for lintfixer: triage parsing, analyze edits, and engine identity."""
 
 from __future__ import annotations
 

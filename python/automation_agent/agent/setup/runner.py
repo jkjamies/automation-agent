@@ -1,8 +1,8 @@
 """In-memory runner helpers for driving workflow agents locally and in tests.
 
-Mirrors Go's ``setup/runner.go``. Go's synchronous ``iter.Seq2`` event loop becomes
-an ``async for`` over ADK's ``Runner.run_async``; Go's ``context.Context`` plumbing
-maps to Python async cancellation and is therefore dropped from these signatures.
+A synchronous event loop is expressed here as an ``async for`` over ADK's
+``Runner.run_async``; cancellation is handled by Python's async machinery, so there is
+no request-context parameter in these signatures.
 """
 
 from __future__ import annotations

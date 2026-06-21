@@ -26,8 +26,8 @@ Each agent directory uses **one** `AGENTS.md` and splits wiring from logic:
 - the logic file(s) — the testable behavior: code-agent run funcs, tool impls,
   callbacks, parsing.
 
-See `../../../.agents/standards/language-parity.md`. Agents depend on the deterministic tooling in
-`automation_agent/...` and on `setup`; they never import `cmd`.
+See `../../../.agents/standards/agent-build-pattern.md`. Agents depend on the deterministic
+tooling in `automation_agent/...` and on `setup`; they never import `cmd`.
 
 ## Models
 

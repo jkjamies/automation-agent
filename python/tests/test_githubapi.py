@@ -1,10 +1,9 @@
-"""Port of internal/githubapi/githubapi_test.go.
+"""Tests for githubapi.
 
-The Go test points a real go-github client at an httptest stub via BaseURL.
 PyGithub uses urllib3/requests, which respx (httpx-based) cannot intercept, so we
 instead:
 
-  * fully test the pure ``parse_check_run_event`` (mirrors the Go test), and
+  * fully test the pure ``parse_check_run_event``, and
   * monkeypatch ``client._gh`` with a PyGithub-shaped fake so the real logic paths
     (pagination/iteration, label filter, attempt count, check projection,
     not-found, file decode/directory) are exercised without network.
@@ -307,7 +306,7 @@ def test_method_wraps_errors() -> None:
         c.list_commits_since("o", "r", datetime.now(tz=UTC))
 
 
-# --- parse_check_run_event (pure, mirrors the Go test) -----------------------
+# --- parse_check_run_event (pure) --------------------------------------------
 
 
 def test_parse_check_run_event() -> None:

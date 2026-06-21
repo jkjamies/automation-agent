@@ -1,7 +1,7 @@
 """Generic ADK long-running suspend/resume plumbing.
 
-A faithful port of Go's ``setup/longrun.go``: a :class:`LongRunDriver` that runs an
-agent until it parks on a long-running tool call (or finishes), then resumes it with
+A :class:`LongRunDriver` that runs an agent until it parks on a long-running tool
+call (or finishes), then resumes it with
 the real result; and a :class:`Sequencer` model that deterministically emits a fixed
 Action -> Wait tool sequence so all retry/stop/timeout policy lives in the caller, not
 the model. Kept in ``setup`` because it touches genai (confined here by the arch tests).

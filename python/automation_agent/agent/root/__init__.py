@@ -1,4 +1,4 @@
-"""Public API for the root dispatcher package (port of ``internal/agent/root``)."""
+"""Public API for the root dispatcher package."""
 
 from __future__ import annotations
 

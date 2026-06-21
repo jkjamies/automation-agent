@@ -1,7 +1,7 @@
 """The test-coverage configuration of the fixflow engine.
 
-Port of ``covfixer/coverage.go``. Triages an agnostic coverage report into source files
-with meaningful uncovered logic, then generates language-aware tests for them. Its
+Triages an agnostic coverage report into source files with meaningful uncovered
+logic, then generates language-aware tests for them. Its
 prompts are entirely separate from the lint-fixer's; only the deterministic loop is
 shared (fixflow).
 """

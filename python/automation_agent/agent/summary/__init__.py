@@ -1,4 +1,4 @@
-"""Public API for the summary workflow package (port of ``internal/agent/summary``)."""
+"""Public API for the summary workflow package."""
 
 from __future__ import annotations
 

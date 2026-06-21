@@ -1,38 +1,8 @@
 # automation-agent (Python / ADK)
 
-> **Parity.** This is the **Python/ADK twin** of the Go service at the repo root.
-> Behaviour, config, endpoints, env vars and workflows must stay **one-to-one**
-> with the Go variant — no silent drift. The shared authoritative design is
-> [`docs/architecture.md`](../docs/architecture.md) and the parity contract is
-> [`language-parity.md`](../.agents/standards/language-parity.md). When you touch this port, check the Go
-> source of truth and mirror any behaviour change in the same logical change.
-
 This package is an automation service built on the Agent Development Kit (ADK).
-The **Go** implementation at the repo root is the canonical reference; this
-Python port mirrors it 1:1 in functionality. Read [`docs/architecture.md`](../docs/architecture.md)
-first — it is the authoritative, language-neutral design.
-
-## Language parity (Go · Kotlin · Python)
-
-This service is maintained as parallel ports that **must stay 1:1 in functionality**:
-
-| Language | Location | ADK | Status |
-|---|---|---|---|
-| Go | repo root (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
-| Kotlin | [`kotlin/`](../kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | in progress |
-| Python | `python/` (this dir) | `google-adk` (PyPI) | in progress |
-
-Each language uses its own native ADK; parity is **functional, not version-matched**.
-
-**The parity contract** (full rules: [`language-parity.md`](../.agents/standards/language-parity.md)):
-
-- Go is the source of truth. A behavior change lands in Go first, then is mirrored
-  into every existing port **in the same logical change** — ports never silently drift.
-- Parity is about *observable behavior and structure*, not syntax: same packages/dirs,
-  same public surface, same config keys, env vars, defaults, routes, and payloads.
-- Each port keeps the same conventions (per-directory `AGENTS.md`, build-agent pattern,
-  prompts-as-markdown, >=80% coverage, no asserting on LLM output).
-- When you touch any port, check the others and update them or record the gap.
+Read [`docs/architecture.md`](../docs/architecture.md) first — it is the
+authoritative design.
 
 ## System flow
 
@@ -79,7 +49,7 @@ fixflow engine with the lint-fixer). Deterministic, agent-free tooling lives und
 - **Every directory has an `AGENTS.md`.** Agent directories use one shared doc
   covering both `agents_setup.py` and the testable logic files.
 - **Build-agent pattern:** `agents_setup.py` is pure wiring (`build_<name>_agent`);
-  the logic files hold the testable behavior. See `../.agents/standards/language-parity.md`.
+  the logic files hold the testable behavior. See `../.agents/standards/agent-build-pattern.md`.
 - **Import boundaries:** tooling must not import `automation_agent.agent...`; provider
   SDKs (LiteLlm/Gemini/genai) only in `automation_agent/agent/setup`; nothing imports `cmd`.
 - **Prompts are markdown** under each agent's `prompts/` dir, loaded via `importlib.resources`.
