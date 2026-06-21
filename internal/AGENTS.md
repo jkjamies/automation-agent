@@ -5,7 +5,7 @@ All non-entrypoint code. Two families:
 - **Agents** (`agent/`) — the LLM-driven workflow agents and their shared `setup`
   utilities.
 - **Tooling** (`config`, `ingest`, `githubapi`, `gitrepo`, `webhook`, `notify`,
-  `scheduler`, `reconcile`) — deterministic, unit-testable, **agent-free**. These
+  `scheduler`) — deterministic, unit-testable, **agent-free**. These
   must not import `agent/...` (enforced by `ARCH/`).
 
 ## Flow
@@ -15,8 +15,11 @@ flowchart LR
     subgraph agents["internal/agent (LLM-driven)"]
         root --> summary
         root --> lintfixer
+        root --> covfixer
+        lintfixer --> fixflow
+        covfixer --> fixflow
         summary --> setup
-        lintfixer --> setup
+        fixflow --> setup
     end
     subgraph tooling["internal/* (deterministic, agent-free)"]
         config
@@ -26,7 +29,6 @@ flowchart LR
         webhook
         notify
         scheduler
-        reconcile
     end
     agents -->|"may import"| tooling
     tooling -.->|"must NOT import (ARCH)"| agents

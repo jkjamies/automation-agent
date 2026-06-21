@@ -1,8 +1,33 @@
 # automation-agent
 
-This repository is a Go automation service built on the Agent Development Kit for
-Go (`google.golang.org/adk`). Read [`docs/architecture.md`](docs/architecture.md)
-first — it is the authoritative design.
+This repository is an automation service built on the Agent Development Kit (ADK).
+The **Go** implementation at the repo root is the canonical reference; sibling ports
+live in their own top-level folders. Read [`docs/architecture.md`](docs/architecture.md)
+first — it is the authoritative, language-neutral design.
+
+## Language parity (Go · Kotlin · Python)
+
+This service is maintained as parallel ports that **must stay 1:1 in functionality**:
+
+| Language | Location | ADK | Status |
+|---|---|---|---|
+| Go | repo root (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
+| Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | in progress — see [`kotlin/PORTING.md`](kotlin/PORTING.md) |
+| Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green; see [`python/PORTING.md`](python/PORTING.md) |
+
+Each language uses its own native ADK; parity is **functional, not version-matched**
+(adk-go is v1.x, adk-kotlin is 0.2.x).
+
+**The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
+
+- Go is the source of truth. A behavior change lands in Go first, then is mirrored
+  into every existing port **in the same logical change** — ports never silently drift.
+- Parity is about *observable behavior and structure*, not syntax: same packages/dirs,
+  same public surface, same config keys, env vars, defaults, routes, and payloads.
+- Each port keeps the same conventions (per-directory `AGENTS.md`, build-agent pattern,
+  prompts-as-markdown, ≥80% coverage, no asserting on LLM output).
+- When you touch any port, check the others and update them or record the gap in that
+  port's `PORTING.md`.
 
 ## System flow
 
@@ -10,23 +35,26 @@ first — it is the authoritative design.
 flowchart TD
     Cron["scheduler (cron 09:00 daily / Mon)"] -->|"KindCronDaily/Weekly"| Env["ingest.Envelope{Kind, Source, Payload}"]
     WLint["POST /webhooks/lint (CI lint report)"] -->|KindLint| Env
+    WCov["POST /webhooks/coverage (coverage report)"] -->|KindCoverage| Env
     WCI["POST /webhooks/github (check_run, HMAC)"] -->|KindCI| Env
     Env --> Root["root.Dispatcher.Dispatch (by Kind)"]
     Root -->|"cron.*"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: Kickoff"]
-    Root -->|ci| LFR["Lint-fixer: Resume"]
+    Root -->|coverage| CFK["Coverage-fixer: Kickoff"]
+    Root -->|ci| LFR["Lint/Coverage-fixer: Resume (by check name)"]
 
     Sum --> Par["Parallel[fetch_repo x N] -> state commits:<repo>"]
     Par --> Smz["summarize (LLM, OutputKey=digest)"]
     Smz --> Ntf["notify"] --> Chat[("Slack / Teams")]
 
-    LFK -->|"triage -> analyze(parallel/file) -> ApplyFix"| PR[("GitHub PR: automation-agent/lint-fix + label")]
-    PR -->|"agent-lint-verify check"| WCI
+    LFK -->|"triage -> analyze(parallel/file) -> apply_fix -> await_ci (long-running)"| PR[("GitHub PR: automation-agent/* branch + label")]
+    CFK -->|"triage -> explore -> execute -> apply_fix -> await_ci"| PR
+    PR -->|"agent-*-verify check"| WCI
     LFR --> Dec{conclusion}
     Dec -->|success| Chat
     Dec -->|"failure & attempts<3"| LFK
     Dec -->|"failure & attempts>=3"| Chat
-    Recon["reconcile loop (startup + interval)"] -.->|"missed webhook / timeout"| LFR
+    TO["per-run CI_TIMEOUT timer (in-memory)"] -.->|"CI never reports -> needs review"| Chat
 
     Models["model.LLM: Ollama/Gemma (local) | Gemini (cloud)"] -.-> Sum
     Models -.-> LFK
@@ -34,10 +62,13 @@ flowchart TD
 
 ## Mental model
 
-Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of two
-workflow agents: **summary** (commit digests) or **lintfixer** (autonomous lint
-remediation with a PR + CI loop). Deterministic, agent-free tooling lives under
-`internal/` and is called by agents but never imports them.
+Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of three
+workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
+remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sharing
+the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
+plus an in-memory parked-run registry (no durable store; a restart strands in-flight
+runs). Deterministic, agent-free tooling lives under `internal/` and is called by
+agents but never imports them.
 
 ## Conventions (enforced by `ARCH/` + `make ci`)
 

@@ -126,3 +126,18 @@ func TestMethodNotAllowed(t *testing.T) {
 		t.Errorf("status = %d, want 405", rec.Code)
 	}
 }
+
+// A body larger than the cap is truncated to maxBodyBytes (io.LimitReader) and still
+// accepted — never rejected on size.
+func TestOversizeBodyIsTruncated(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest)
+	oversize := strings.Repeat("x", maxBodyBytes+100)
+	rec := do(t, s, http.MethodPost, "/webhooks/lint", oversize, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if len(c.env.Payload) != maxBodyBytes {
+		t.Errorf("payload len = %d, want %d (truncated to cap)", len(c.env.Payload), maxBodyBytes)
+	}
+}

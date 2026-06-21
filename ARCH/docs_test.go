@@ -47,6 +47,12 @@ func skipDocDir(base string) bool {
 	// Content subdirs of an agent are documented by the agent's shared AGENTS.md.
 	case "prompts", "models", "tasks", "testdata":
 		return true
+	// Sibling language ports are self-contained: each enforces its own AGENTS.md
+	// presence via its own arch test (python/arch, kotlin/..., javascript/...), so
+	// the Go reference test does not descend into them. See
+	// .agents/standards/language-parity.md.
+	case "python", "kotlin", "javascript":
+		return true
 	}
 	// Hidden directories are exempt, except the .agents open-standard dir.
 	if strings.HasPrefix(base, ".") && base != ".agents" {

@@ -17,7 +17,7 @@ flowchart TD
     FI --> T3["TestNothingImportsCmd"]
     Root["WalkDir(root) for AGENTS.md"] --> T4["TestEveryDirHasAgentsDoc"]
 
-    T1 --> C1{"under internal/{githubapi,gitrepo,webhook,<br/>notify,scheduler,reconcile} imports internal/agent?"}
+    T1 --> C1{"under internal/{githubapi,gitrepo,webhook,<br/>notify,scheduler} imports internal/agent?"}
     C1 -->|yes| F1["t.Errorf: tooling must not depend on agents"]
     C1 -->|no| OK1["pass"]
 
@@ -37,7 +37,7 @@ flowchart TD
 Current rules:
 
 - `TestToolingDoesNotImportAgents` — `internal/{githubapi,gitrepo,webhook,notify,
-  scheduler,reconcile}` must not import `internal/agent/...`.
+  scheduler}` must not import `internal/agent/...`.
 - `TestProviderSDKsOnlyInSetup` — Ollama/Gemini/genai imports are confined to
   `internal/agent/setup`.
 - `TestNothingImportsCmd` — no package imports `cmd/...`.

@@ -10,7 +10,7 @@ Prerequisites: Go 1.26, [Ollama](https://ollama.com) running with a Gemma model
 `.env.example`). All five run modes load `.env` automatically.
 
 ```bash
-make run          # the full service: cron + webhooks + reconcile (cmd/agent)
+make run          # the full service: cron + webhooks (cmd/agent)
 make playground   # local ADK web UI at http://localhost:8080 (cmd/playground)
 make ci           # tidy + vet + arch + test + coverage gate
 ```
@@ -36,15 +36,17 @@ The image builds **only** `cmd/agent` (the playground is never deployed). Point
 
 ## Cloud (Phase 6 — outline, not yet built)
 
-Recall the design constraints (`docs/architecture.md` §8, §13): **GitHub is the
-state**, so the service is stateless — no persistent disk or database needed.
+Recall the design constraints (`docs/architecture.md` §8, §13): the fix loop's state
+is an **in-memory parked-run registry** (non-durable), so no persistent disk or
+database is needed — but the trade-off is that a restart strands in-flight runs.
+GitHub holds the durable PR artifacts but isn't consulted for recovery.
 
 | Concern | Plan |
 |---|---|
 | Compute | Cloud Run with `min-instances=1` (keeps cron + webhook listener warm), or a GCE VM if co-locating Ollama on a GPU |
 | Model in prod | `LLM_PROVIDER=gemini` (Vertex) unless a GPU VM runs Ollama |
 | Secrets | Secret Manager for `GITHUB_TOKEN`, webhook secret, notifier URLs — not `.env` |
-| State | none — stateless; reconcile recovers from GitHub |
+| State | in-memory parked-run registry (non-durable; a restart strands in-flight runs). GitHub holds the durable PR artifacts but isn't consulted for recovery |
 | CI/CD | GitHub Actions building/pushing the image and deploying |
 | Scale-out (later) | a shared lock/DB only if running multiple instances (see §8) |
 

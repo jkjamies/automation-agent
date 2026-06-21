@@ -6,7 +6,7 @@ A thin wrapper over `go-github/v78` exposing only what this service needs:
 
 ```mermaid
 flowchart TD
-    Caller[summary / lint-fixer / reconcile / webhook] --> NEW["New(token)"]
+    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["New(token)"]
     NEW -->|"token != \"\""| AUTH["gh.WithAuthToken(token)"]
     NEW -->|empty token| ANON[unauthenticated client]
     AUTH --> C["Client{gh *github.Client}"]
@@ -40,7 +40,8 @@ flowchart TD
 
 - `ListCommitsSince` — last-24h commit digests (summary workflow).
 - `CreatePR` / `AddLabels` — open and label the agent's fix PR.
-- `FindAgentPRs` — open PRs with the agent label (reconcile scan).
+- `FindAgentPRs` — open PRs with the agent label (used by `apply_fix` to reuse an
+  existing labeled agent PR instead of opening a duplicate).
 - `AttemptCount` — commits on a PR = distinct agent-pushed SHAs (one commit per
   attempt; re-run-safe). See `docs/architecture.md` §8.
 - `AgentCheck` — the agent verify check's status/conclusion for a ref (resume).

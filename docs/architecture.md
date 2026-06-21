@@ -1,12 +1,14 @@
 # Automation Agent — Architecture & Build Plan
 
-> Status: **Design / iterating.** This is the living design doc. Nothing is built yet.
-> Last updated: 2026-06-20.
+> Status: **Implemented.** This is the living design doc; the design below is built —
+> Phases 1–5 are implemented and `make ci` is green.
+> Last updated: 2026-06-21.
 
 A single long-running Go service that ingests events from many sources, routes every
-ingest through a **Root Agent**, and runs two workflow agents: a **Summary** workflow
-(daily/weekly commit digests) and a **Lint-fixer** workflow (autonomous lint remediation
-with PR + CI feedback loop).
+ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
+(daily/weekly commit digests), a **Lint-fixer** workflow (autonomous lint remediation
+with PR + CI feedback loop), and a **Coverage-fixer** workflow (autonomous test-coverage
+remediation). Lint-fixer and Coverage-fixer share a generic `fixflow` engine.
 
 Local-first on **Ollama + Gemma**, with a clean switch to **Gemini/Vertex** for the
 persistent GCP deployment — both behind one `model.LLM` builder.
@@ -48,6 +50,9 @@ persistent GCP deployment — both behind one `model.LLM` builder.
    problem, check out the repo, make the change, open a PR, **suspend**, then **resume**
    when a CI webhook reports back — looping up to **3 times**, finishing with a Slack/Teams
    summary (success, or "needs human review" + PR link).
+5. **Coverage-fixer workflow** — the same suspend/resume loop applied to test coverage:
+   take a coverage report, generate tests, open a PR, and loop on the coverage CI check.
+   Lint-fixer and Coverage-fixer share the generic `fixflow` engine.
 
 Non-goals (for now): interactive chat UI, multi-tenant auth. The design must not *preclude*
 future human interaction or additional hooks — hence the root-agent indirection.
@@ -67,22 +72,25 @@ future human interaction or additional hooks — hence the root-agent indirectio
                                           ┌───────────────┐
                                           │  ROOT AGENT   │  (dispatcher)
                                           └───────┬───────┘
-                                     ┌────────────┴────────────┐
-                                     ▼                         ▼
-                          ┌────────────────────┐   ┌──────────────────────────┐
-                          │  SUMMARY workflow   │   │   LINT-FIXER workflow     │
-                          │ Sequential:         │   │ Loop(max=3):              │
-                          │  Parallel[fetch×N]  │   │  Sequential:              │
-                          │   → summarize(LLM)  │   │   analyze(LLM)            │
-                          │   → notify          │   │   → apply-fix(git/PR)     │
-                          └─────────┬──────────┘   │   → suspend → CI resume    │
-                                    ▼              │  → notify(summary)         │
-                              Slack / Teams        └────────────┬──────────────┘
-                                                                ▼
-                                                          Slack / Teams
+                          ┌───────────────────────┼───────────────────────┐
+                          ▼                       ▼                        ▼
+              ┌────────────────────┐   ┌──────────────────────┐  ┌──────────────────────┐
+              │  SUMMARY workflow   │   │  LINT-FIXER workflow  │  │ COVERAGE-FIXER workflow│
+              │ Sequential:         │   │  (fixflow Spec)       │  │  (fixflow Spec)        │
+              │  Parallel[fetch×N]  │   │   apply_fix(git/PR)   │  │   apply_fix(git/PR)    │
+              │   → summarize(LLM)  │   │   → await_ci (suspend)│  │   → await_ci (suspend) │
+              │   → notify          │   │   → resume (webhook / │  │   → resume (webhook /  │
+              └─────────┬──────────┘   │      CI_TIMEOUT timer) │  │      CI_TIMEOUT timer) │
+                        ▼              │   → notify(summary)    │  │   → notify(summary)    │
+                  Slack / Teams        └───────────┬───────────┘  └───────────┬───────────┘
+                                                   ▼                          ▼
+                                             Slack / Teams              Slack / Teams
 ```
 
-Tooling (`git`, `github`, `webhook`, `notify`, `scheduler`, `store`) is **deterministic
+Lint-fixer and Coverage-fixer share the generic `fixflow` engine; each is a thin `Spec`
+(branch/label/check + triage/analyze) over it.
+
+Tooling (`gitrepo`, `githubapi`, `webhook`, `notify`, `scheduler`) is **deterministic
 and agent-free** — agents call it, it never imports agents. This boundary is enforced by
 ARCH tests.
 
@@ -104,7 +112,7 @@ everything in-process.
 | Git working tree | `github.com/go-git/go-git/v5` | clone/branch/commit/push (pure Go) |
 | Arch tests | `github.com/matthewmcnew/archtest` or hand-rolled `go/packages` | import-boundary assertions |
 | Lint | `golangci-lint` (incl. `depguard`) | quality gate |
-| State store | *(none — GitHub is the source of truth)* | recovery re-scans labeled PRs; attempt count derived from distinct agent-pushed SHAs. A DB is a scale-*out* concern, not a restart-survival one |
+| In-flight state | *(in-memory parked-run registry)* | in-flight runs (PR key → session/call id + attempt count) live only in memory; a per-run `CI_TIMEOUT` timer bounds each wait. GitHub holds the durable PR artifacts (PR + label + check/SHA) but is **not** consulted to recover in-flight state. A process restart strands parked runs (accepted trade-off; crash recovery is out of scope). A DB is a scale-*out* / crash-recovery concern, neither of which is in scope today |
 
 ---
 
@@ -158,7 +166,7 @@ automation-agent/
 ├── .golangci.yml
 │
 ├── cmd/agent/
-│   ├── main.go                    # wire config→store→tooling→runner→scheduler→http; block
+│   ├── main.go                    # wire config→tooling→runner→scheduler→http; block
 │   └── AGENTS.md
 │
 ├── ARCH/                          # architecture tests (its own package)
@@ -218,16 +226,27 @@ automation-agent/
     │   │   ├── prompts/summarize.md
     │   │   ├── tasks/             # (optional) per-step helpers
     │   │   └── AGENTS.md
-    │   └── lintfixer/
-    │       ├── agents_setup.go    # BuildLintFixerAgent(deps) -> Loop(3)[Sequential[...]]
-    │       ├── lintfixer.go       # analyze/apply/resume logic, correlation-id handling
-    │       ├── prompts/
-    │       │   ├── analyze.md
-    │       │   └── summarize_result.md
-    │       ├── models/            # payload structs (lint problem, fix attempt, ci result)
+    │   ├── lintfixer/             # the lint Spec of the fixflow engine
+    │   │   ├── lint.go            # builds the lint Spec (branch/label/check + triage/analyze)
+    │   │   ├── prompts/
+    │   │   └── AGENTS.md
+    │   ├── covfixer/              # the coverage Spec of the fixflow engine
+    │   │   ├── coverage.go        # builds the coverage Spec
+    │   │   ├── prompts/
+    │   │   └── AGENTS.md
+    │   └── fixflow/               # generic fix engine shared by lint + coverage
+    │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
+    │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout)
+    │       ├── registry.go        # in-memory parked-run registry (the in-flight record)
+    │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
+    │       ├── analyze.go         # analyze step
+    │       ├── explore.go         # repo exploration helper
+    │       ├── tools.go           # apply_fix + long-running await_ci tools
+    │       ├── files.go
+    │       ├── util.go
+    │       ├── envelope.go
     │       └── AGENTS.md
-    ├── githubapi/                 # go-github: ListCommits, CreatePR, ListAgentPRs,
-    │   │                          #   check status, distinct-SHA attempt count
+    ├── githubapi/                 # go-github: ListCommits, CreatePR, check status
     │   ├── client.go
     │   └── AGENTS.md
     ├── gitrepo/                   # go-git: Clone, Branch, Commit, Push
@@ -240,16 +259,16 @@ automation-agent/
     ├── scheduler/                 # robfig/cron wrapper -> emits ingest.Envelope
     │   ├── scheduler.go
     │   └── AGENTS.md
-    ├── notify/                    # Slack/Teams behind one interface
-    │   ├── notify.go              # Notifier interface
-    │   ├── slack.go
-    │   ├── teams.go               # plan for Workflows/Adaptive Card (O365 connectors deprecating)
-    │   └── AGENTS.md
-    └── reconcile/                 # stateless recovery (GitHub is the source of truth)
-        ├── reconcile.go           # ticker + startup scan: find AGENT_PR_LABEL PRs,
-        │                          #   resume finished ones, time out stuck ones
+    └── notify/                    # Slack/Teams behind one interface
+        ├── notify.go              # Notifier interface
+        ├── slack.go
+        ├── teams.go               # plan for Workflows/Adaptive Card (O365 connectors deprecating)
         └── AGENTS.md
 ```
+
+In-flight suspend/resume state lives in the `fixflow` package's **in-memory parked-run
+registry** (`registry.go`) — there is no separate recovery package and no PR-scan ticker.
+Resume is webhook-driven, with a per-run `CI_TIMEOUT` timer as the catch-all.
 
 ---
 
@@ -317,8 +336,14 @@ fan-out is built from config at setup time. Fetchers use go-github `ListCommits`
 `Since: now-24h`. Summarizer is the reasoning LLM. Notify posts to Slack or Teams per
 `NOTIFY_PROVIDER`.
 
-**Lint-fixer** (`lintfixer/`): `Loop(MaxIterations: 3)[ Sequential[ analyze(LLM) → apply-fix → await-CI ] ]`.
-See the dedicated section below — this is the complex one.
+**Lint-fixer** (`lintfixer/`) and **Coverage-fixer** (`covfixer/`): both are thin `Spec`s
+over the shared `fixflow` engine. A deterministic **Sequencer** model drives a "fixer"
+`LlmAgent` to emit a fixed `apply_fix → await_ci` sequence; `await_ci` is a long-running
+(`IsLongRunning`) tool, so the run suspends and resumes on a GitHub `check_run` webhook.
+See the dedicated section below — this is the complex one. Lint uses branch
+`automation-agent/lint-fix`, label `automation-agent`, check `agent-lint-verify`; coverage
+uses branch `automation-agent/test-coverage`, label `automation-agent-coverage`, check
+`agent-coverage-verify`.
 
 ---
 
@@ -330,56 +355,54 @@ See the dedicated section below — this is the complex one.
 ### The hard constraint: CI takes 20–40 minutes (often more with retries)
 
 A fix can't be confirmed for 20–40 min (×3 iterations → up to ~2 h wall-clock), so the
-workflow can't sit in a blocked goroutine. But this does **not** require a local durable
-database — because **GitHub already is the durable store**:
+workflow can't sit in a blocked goroutine. We don't run a local durable database either —
+in-flight runs live **only in an in-memory parked-run registry**. GitHub holds the durable
+PR artifacts:
 
 - the **PR** exists on GitHub (number, branch, head SHA),
 - the **check conclusion** exists on GitHub (the agent verify check),
 - the **label** marks it as ours,
-- the current **lint findings** are re-derivable by reading the check output / re-running lint.
+- the current findings are re-derivable by reading the check output / re-running the gate.
 
-Even the attempt count isn't really stored: on the happy path the `LoopAgent` tracks it in
-memory, and after a crash it's **re-derived from GitHub** as the number of distinct
-agent-pushed head SHAs on the PR (re-run-safe — a manual check re-run reuses the same SHA).
-The `AGENT_PR_LABEL` just marks the PR as ours so the scan can find it. Consequences:
+But GitHub is **not** consulted to recover in-flight state. When a fix applies and parks on
+`await_ci`, the Driver records a `ParkedRun` (session id + call id + attempt count) in the
+registry, keyed by PR, and arms a per-run `CI_TIMEOUT` timer. Consequences:
 
 1. **No local DB, no file, no volume, no retention janitor, nothing to clean up manually.**
-   Matches the "lightweight" goal and makes the service stateless/replaceable.
-2. **In-memory working state is just a cache.** We keep a small in-memory map of active runs
-   for the happy path and as a concurrency guard, but nothing depends on it surviving — it's
-   rebuilt from GitHub.
-3. **Recovery = re-scan labeled PRs.** On startup and on a timer (`RECONCILE_INTERVAL`), list
-   open PRs with `AGENT_PR_LABEL`, read each one's check conclusion, and resume any that
-   finished while we weren't listening. Webhook = fast path; scan = catch-all.
-4. **Worst case is self-healing.** If we crash *before* the PR exists, the lint payload is
-   simply re-produced by the next scheduled CI lint run — the next kickoff covers it. Nothing
-   orphaned.
-5. **Idempotency via the SHA guard.** Act on a `check_run` only when its `head_sha` equals the
-   PR's current head SHA, so duplicate deliveries and stale-iteration checks are ignored — no
-   dedupe table needed.
-6. **Timeout is derived, not stored.** During the scan, a labeled PR whose agent check has
-   been pending longer than `CI_TIMEOUT` → "needs human review" + PR link. Computed from
-   GitHub timestamps; no persisted timer.
+   Matches the "lightweight" goal.
+2. **In-flight state is the registry — and it is non-durable.** A process restart loses the
+   registry and **strands** any parked runs: those PRs are abandoned. This is an accepted
+   trade-off; crash recovery is explicitly **out of scope**.
+3. **Resume is webhook-driven, not a scan.** A GitHub `check_run` webhook looks the run up by
+   PR key and resolves it; there is no periodic re-scan of labeled PRs. The per-run
+   `CI_TIMEOUT` timer is the catch-all if CI never reports.
+4. **Attempt count lives in the registry.** Each `ParkedRun` carries its `Attempts`; it is
+   **not** derived from distinct agent-pushed GitHub SHAs.
+5. **Idempotency via atomic resolve.** Exactly one of {webhook, timeout timer} resolves a run:
+   `Resolve` atomically removes the registry entry, so late or duplicate deliveries (and a
+   timer firing the same instant a webhook lands) find nothing and no-op — no dedupe table.
+6. **Timeout is a real timer, not a derived timestamp.** Each parked run arms a `time.Timer`
+   for `CI_TIMEOUT`; on fire, `onTimeout` claims the run and posts "needs human review" + PR
+   link.
 
 ### Flow
 
 ```
-lint payload ──▶ root ──▶ lintfixer Loop(max=3)
+lint payload ──▶ root ──▶ fixflow Driver (Sequencer-driven fixer)
    │
-   │  iteration i:
-   │   1. analyze(LLM)   : reason about the lint problem(s), produce a fix plan
-   │   2. apply-fix(code): go-git clone/branch/edit/commit/push; go-github open/Update PR
-   │                       → this is a LONG-RUNNING tool (IsLongRunning()=true)
-   │                       → returns correlation id {pr_number, head_sha, branch, iteration}
-   │                       → run YIELDS; PR label + GitHub check/SHA history ARE the state; released
+   │  attempt i:
+   │   1. apply_fix(code): analyze + go-git clone/branch/edit/commit/push; go-github open/update PR
+   │   2. await_ci       : LONG-RUNNING tool (IsLongRunning()=true) — returns "pending" now,
+   │                       run SUSPENDS; Driver records a ParkedRun {session, call, attempts}
+   │                       in the in-memory registry (keyed by PR) and arms a CI_TIMEOUT timer
    │
    ▼ (20–40+ min later)
-/webhooks/github (check_run) ──▶ lookup run by pr_number
-                  guard: event head_sha == run.current_head_sha; require terminal conclusion
-                  rehydrate workflow state
+/webhooks/github (check_run) ──▶ Driver.Resume: Resolve the parked run by PR key
                   ┌─ CI success ─▶ finish: post success summary (Slack/Teams) + PR link
-                  ├─ CI failure & iteration < 3 ─▶ resume loop: re-analyze WITH ci feedback
-                  └─ CI failure & iteration == 3 ─▶ finish: "may have failed, human review needed" + PR link
+                  ├─ CI failure & attempts < MAX_ITERATIONS ─▶ resume the run: apply_fix again WITH ci feedback
+                  └─ CI failure & attempts == MAX_ITERATIONS ─▶ finish: "needs human review" + PR link
+   │
+   └─ (if CI never reports) CI_TIMEOUT timer ──▶ onTimeout: free the run, "needs human review" + PR link
 ```
 
 ### CI signal — a dedicated, label-triggered agent check (GitHub)
@@ -423,77 +446,69 @@ name* (`AGENT_CHECK_NAME`) completing; the repo's other checks are ignored.
 
 ### Correlation strategy (same-PR retry)
 
-Retries push new commits to the **same** branch/PR (confirmed). Each push creates a **new
-`head_sha`**, so `head_sha` is *not* a stable key — **`pr_number` is the stable correlation
-key**, and `current_head_sha` is tracked as a freshness guard:
+Retries push new commits to the **same** branch/PR (confirmed). The **PR key**
+(`fullRepo#pr_number`) is the stable correlation key the registry is keyed on:
 
-- Match an incoming `check_run` to a run by **`pr_number`** (the event's
+- Match an incoming `check_run` to a parked run by **PR key** (built from the event's repo +
   `pull_requests[].number`).
-- **Guard:** only act if the event's `head_sha` equals the run's `current_head_sha`. This
-  drops late-arriving checks from a previous iteration's SHA.
-- On each `apply-fix` push, update `current_head_sha` and `iteration` in the store record.
+- `Resolve` atomically claims the run, so a late or duplicate delivery — or a timeout timer
+  firing the same instant — finds nothing and no-ops.
 
-We persist **nothing locally**. The only durable bit of identity is the `AGENT_PR_LABEL`,
-which marks a PR as ours; everything else — `pr_number`, `current_head_sha`, check status,
-timestamps — is read live from GitHub, and findings are re-derived from the check output each
-iteration.
+We persist **nothing durably**. In-flight identity (session id, call id, attempt count) lives
+in the **in-memory parked-run registry**; the only durable bit on GitHub is the PR itself
+plus its label/check/SHA. A restart drops the registry and strands parked runs (accepted —
+crash recovery is out of scope).
 
-**Attempt count: in-memory on the happy path, re-derived on recovery.** The `LoopAgent`
-bounds the loop (`MaxIterations: 3`) and tracks the current pass in memory — no GitHub read
-needed normally. We only reconstruct the count after a crash-mid-wait, deriving it as the
-**number of distinct agent-pushed head SHAs** on the PR (each real attempt is one push = one
-new SHA; a manual check re-run reuses the same SHA, so it can't inflate the count). The
-give-up decision:
+**Attempt count: tracked in the registry.** Each `ParkedRun` carries its `Attempts`; the
+Driver increments it on each retry and compares against `MAX_ITERATIONS`. It is **not**
+derived from GitHub SHAs. The give-up decision:
 
-- **CI failed and attempt == `MAX_ITERATIONS` (3)** → post the failure summary
+- **CI failed and attempts == `MAX_ITERATIONS` (3)** → post the failure summary
   (needs-human-review + PR link) to Slack/Teams and stop.
-- **Reconcile scan hits `CI_TIMEOUT`** (check still pending) → same failure summary, timeout
-  variant.
+- **Per-run `CI_TIMEOUT` timer fires** (CI never reported) → same failure summary, timeout
+  variant, via `onTimeout`.
 
-Because the count only matters on the rare crash path, an off-by-one there is harmless and
-bounded by `MAX_ITERATIONS` — never a runaway loop. The only thing that defeats the
-derivation is a human force-push/rebase of the branch — a deliberate intervention where
-escalating to human review is the correct outcome anyway.
+Because the loop is bounded by `MAX_ITERATIONS` and the count lives with the run, it can
+never run away.
 
-### Reconcile loop — one stateless ticker (no local state)
+### Two safety layers — webhook + per-run timeout (no scan, no ticker)
 
-A single ticker (`RECONCILE_INTERVAL`, default ~15m) plus a run on startup keeps everything
-honest by querying **GitHub**, not a local DB:
+There is **no** reconcile loop and **no** periodic re-scan of labeled PRs. Resume rests on
+two layers:
 
-- **Catch missed webhooks:** list open PRs with `AGENT_PR_LABEL`; for each, read the agent
-  check via go-github `ListCheckRunsForRef(head_sha)`. If it finished while we weren't
-  listening, resume now.
-- **Timeout / give-up:** if that check has been pending longer than `CI_TIMEOUT` (default
-  90m), post "needs human review" + PR link (and optionally drop the label so the scan stops
-  revisiting it).
-- **No retention/deletion step** — there are no local records to expire. A finished PR is
-  merged or closed by the normal review workflow; that *is* the cleanup.
-
-Two layers of safety: **webhook (fast path)** → **reconcile scan (catch-all + timeout)**.
+- **Webhook (fast path).** A GitHub `check_run` event resolves the parked run by PR key the
+  moment CI finishes.
+- **Per-run `CI_TIMEOUT` timer (catch-all).** When a run parks, it arms a `time.Timer` for
+  `CI_TIMEOUT` (default 90m). If CI never reports — a missed or never-arriving webhook — the
+  timer fires `onTimeout`, frees the run, and posts "needs human review" + PR link. Exactly
+  one of {webhook, timer} wins, via the registry's atomic `Resolve`.
+- **No retention/deletion step** — resolved runs are removed from the registry on resolve. A
+  finished PR is merged or closed by the normal review workflow; that *is* the cleanup.
 
 ### ADK mechanics
 
-- `apply-fix` is implemented as a tool whose `IsLongRunning()` returns `true` — ADK's
-  contract for "return a resource id now, finish later." The run yields after dispatching it.
-- Resume reconstructs minimal context from the PR (label + distinct-SHA count → attempt;
-  check output → current findings) and starts a fresh runner invocation for the next loop
-  step. adk-go has **no** durable engine, and we deliberately don't add one — GitHub is the
-  state.
+- `await_ci` is implemented as a tool whose `IsLongRunning()` returns `true` — ADK's contract
+  for "return a status now, finish later." The run suspends after dispatching it. A
+  deterministic Sequencer model drives the fixer agent to emit a fixed `apply_fix → await_ci`
+  sequence.
+- Resume feeds the CI outcome back into the suspended run (by session id + call id) and drives
+  the next `apply_fix → await_ci` step. adk-go has **no** durable engine, and we deliberately
+  don't add one — `IsLongRunning` plus the in-memory parked-run registry is the suspend/resume
+  mechanism.
 
-### When a DB / durable engine enters the picture
+### When a DB / shared registry enters the picture
 
-**Not** for surviving restarts — GitHub already covers that. A datastore becomes worthwhile
-only when we cross a scaling threshold:
+A datastore (or shared registry) becomes worthwhile only when we want one of two things,
+**neither of which is in scope today**:
 
-- **Multiple instances (HA / horizontal scale).** Two replicas could both grab the same PR
-  during a scan; that needs a shared lock or work queue GitHub can't provide atomically.
-  *Interim option:* a soft lock via an `agent-processing` label + the SHA guard. *Clean
-  option:* a small Postgres or a durable engine (Temporal/River).
-- **Crash-safe timers / retries with backoff** beyond "the next scan catches it."
-- **Audit trail / metrics / cross-PR queuing** beyond what GitHub records.
+- **Crash recovery.** The current registry is in-memory, so a restart strands parked runs. A
+  durable store (small Postgres, or an engine like Temporal/River) would let runs survive a
+  restart.
+- **Multiple instances (HA / horizontal scale).** Two replicas can't share the in-memory
+  registry; that needs a shared lock or work queue.
 
-Whatever we add slots behind the existing **reconcile + CI-handler** seam — the agent code
-doesn't change. Single persistent instance: none of this is needed.
+Either would slot behind the existing **registry + CI-handler** seam — the agent code doesn't
+change. Single persistent instance with crash recovery out of scope: none of this is needed.
 
 ---
 
@@ -517,7 +532,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 ## 10. ARCH tests, AGENTS.md, specs, Makefile
 
 - **ARCH/** — `archtest`-style assertions:
-  - `internal/agent/...` may import `internal/{githubapi,gitrepo,notify,store,config,ingest}`.
+  - `internal/agent/...` may import `internal/{githubapi,gitrepo,notify,config,ingest}`.
   - Tooling packages may **not** import `internal/agent/...`.
   - Nothing imports `cmd`.
   - Provider SDKs (ollama/gemini) may only be imported from `internal/agent/setup`.
@@ -562,8 +577,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `PORT` | webhook server port | `8080` |
 | `CRON_DAILY` / `CRON_WEEKLY` | schedules | `0 9 * * *` / `0 9 * * 1` |
 | `MAX_ITERATIONS` | lint-fix loop cap | `3` |
-| `CI_TIMEOUT` | how long a pending check waits before "needs review" | `90m` |
-| `RECONCILE_INTERVAL` | how often to re-scan labeled PRs for missed webhooks | `15m` |
+| `CI_TIMEOUT` | per-run timer: how long a suspended fix run waits for its CI result before "needs review" | `90m` |
 | `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/github` | — |
 | `AGENT_PR_LABEL` | label that triggers the agent verify check | `automation-agent` |
 | `AGENT_CHECK_NAME` | check name we resume on | `agent-lint-verify` |
@@ -576,9 +590,11 @@ Target: a **persistent** GCP instance (always-on for cron + webhooks).
 
 - **Cloud Run** with `min-instances=1` (keeps cron + webhook listener warm), or a **GCE VM**
   if we co-locate Ollama-on-GPU.
-- **No persistent disk or database needed** — state lives on GitHub, so the service is
-  stateless and freely replaceable/redeployable. We still want it *running* (min-instances=1
-  or a VM) to receive webhooks and run the daily cron, but a restart/redeploy loses nothing.
+- **No persistent disk or database** — in-flight state lives only in the in-memory parked-run
+  registry, so the service is lightweight. The trade-off: a restart/redeploy **strands** any
+  in-flight fix runs (those PRs are abandoned; crash recovery is out of scope). Run it
+  always-on (min-instances=1 or a VM) to receive webhooks and run the daily cron, and avoid
+  redeploying while runs are parked.
 - Secrets → **Secret Manager**, not plain `.env`.
 - Model in prod → likely `LLM_PROVIDER=gemini` (Vertex) unless we provision a GPU VM for
   Ollama. Config flag, no code change.
@@ -593,7 +609,7 @@ Each phase is independently testable.
    templates), ARCH tests, AGENTS.md, config, ingest envelope. *(no agents yet)*
 2. **Model layer** — `setup`: Ollama adapter + Gemini factory + `BuildLLM` + prompt loader
    + runner. *(adapter tested vs stub Ollama)*
-3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `store`, `scheduler`, `webhook`.
+3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `scheduler`, `webhook`.
    *(all unit-tested, agent-free)*
 4. **Root + Summary** — end-to-end summary workflow on a real repo via local Gemma →
    Slack/Teams.
@@ -604,8 +620,9 @@ Each phase is independently testable.
 
 ## 15. Open questions
 
-1. **Persistence:** ✅ none — **GitHub is the source of truth** (PR label + hidden body
-   marker). No local DB/file; recovery is a stateless re-scan of labeled PRs. See §8.
+1. **Persistence:** ✅ no durable store — in-flight runs live in an **in-memory parked-run
+   registry**; GitHub holds the durable PR artifacts but is not consulted to recover in-flight
+   state. Non-durable: a restart strands parked runs (crash recovery is out of scope). See §8.
 2. **Notify:** build the `Notifier` interface + both Slack and Teams impls; choice is one
    env var. Teams targets the new **Workflows/Adaptive Card** format (O365 connectors
    deprecating). ✅ assumed.
@@ -663,5 +680,5 @@ Notes:
 - `loopagent` shape is verified from the official example
   (`examples/workflowagents/loop/main.go`). Sequential/parallel are assumed to share the
   embedded-`agent.Config` shape — to confirm against their example dirs during Phase 1.
-- adk-go has **no** durable workflow engine; `IsLongRunning` + our `store` is the
-  suspend/resume mechanism.
+- adk-go has **no** durable workflow engine; `IsLongRunning` (the long-running `await_ci`
+  tool) + the in-memory parked-run registry is the suspend/resume mechanism.
