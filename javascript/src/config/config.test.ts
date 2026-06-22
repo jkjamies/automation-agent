@@ -52,4 +52,12 @@ describe('config', () => {
     const c = loadFrom(mapLookup({ CI_TIMEOUT: '1h30m' }));
     expect(c.ciTimeoutMs).toBe(90 * 60 * 1000);
   });
+
+  it('rejects a non-numeric PORT', () => {
+    expect(() => loadFrom(mapLookup({ PORT: 'abc' }))).toThrow();
+  });
+
+  it('rejects a PORT out of range', () => {
+    expect(() => loadFrom(mapLookup({ PORT: '70000' }))).toThrow();
+  });
 });

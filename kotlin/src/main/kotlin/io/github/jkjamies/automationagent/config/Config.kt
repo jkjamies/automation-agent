@@ -73,10 +73,13 @@ data class Config(
     /**
      * Checks invariants that the type system alone cannot guarantee. Provider and notify
      * validity are enforced when the config is loaded (invalid values fail [loadFrom]); this
-     * covers the remaining numeric invariant.
+     * covers the remaining numeric invariants (MAX_ITERATIONS, PORT).
      */
     fun validate() {
         require(maxIterations >= 1) { "MAX_ITERATIONS must be >= 1, got $maxIterations" }
+        val portNum = port.toIntOrNull()
+            ?: throw IllegalArgumentException("PORT must be numeric, got \"$port\"")
+        require(portNum in 1..65535) { "PORT must be in 1..65535, got $portNum" }
     }
 
     companion object {

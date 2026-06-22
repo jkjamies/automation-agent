@@ -124,6 +124,13 @@ func (c Config) Validate() error {
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)
 	}
+	port, err := strconv.Atoi(c.Port)
+	if err != nil {
+		return fmt.Errorf("PORT must be numeric, got %q", c.Port)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("PORT must be in 1..65535, got %d", port)
+	}
 	return nil
 }
 

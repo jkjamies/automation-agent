@@ -103,4 +103,24 @@ class ConfigTest : BehaviorSpec({
             }
         }
     }
+
+    Given("a non-numeric PORT") {
+        When("loading the configuration") {
+            Then("it fails") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("PORT" to "abc")))
+                }
+            }
+        }
+    }
+
+    Given("a PORT out of range") {
+        When("loading the configuration") {
+            Then("it fails") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("PORT" to "70000")))
+                }
+            }
+        }
+    }
 })

@@ -86,3 +86,12 @@ func TestMaxIterationsFloor(t *testing.T) {
 		t.Fatal("expected error for MAX_ITERATIONS=0")
 	}
 }
+
+func TestInvalidPort(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"PORT": "abc"})); err == nil {
+		t.Fatal("expected error for non-numeric PORT")
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"PORT": "70000"})); err == nil {
+		t.Fatal("expected error for out-of-range PORT")
+	}
+}

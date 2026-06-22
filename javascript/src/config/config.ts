@@ -123,6 +123,13 @@ export function validate(c: Config): void {
   if (c.maxIterations < 1) {
     throw new Error(`MAX_ITERATIONS must be >= 1, got ${c.maxIterations}`);
   }
+  const port = Number.parseInt(c.port, 10);
+  if (!/^[+-]?\d+$/.test(c.port.trim()) || Number.isNaN(port)) {
+    throw new Error(`PORT must be numeric, got ${JSON.stringify(c.port)}`);
+  }
+  if (port < 1 || port > 65535) {
+    throw new Error(`PORT must be in 1..65535, got ${port}`);
+  }
 }
 
 function getOr(get: Lookup, key: string, def: string): string {
