@@ -26,7 +26,7 @@ fun main() {
             model = llm,
             instruction =
                 Instruction(
-                    "You are the automation-agent local playground, backed by the model '${cfg.ollamaModel}'. " +
+                    "You are the automation-agent local playground, backed by the configured model. " +
                         "Help the developer test prompts. Be concise.",
                 ),
         )

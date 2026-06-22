@@ -19,7 +19,7 @@ from automation_agent.agent.fixflow import (
 from automation_agent.agent.fixflow.analyze import parallel_analyze
 from automation_agent.agent.fixflow.applyfix import FileEdit
 from automation_agent.agent.fixflow.engine import FileWork
-from automation_agent.agent.fixflow.files import _safe_join
+from automation_agent.agent.fixflow.files import safe_join
 from automation_agent.agent.fixflow.tools import list_dir_entries
 
 # --- envelope ---------------------------------------------------------------
@@ -59,20 +59,20 @@ def test_extract_and_strip() -> None:
 # --- files / safe_join ------------------------------------------------------
 
 
-def test_read_file_and_safe_join(tmp_path) -> None:
+def test_read_file_andsafe_join(tmp_path) -> None:
     (tmp_path / "a.txt").write_text("hello")
     assert read_file(str(tmp_path), "a.txt") == "hello"
     with pytest.raises(ValueError):
         read_file(str(tmp_path), "../../etc/passwd")
 
 
-def test_safe_join_rejects_escapes(tmp_path) -> None:
+def testsafe_join_rejects_escapes(tmp_path) -> None:
     root = str(tmp_path)
     for bad in ("../escape", "../../etc/cron.d/x", "/etc/passwd", "a/../../b"):
         with pytest.raises(ValueError):
-            _safe_join(root, bad)
+            safe_join(root, bad)
     for ok in ("a.go", "sub/dir/b_test.go", "."):
-        _safe_join(root, ok)  # must not raise
+        safe_join(root, ok)  # must not raise
 
 
 # --- tools ------------------------------------------------------------------

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ollama/ollama/api"
 	"google.golang.org/adk/model"
@@ -40,7 +42,17 @@ func NewOllamaModel(host, modelTag string) (*OllamaModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse ollama host %q: %w", host, err)
 	}
-	return &OllamaModel{client: api.NewClient(base, http.DefaultClient), name: modelTag}, nil
+	// Connection-level timeouts guard against a hung/unreachable Ollama server
+	// without bounding overall request duration: generations stream over a long-
+	// lived body, so an http.Client.Timeout would truncate valid long responses.
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+		},
+	}
+	return &OllamaModel{client: api.NewClient(base, httpClient), name: modelTag}, nil
 }
 
 // Name reports the configured model tag.

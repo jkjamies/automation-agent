@@ -3,7 +3,7 @@
 :func:`repo_tools` returns ``read_file`` and ``list_dir``
 rooted at the checkout, so an agent can examine the real repository — its standards
 docs, existing tests, and layout — and ground decisions in what the repo actually does.
-Both tools are path-safe via :func:`_safe_join`.
+Both tools are path-safe via :func:`safe_join`.
 """
 
 from __future__ import annotations
@@ -12,13 +12,13 @@ import os
 
 from google.adk.tools import BaseTool, FunctionTool
 
-from automation_agent.agent.fixflow.files import _safe_join, read_file
+from automation_agent.agent.fixflow.files import read_file, safe_join
 
 
 def list_dir_entries(root: str, rel: str) -> list[str]:
     """List a checkout directory (path-safe), suffixing subdirectories with ``/`` and
     hiding the ``.git`` directory. Entries are sorted."""
-    full = _safe_join(root, rel)
+    full = safe_join(root, rel)
     names: list[str] = []
     with os.scandir(full) as it:
         for entry in it:

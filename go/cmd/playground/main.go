@@ -57,7 +57,7 @@ func main() {
 		Name:        "automation_agent_playground",
 		Description: "Local playground for poking the configured model.",
 		Model:       llm,
-		Instruction: "You are the automation-agent local playground, backed by the model '" + cfg.OllamaModel + "'. Help the developer test prompts. Be concise.",
+		Instruction: "You are the automation-agent local playground, backed by the configured model. Help the developer test prompts. Be concise.",
 	})
 	if err != nil {
 		log.Fatalf("build agent: %v", err)

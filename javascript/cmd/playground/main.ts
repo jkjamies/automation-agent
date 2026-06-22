@@ -25,8 +25,8 @@ async function main(): Promise<void> {
     description: 'Local playground for poking the configured model.',
     model: buildLLM(cfg),
     instruction:
-      `You are the automation-agent local playground, backed by the model ` +
-      `'${cfg.ollamaModel}'. Help the developer test prompts. Be concise.`,
+      `You are the automation-agent local playground, backed by the configured ` +
+      `model. Help the developer test prompts. Be concise.`,
   });
   const runner = newRunner('playground', agent);
 

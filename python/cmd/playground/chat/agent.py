@@ -21,7 +21,7 @@ root_agent = LlmAgent(
     description="Local playground for poking the configured model.",
     model=setup.build_llm(_cfg),
     instruction=(
-        "You are the automation-agent local playground, backed by the model "
-        f"'{_cfg.ollama_model}'. Help the developer test prompts. Be concise."
+        "You are the automation-agent local playground, backed by the configured "
+        "model. Help the developer test prompts. Be concise."
     ),
 )

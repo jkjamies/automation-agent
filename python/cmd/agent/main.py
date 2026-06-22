@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 import uvicorn
 from dotenv import load_dotenv
 from google.adk.agents import BaseAgent
+from google.adk.models import BaseLlm
 
 from automation_agent.agent import covfixer, lintfixer, root, summary
 from automation_agent.agent import setup as agent_setup
@@ -40,7 +42,7 @@ def build_notifier(cfg: Config) -> Notifier | None:
 
 
 def build_summary_agent(
-    cfg: Config, llm, gh: summary.CommitLister, notifier: Notifier | None
+    cfg: Config, llm: BaseLlm, gh: summary.CommitLister, notifier: Notifier | None
 ) -> BaseAgent | None:
     """Return the summary workflow agent, or None if it can't be fully configured."""
     if not cfg.repos:
@@ -57,7 +59,9 @@ def build_summary_agent(
         return None
 
 
-def _payload_handler(engine_kickoff):
+def _payload_handler(
+    engine_kickoff: Callable[[bytes], Awaitable[None]],
+) -> root.Handler:
     """Adapt a raw-payload kickoff/resume coroutine to a root.Handler."""
 
     async def handle(e: Envelope) -> None:
@@ -66,7 +70,7 @@ def _payload_handler(engine_kickoff):
     return handle
 
 
-def _ci_resume_handler(engines: list[Engine]):
+def _ci_resume_handler(engines: list[Engine]) -> root.Handler:
     """Hand a check_run event to every engine; each no-ops unless its check matches."""
 
     async def handle(e: Envelope) -> None:

@@ -20,7 +20,10 @@ func seedRemote(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	wt, _ := repo.Worktree()
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}

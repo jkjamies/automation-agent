@@ -6,7 +6,7 @@ import (
 )
 
 func TestKindValid(t *testing.T) {
-	valid := []Kind{KindCronDaily, KindCronWeekly, KindLint, KindCI}
+	valid := []Kind{KindCronDaily, KindCronWeekly, KindLint, KindCoverage, KindCI}
 	for _, k := range valid {
 		if !k.Valid() {
 			t.Errorf("%q should be valid", k)

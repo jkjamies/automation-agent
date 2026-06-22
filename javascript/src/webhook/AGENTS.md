@@ -24,8 +24,10 @@ sequenceDiagram
     rect rgb(235,255,235)
     Client->>App: POST /webhooks/lint (lint JSON)
     App->>Srv: handle lint(req)
-    Srv->>Srv: readBody (truncate to 5 MiB cap)
-    alt read error
+    Srv->>Srv: readBody (5 MiB cap -> 413 over cap)
+    alt body over cap
+        Srv-->>Client: 413 "request body too large"
+    else read error
         Srv-->>Client: 400 "read body"
     else ok
         Srv->>Srv: "newEnvelope(Kind.Lint, 'webhook:/lint', body, now())"
@@ -41,7 +43,7 @@ sequenceDiagram
     rect rgb(245,235,255)
     Client->>App: POST /webhooks/coverage (coverage JSON)
     App->>Srv: handle coverage(req)
-    Srv->>Srv: readBody (truncate to 5 MiB cap)
+    Srv->>Srv: readBody (5 MiB cap -> 413 over cap)
     alt read error
         Srv-->>Client: 400 "read body"
     else ok
@@ -54,7 +56,7 @@ sequenceDiagram
     rect rgb(255,245,235)
     Client->>App: POST /webhooks/github (check_run)
     App->>Srv: handle github(req)
-    Srv->>Srv: readBody (truncate to 5 MiB cap)
+    Srv->>Srv: readBody (5 MiB cap -> 413 over cap)
     alt secret set
         Srv->>Srv: verifySignature(secret, X-Hub-Signature-256, body)
         Note right of Srv: HMAC-SHA256, timingSafeEqual
@@ -75,7 +77,8 @@ sequenceDiagram
   HMAC-verified via `X-Hub-Signature-256` when a secret is configured.
 
 express returns a 404 for an unmatched method, rejecting the request before it reaches
-`ingest`. Each body is read with a 5 MiB cap: oversize bodies are **truncated** to the
-cap and still accepted, not rejected. The HMAC over the body uses
+`ingest`. Each body is read with a 5 MiB cap: oversize bodies are **rejected with `413`**,
+not truncated — truncation would break HMAC-SHA256 verification and produce malformed
+JSON downstream. The HMAC over the body uses
 HMAC-SHA256 with a hex digest, compared in constant time via `node:crypto`'s
 `timingSafeEqual`. Deterministic tooling — no agent imports. Fully tested with `supertest`.

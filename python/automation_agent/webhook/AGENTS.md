@@ -24,8 +24,10 @@ sequenceDiagram
     rect rgb(235,255,235)
     Client->>App: POST /webhooks/lint (lint JSON)
     App->>Srv: handle_lint(request)
-    Srv->>Srv: read_body (truncate to 5 MiB cap)
-    alt read error
+    Srv->>Srv: read_body (5 MiB cap -> 413 over cap)
+    alt body over cap
+        Srv-->>Client: 413 "payload too large"
+    else read error
         Srv-->>Client: 400 "read body"
     else ok
         Srv->>Srv: "ingest.new(KindLint, 'webhook:/lint', body, now())"
@@ -41,7 +43,7 @@ sequenceDiagram
     rect rgb(245,235,255)
     Client->>App: POST /webhooks/coverage (coverage JSON)
     App->>Srv: handle_coverage(request)
-    Srv->>Srv: read_body (truncate to 5 MiB cap)
+    Srv->>Srv: read_body (5 MiB cap -> 413 over cap)
     alt read error
         Srv-->>Client: 400 "read body"
     else ok
@@ -54,7 +56,7 @@ sequenceDiagram
     rect rgb(255,245,235)
     Client->>App: POST /webhooks/github (check_run)
     App->>Srv: handle_github(request)
-    Srv->>Srv: read_body (truncate to 5 MiB cap)
+    Srv->>Srv: read_body (5 MiB cap -> 413 over cap)
     alt secret set
         Srv->>Srv: verify_signature(secret, X-Hub-Signature-256, body)
         Note right of Srv: HMAC-SHA256, hmac.compare_digest
@@ -75,5 +77,6 @@ sequenceDiagram
   HMAC-verified via `X-Hub-Signature-256` when a secret is configured.
 
 FastAPI route methods give 405s for free. Each body is read with a 5 MiB cap: oversize
-bodies are **truncated** to the cap and still accepted, not rejected. Deterministic
-tooling — no agent imports. Fully tested with the FastAPI `TestClient`.
+bodies are **rejected with `413`**, not truncated — truncation would break HMAC-SHA256
+verification and produce malformed JSON downstream. Deterministic tooling — no agent
+imports. Fully tested with the FastAPI `TestClient`.

@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Protocol
 
-from automation_agent.agent.fixflow.files import _safe_join
+from automation_agent.agent.fixflow.files import safe_join
 from automation_agent.githubapi import PR, PRInput
 from automation_agent.gitrepo import Author, Repo
 
@@ -109,7 +109,7 @@ def apply_fix(gh: GitHub, cfg: ApplyConfig, edits: list[FileEdit]) -> ApplyResul
 def _write_edits(repo: Repo, edits: list[FileEdit]) -> None:
     for e in edits:
         # Reject LLM-controlled paths that escape the checkout (path traversal).
-        full = _safe_join(repo.dir(), e.path)
+        full = safe_join(repo.dir(), e.path)
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, "w", encoding="utf-8") as f:
             f.write(e.content)

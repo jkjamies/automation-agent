@@ -9,6 +9,9 @@
  * import-boundary checks.
  */
 import { BaseLlm, type LlmRequest, type LlmResponse } from '@google/adk';
+import type { Content } from '@google/genai';
+
+import { contentText } from '../agent/setup/events';
 
 /** A deterministic BaseLlm that yields fixed text responses in order. */
 export class FakeLlm extends BaseLlm {
@@ -33,5 +36,34 @@ export class FakeLlm extends BaseLlm {
 
   override async connect(): Promise<never> {
     throw new Error('FakeLlm does not support live connections');
+  }
+}
+
+/**
+ * A BaseLlm that routes by system instruction (triage / explore-plan / execute),
+ * yielding the matching scripted text. Used by covfixer/fixflow tests to drive the
+ * multi-phase loop deterministically; tests assert on structure, never LLM content.
+ */
+export class ScriptedLlm extends BaseLlm {
+  constructor(
+    private readonly scripts: { triage?: string; plan?: string; test?: string } = {},
+  ) {
+    super({ model: 'scripted' });
+  }
+
+  override async *generateContentAsync(req: LlmRequest): AsyncGenerator<LlmResponse, void> {
+    const si = req.config?.systemInstruction;
+    const sys = typeof si === 'string' ? si : contentText(si as Content);
+    let resp = this.scripts.test ?? '';
+    if (sys.includes('triaging')) {
+      resp = this.scripts.triage ?? '';
+    } else if (sys.includes('planning where to add')) {
+      resp = this.scripts.plan ?? '';
+    }
+    yield { content: { role: 'model', parts: [{ text: resp }] }, turnComplete: true };
+  }
+
+  override async connect(): Promise<never> {
+    throw new Error('ScriptedLlm does not support live connections');
   }
 }

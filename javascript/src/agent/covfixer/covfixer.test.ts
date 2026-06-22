@@ -4,39 +4,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseLlm, type LlmRequest, type LlmResponse } from '@google/adk';
-import type { Content } from '@google/genai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AnalyzeInput, Deps, FileWork } from '../fixflow/index';
-import { FakeLlm } from '../../testutil/fakes';
-import { contentText } from '../setup/events';
+import { FakeLlm, ScriptedLlm } from '../../testutil/fakes';
 import { analyze, buildExecuteInput, parsePlan, type PlanEntry } from './analyze';
 import { newCoverageEngine } from './coverage';
 import { parseTriage, triage } from './triage';
-
-// Routes by the system instruction: triage, explore (plan), or execute (test).
-class ScriptedLlm extends BaseLlm {
-  constructor(
-    private readonly scripts: { triage?: string; plan?: string; test?: string } = {},
-  ) {
-    super({ model: 'scripted' });
-  }
-  override async *generateContentAsync(req: LlmRequest): AsyncGenerator<LlmResponse, void> {
-    const si = req.config?.systemInstruction;
-    const sys = typeof si === 'string' ? si : contentText(si as Content);
-    let resp = this.scripts.test ?? '';
-    if (sys.includes('triaging')) {
-      resp = this.scripts.triage ?? '';
-    } else if (sys.includes('planning where to add')) {
-      resp = this.scripts.plan ?? '';
-    }
-    yield { content: { role: 'model', parts: [{ text: resp }] }, turnComplete: true };
-  }
-  override async connect(): Promise<never> {
-    throw new Error('not supported');
-  }
-}
 
 describe('covfixer triage', () => {
   it('parses a triage JSON array', () => {

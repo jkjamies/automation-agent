@@ -55,9 +55,9 @@ export interface ApplyResult {
  * remove `repo.dir()` when done.
  */
 export async function openRepo(cfg: ApplyConfig): Promise<Repo> {
-  // Repo.clone requires the target dir not to already exist.
+  // Clone into a fresh, empty temp dir; git clone accepts an existing empty
+  // directory, so there is no create-then-delete race on the target path.
   const dir = mkdtempSync(join(tmpdir(), 'agentfix-'));
-  rmSync(dir, { recursive: true, force: true });
   let repo: Repo;
   try {
     repo = await Repo.clone(cfg.cloneUrl, dir, cfg.token);
