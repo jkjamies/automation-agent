@@ -172,6 +172,8 @@ export function parseDuration(s: string): number {
   if (text === '') {
     throw new Error('CI_TIMEOUT: empty duration');
   }
+  // Repeated units (e.g. "90m90m") are summed, matching Go's time.ParseDuration leniency
+  // (the reference) — intentional parity, not a bug.
   const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
   const matches = [...text.matchAll(re)];
   const consumed = matches.map((m) => m[1]! + m[2]!).join('');

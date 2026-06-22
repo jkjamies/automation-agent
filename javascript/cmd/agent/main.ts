@@ -177,11 +177,19 @@ async function run(): Promise<void> {
     void p.finally(() => inFlight.delete(p));
   };
 
-  // Scheduler: croner fires on the event loop; dispatch in the background (tracked).
+  // Scheduler: croner fires on the event loop; dispatch in the background. Tracked for drain
+  // but not permit-bounded — cron is only the daily/weekly fires, and the Go reference
+  // likewise bounds only webhook dispatch (cmd/agent/main.go), not cron.
   const sched = new Scheduler((e) => track(safeDispatch(e)));
   sched.add(cfg.cronDaily, Kind.CronDaily);
   sched.add(cfg.cronWeekly, Kind.CronWeekly);
 
+  if (!cfg.githubWebhookSecret) {
+    emit(
+      'WARN',
+      'GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; the /webhooks/github route accepts unauthenticated requests (dev only)',
+    );
+  }
   // Webhooks enqueue asynchronously and return fast; a permit bounds concurrency.
   const srv = new Server(
     async (e) => {

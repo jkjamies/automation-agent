@@ -114,6 +114,13 @@ private fun run() {
     scheduler.add(cfg.cronWeekly, Kind.CRON_WEEKLY)
     scheduler.start()
 
+    if (cfg.githubWebhookSecret.isEmpty()) {
+        log.log(
+            Level.WARNING,
+            "GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; " +
+                "the /webhooks/github route accepts unauthenticated requests (dev only)",
+        )
+    }
     // Webhooks enqueue asynchronously and return fast.
     val server =
         webhookServer(

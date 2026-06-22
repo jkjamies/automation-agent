@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from google.adk.agents import BaseAgent
+from google.adk.apps import App
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
@@ -18,9 +19,9 @@ from automation_agent.agent.setup.events import content_text, user_text
 
 def new_runner(app_name: str, root: BaseAgent) -> Runner:
     """Build an in-memory runner rooted at ``root``."""
+    app = App(name=app_name, root_agent=root)
     return Runner(
-        app_name=app_name,
-        agent=root,
+        app=app,
         session_service=InMemorySessionService(),
         auto_create_session=True,
     )

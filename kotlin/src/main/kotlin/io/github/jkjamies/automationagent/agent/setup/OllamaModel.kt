@@ -315,8 +315,11 @@ private fun jsonElementToAny(el: JsonElement): Any? =
             when {
                 el.isString -> el.content
                 el.booleanOrNull != null -> el.boolean
-                el.longOrNull != null -> el.longOrNull
+                // intOrNull first so a value that fits returns Int (not always Long); larger
+                // integers still fall through to Long. A tool arg schema typed INTEGER then
+                // receives an Int rather than a Long.
                 el.intOrNull != null -> el.intOrNull
+                el.longOrNull != null -> el.longOrNull
                 el.doubleOrNull != null -> el.doubleOrNull
                 else -> el.content
             }

@@ -149,6 +149,11 @@ async def run() -> None:
         pending.add(task)
         task.add_done_callback(pending.discard)
 
+    if not cfg.github_webhook_secret:
+        log.warning(
+            "GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; "
+            "the /webhooks/github route accepts unauthenticated requests (dev only)"
+        )
     srv = Server(_ingest, secret=cfg.github_webhook_secret)
 
     server = uvicorn.Server(

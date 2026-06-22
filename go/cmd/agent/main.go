@@ -110,6 +110,9 @@ func run(logger *slog.Logger) error {
 	// runs are still in-memory, so a restart strands them — an accepted trade.)
 	var dispatchWG sync.WaitGroup
 	dispatchSem := make(chan struct{}, maxConcurrentDispatch)
+	if cfg.GitHubWebhookSecret == "" {
+		logger.Warn("GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; the /webhooks/github route accepts unauthenticated requests (dev only)")
+	}
 	srv := webhook.New(func(_ context.Context, e ingest.Envelope) error {
 		dispatchSem <- struct{}{} // bound concurrency (backpressure under burst)
 		dispatchWG.Add(1)
