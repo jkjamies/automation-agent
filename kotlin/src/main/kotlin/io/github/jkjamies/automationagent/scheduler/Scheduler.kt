@@ -58,7 +58,7 @@ class Scheduler(
             Entry.Every(interval, kind)
         } else {
             val cron = parser.parse(spec).validate() // throws IllegalArgumentException on invalid
-            Entry.Cron(ExecutionTime.forCron(cron), kind)
+            Entry.Cron(ExecutionTime.forCron(cron), kind, now)
         }
     }
 
@@ -101,11 +101,16 @@ private sealed interface Entry {
         override fun nextDelayMillis(): Long = interval.inWholeMilliseconds.coerceAtLeast(1)
     }
 
-    class Cron(private val exec: ExecutionTime, override val kind: Kind) : Entry {
+    class Cron(
+        private val exec: ExecutionTime,
+        override val kind: Kind,
+        private val now: () -> Instant,
+    ) : Entry {
         override fun nextDelayMillis(): Long {
             // Cron fields are interpreted in UTC, not the (undocumented) host zone, so "0 9 * * *"
             // means 09:00 UTC on every deployment regardless of the container's local timezone.
-            val nowZ = ZonedDateTime.now(ZoneOffset.UTC)
+            // The clock is injected (not ZonedDateTime.now) so the next-fire delay is testable.
+            val nowZ = ZonedDateTime.ofInstant(now(), ZoneOffset.UTC)
             val next = exec.nextExecution(nowZ).orElse(null) ?: return 60_000
             return java.time.Duration.between(nowZ, next).toMillis().coerceAtLeast(1)
         }

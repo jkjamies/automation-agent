@@ -2,7 +2,7 @@
 
 This guide shows how a CI workflow on **any** tech stack calls the automation-agent's
 lint-fixer. The agent is format-agnostic: your CI sends whatever its linter emits,
-and an LLM triage step normalizes it (see `docs/architecture.md` §8). You only need
+and an LLM triage step normalizes it (see `.agents/standards/architecture-design.md` §8). You only need
 to send a small, trusted envelope.
 
 ## The kickoff contract

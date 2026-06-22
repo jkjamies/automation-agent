@@ -56,4 +56,4 @@ Wiring: `root` registers `KindLint`/`KindCI`; `cmd` builds the engine (via
 `new_engine`), the scheduler, and the webhook server. The kickoff/suspend/resume
 mechanics live in `fixflow`. Provider SDKs (genai) are kept out via `setup` helpers.
 Tests use a stub/scripted LLM + fakes + a local seed repo; live LLM tests are gated
-behind `OLLAMA_LIVE`. See `docs/architecture.md` §8.
+behind `OLLAMA_LIVE`. See `.agents/standards/architecture-design.md` §8.

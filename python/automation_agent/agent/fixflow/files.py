@@ -15,6 +15,7 @@ def _safe_join(root: str, rel: str) -> str:
     paths that escape the root via ``..``."""
     if os.path.isabs(rel):
         raise ValueError(f"absolute path {rel!r} not allowed")
+    root = os.path.normpath(os.path.abspath(root))
     full = os.path.normpath(os.path.join(root, rel))
     if full != root and not full.startswith(root + os.sep):
         raise ValueError(f"path {rel!r} escapes the repo")

@@ -1,6 +1,6 @@
 // Package ingest defines the normalized event envelope that every ingress
 // source (cron, webhooks, and future hooks like GitHub/Jira/Confluence) is
-// reduced to before being handed to the root agent. See docs/architecture.md §2.
+// reduced to before being handed to the root agent. See .agents/standards/architecture-design.md §2.
 package ingest
 
 import "time"

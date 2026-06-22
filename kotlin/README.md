@@ -25,6 +25,6 @@ cp ../.env.example .env    # same env vars as the Go reference
 ## Design
 
 The architecture is identical to the Go reference and documented once, language-neutrally,
-in [`../docs/architecture.md`](../docs/architecture.md). This port mirrors its package
+in [`../.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md). This port mirrors its package
 structure, public surface, configuration, and external contracts. See [`AGENTS.md`](AGENTS.md)
 for the package map.

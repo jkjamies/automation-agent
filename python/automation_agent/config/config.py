@@ -1,7 +1,7 @@
 """Runtime configuration for automation-agent, loaded from the environment.
 
 This module is the single source of truth for settings; no other module should
-read ``os.environ`` directly. See ``docs/architecture.md`` §12.
+read ``os.environ`` directly. See ``.agents/standards/architecture-design.md`` §12.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ def load_from(get: Lookup) -> Config:
         llm_provider=Provider(_get_or(get, "LLM_PROVIDER", Provider.OLLAMA.value)),
         ollama_host=_get_or(get, "OLLAMA_HOST", "http://localhost:11434"),
         ollama_model=_get_or(get, "OLLAMA_MODEL", "gemma4:12b"),
-        ollama_code_model=_get_or(get, "OLLAMA_CODE_MODEL", ""),
+        ollama_code_model=_get_or(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
         gemini_model=_get_or(get, "GEMINI_MODEL", ""),
         gemini_code_model=_get_or(get, "GEMINI_CODE_MODEL", ""),
         repos=_split_list(_get_or(get, "REPOS", "")),

@@ -1,7 +1,7 @@
 # automation-agent (Python / ADK)
 
 This package is an automation service built on the Agent Development Kit (ADK).
-Read [`docs/architecture.md`](../docs/architecture.md) first — it is the
+Read [`.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md) first — it is the
 authoritative design.
 
 ## System flow

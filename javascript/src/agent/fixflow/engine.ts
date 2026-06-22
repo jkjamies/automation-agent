@@ -49,6 +49,7 @@ export interface AnalyzeInput {
   repoDir: string;
   work: FileWork[];
   feedback: string; // previous attempt's CI failure, on retry
+  log?: Logger | null; // structured logger for skipped/unreadable files (optional)
 }
 
 /** Return the code-change model, falling back to the default when none is set. */
@@ -210,6 +211,7 @@ export class Engine {
         repoDir: repo.dir(),
         work,
         feedback: rp.feedback,
+        log: this.d.log,
       });
       return await commit(this.d.gh, repo, cfg, edits);
     } finally {

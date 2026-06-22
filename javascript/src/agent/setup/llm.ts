@@ -4,7 +4,7 @@
  * `setup` is the ONLY module permitted to import provider SDKs (the Ollama adapter,
  * Gemini) — enforced by the arch tests. Agents depend only on the returned
  * `BaseLlm`, so switching providers is a config change, not a code change. See
- * docs/architecture.md §4.
+ * .agents/standards/architecture-design.md §4.
  */
 import type { BaseLlm } from '@google/adk';
 

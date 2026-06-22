@@ -1,6 +1,6 @@
 // Package config loads the automation-agent runtime configuration from the
 // environment. It is the single source of truth for settings; no other package
-// should read os.Getenv directly. See docs/architecture.md §12.
+// should read os.Getenv directly. See .agents/standards/architecture-design.md §12.
 package config
 
 import (
@@ -73,7 +73,7 @@ func loadFrom(get lookup) (Config, error) {
 		LLMProvider:         Provider(getOr(get, "LLM_PROVIDER", string(ProviderOllama))),
 		OllamaHost:          getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
 		OllamaModel:         getOr(get, "OLLAMA_MODEL", "gemma4:12b"),
-		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", ""),
+		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
 		GeminiModel:         getOr(get, "GEMINI_MODEL", ""),
 		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
 		Repos:               splitList(getOr(get, "REPOS", "")),

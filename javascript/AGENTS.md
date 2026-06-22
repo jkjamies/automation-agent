@@ -12,7 +12,7 @@ The PR + CI suspend/resume loop runs on ADK long-running tools plus an in-memory
 parked-run registry (no durable store; a restart strands in-flight runs). Deterministic,
 agent-free tooling lives under `src/` and is called by agents but never imports them.
 
-The authoritative, language-neutral design is [`docs/architecture.md`](../docs/architecture.md).
+The authoritative, language-neutral design is [`.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md).
 
 ## Conventions (enforced by `arch/` + `make ci`)
 

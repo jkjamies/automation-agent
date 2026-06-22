@@ -16,7 +16,10 @@ func Analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, 
 	return fixflow.ParallelAnalyze(ctx, in.Work, func(ctx context.Context, w fixflow.FileWork) (fixflow.FileEdit, error) {
 		src, err := fixflow.ReadFile(in.RepoDir, w.Path)
 		if err != nil {
-			return fixflow.FileEdit{}, nil // unreadable file -> skip
+			// Unreadable file (incl. a path that escapes the repo root, which ReadFile
+			// rejects) -> skip. Log it so a skip is distinguishable from "nothing to do".
+			in.Logger().Warn("lint analyze: skipping unreadable file", "path", w.Path, "err", err)
+			return fixflow.FileEdit{}, nil
 		}
 		out, err := setup.GenerateText(ctx, in.Coder(), prompts.MustGet("analyze"), buildFilePrompt(w, src, in.Feedback))
 		if err != nil {

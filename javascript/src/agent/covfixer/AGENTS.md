@@ -34,4 +34,4 @@ flowchart TD
 The placement plan is grounded in the repo's actual existing tests (read via the explore
 tools), never derived from a fixed rule. Tests use a scripted LLM routed by system
 instruction (triage / explore-plan / execute) and assert on structure, never on
-LLM-authored content. See `docs/architecture.md` §8.
+LLM-authored content. See `.agents/standards/architecture-design.md` §8.

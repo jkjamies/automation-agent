@@ -3,7 +3,7 @@
 This is the **only** module permitted to import provider SDKs (LiteLlm for the
 local Ollama/Gemma path, Gemini for the cloud path) — enforced by the arch tests.
 Agents depend only on the returned ``BaseLlm``, so switching providers is a config
-change, not a code change. See ``docs/architecture.md`` §4.
+change, not a code change. See ``.agents/standards/architecture-design.md`` §4.
 
 ADK Python ships Ollama support via LiteLLM, so the local path uses
 ``LiteLlm(model="ollama_chat/<model>")``.

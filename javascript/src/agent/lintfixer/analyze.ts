@@ -22,8 +22,10 @@ export async function analyze(input: AnalyzeInput): Promise<FileEdit[]> {
     let src: string;
     try {
       src = readFile(input.repoDir, w.path);
-    } catch {
-      // Any read error (including a path that escapes the repo root) -> skip.
+    } catch (err) {
+      // Any read error (including a path that escapes the repo root) -> skip. Log it so a
+      // skip is distinguishable from "nothing to do".
+      input.log?.warn('lint analyze: skipping unreadable file', { path: w.path, err: String(err) });
       return { path: '', content: '' };
     }
     const out = await generateText(

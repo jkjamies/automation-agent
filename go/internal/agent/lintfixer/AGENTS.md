@@ -57,4 +57,4 @@ attempt counting, the CI timeout) live in the shared `fixflow` package.
 Wiring: `root` registers `KindLint`/`KindCI`; `cmd` builds the engine (via `NewEngine`),
 the scheduler, and the webhook server. Provider SDKs (genai) are kept out via `setup`
 helpers. Tests use a stub/scripted LLM + fakes + a local seed repo; live LLM tests
-are gated behind `OLLAMA_LIVE`. See `docs/architecture.md` §8.
+are gated behind `OLLAMA_LIVE`. See `.agents/standards/architecture-design.md` §8.

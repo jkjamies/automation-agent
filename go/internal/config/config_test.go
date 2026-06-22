@@ -20,8 +20,8 @@ func TestLoadDefaults(t *testing.T) {
 	if c.OllamaModel != "gemma4:12b" {
 		t.Errorf("OllamaModel = %q, want gemma4:12b", c.OllamaModel)
 	}
-	if c.OllamaCodeModel != "gemma4:12b" {
-		t.Errorf("OllamaCodeModel = %q, want fallback to gemma4:12b", c.OllamaCodeModel)
+	if c.OllamaCodeModel != "gemma4:26b" {
+		t.Errorf("OllamaCodeModel = %q, want default gemma4:26b", c.OllamaCodeModel)
 	}
 	if c.NotifyProvider != NotifySlack {
 		t.Errorf("NotifyProvider = %q, want slack", c.NotifyProvider)

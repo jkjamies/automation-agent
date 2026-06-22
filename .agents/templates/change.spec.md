@@ -25,4 +25,4 @@ How to revert.
 - [ ] ARCH boundaries respected (`make arch`)
 - [ ] `AGENTS.md` updated if behavior/responsibility shifted
 - [ ] `make ci` green
-- [ ] `docs/architecture.md` updated if the design changed
+- [ ] `.agents/standards/architecture-design.md` updated if the design changed

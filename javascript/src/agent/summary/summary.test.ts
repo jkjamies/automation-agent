@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 import type { Commit } from '../../githubapi/client';
 import type { Message, Notifier } from '../../notify/notify';
 import { FakeLlm } from '../../testutil/fakes';
+import { safeName } from '../setup/names';
 import { drive, driveCollectState, newRunner } from '../setup/runner';
 import { buildSummaryAgent } from './agentsSetup';
 import {
   buildInstruction,
   type CommitLister,
   formatCommits,
-  safeName,
   splitRepo,
   summaryInstruction,
 } from './summary';

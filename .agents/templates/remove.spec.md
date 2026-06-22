@@ -26,4 +26,4 @@ How to restore if removal causes fallout.
 - [ ] No dangling imports/refs (`make build`, `make vet`)
 - [ ] `AGENTS.md` for removed dirs deleted
 - [ ] `make ci` green
-- [ ] `docs/architecture.md` updated
+- [ ] `.agents/standards/architecture-design.md` updated

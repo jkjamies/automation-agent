@@ -32,4 +32,4 @@ flowchart TD
 - `config.py` — `load_from(lookup)` keeps loading testable without touching the real
   environment.
 - `validate()` enforces invariants defaults can't (provider enums, `max_iterations >= 1`).
-- See `docs/architecture.md` §12 and `.env.example` for the full variable list.
+- See `.agents/standards/architecture-design.md` §12 and `.env.example` for the full variable list.

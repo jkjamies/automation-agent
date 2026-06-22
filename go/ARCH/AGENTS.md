@@ -29,7 +29,7 @@ flowchart TD
     C3 -->|yes| F3["t.Errorf: imports cmd package"]
     C3 -->|no| OK3["pass"]
 
-    T4 --> C4{"every dir has AGENTS.md?<br/>(skipDocDir: docs, prompts, models,<br/>tasks, testdata, hidden != .agents)"}
+    T4 --> C4{"every dir has AGENTS.md?<br/>(skipDocDir: specs, prompts, models,<br/>tasks, testdata, hidden != .agents)"}
     C4 -->|missing| F4["t.Errorf: missing AGENTS.md in <dir>"]
     C4 -->|"all present (.agents not descended)"| OK4["pass"]
 ```

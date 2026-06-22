@@ -35,6 +35,7 @@ type AnalyzeInput struct {
 	RepoDir  string
 	Work     []FileWork
 	Feedback string // previous attempt's CI failure, on retry
+	Log      *slog.Logger
 }
 
 // Coder returns the code-change model, falling back to the default model when no
@@ -44,6 +45,15 @@ func (in AnalyzeInput) Coder() model.LLM {
 		return in.CodeLLM
 	}
 	return in.LLM
+}
+
+// Logger returns the injected logger, or the default logger when none was set
+// (e.g. in tests that construct an AnalyzeInput directly).
+func (in AnalyzeInput) Logger() *slog.Logger {
+	if in.Log != nil {
+		return in.Log
+	}
+	return slog.Default()
 }
 
 // AnalyzeFunc produces the whole-file edits to apply (rewritten source, new tests, …).
@@ -180,7 +190,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 	}
 	defer os.RemoveAll(gitRepo.Dir())
 
-	edits, err := e.spec.Analyze(ctx, AnalyzeInput{LLM: e.d.LLM, CodeLLM: e.d.CodeLLM, RepoDir: gitRepo.Dir(), Work: work, Feedback: rp.feedback})
+	edits, err := e.spec.Analyze(ctx, AnalyzeInput{LLM: e.d.LLM, CodeLLM: e.d.CodeLLM, RepoDir: gitRepo.Dir(), Work: work, Feedback: rp.feedback, Log: e.d.Log})
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}

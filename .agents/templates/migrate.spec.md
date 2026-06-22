@@ -20,7 +20,7 @@ Stepwise, each step independently shippable and reversible:
 
 ## Data / state
 What state must be carried over and how (recall: GitHub is the source of truth for
-lint-fixer; a store only enters on scale-out — see `docs/architecture.md` §8).
+lint-fixer; a store only enters on scale-out — see `.agents/standards/architecture-design.md` §8).
 
 ## Test plan
 Tests proving parity before/after each step. Coverage ≥80%.
@@ -32,4 +32,4 @@ Per-step rollback, and the point of no return (if any).
 - [ ] Each step independently green under `make ci`
 - [ ] ARCH boundaries respected
 - [ ] `AGENTS.md` files moved/updated with the code
-- [ ] `docs/architecture.md` updated
+- [ ] `.agents/standards/architecture-design.md` updated

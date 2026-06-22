@@ -8,7 +8,7 @@ import (
 )
 
 // TestEveryDirHasAgentsDoc asserts that every meaningful directory carries an
-// AGENTS.md. docs/ and specs/ and hidden dirs (except .agents) are exempt.
+// AGENTS.md. specs/ and hidden dirs (except .agents) are exempt.
 func TestEveryDirHasAgentsDoc(t *testing.T) {
 	root := repoRoot(t)
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -42,7 +42,7 @@ func TestEveryDirHasAgentsDoc(t *testing.T) {
 
 func skipDocDir(base string) bool {
 	switch base {
-	case ".git", ".claude", "node_modules", "vendor", "specs", "docs":
+	case ".git", ".claude", "node_modules", "vendor", "specs":
 		return true
 	// Content subdirs of an agent are documented by the agent's shared AGENTS.md.
 	case "prompts", "models", "tasks", "testdata":

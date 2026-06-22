@@ -7,6 +7,7 @@ package io.github.jkjamies.automationagent.agent.summary
 import com.google.adk.kt.agents.BaseAgent
 import com.google.adk.kt.agents.InvocationContext
 import com.google.adk.kt.events.Event
+import io.github.jkjamies.automationagent.agent.setup.safeName
 import io.github.jkjamies.automationagent.agent.setup.textEvent
 import io.github.jkjamies.automationagent.githubapi.Commit
 import kotlinx.coroutines.flow.Flow
@@ -79,7 +80,3 @@ internal fun splitRepo(s: String): Pair<String, String>? {
     val repo = s.substringAfter('/', "")
     return if (owner.isEmpty() || repo.isEmpty() || !s.contains('/')) null else owner to repo
 }
-
-/** Replaces every non-ASCII-alphanumeric character with `_`, for a safe agent name. */
-internal fun safeName(s: String): String =
-    s.map { c -> if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') c else '_' }.joinToString("")

@@ -15,7 +15,7 @@ def test_load_defaults() -> None:
     c = load_from(map_lookup({}))
     assert c.llm_provider == Provider.OLLAMA
     assert c.ollama_model == "gemma4:12b"
-    assert c.ollama_code_model == "gemma4:12b"  # fallback
+    assert c.ollama_code_model == "gemma4:26b"  # default
     assert c.notify_provider == NotifyProvider.SLACK
     assert c.max_iterations == 3
     assert c.ci_timeout.total_seconds() == 90 * 60

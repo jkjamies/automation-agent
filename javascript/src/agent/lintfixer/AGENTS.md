@@ -36,4 +36,4 @@ flowchart TD
 Wiring: `root` registers `Lint`/`CI`; `cmd` builds the engine (via `newLintEngine`), the
 scheduler, and the webhook server. The kickoff/suspend/resume mechanics live in `fixflow`.
 Provider SDKs are kept out via `setup` helpers. Tests use a scripted LLM + fakes + a local
-seed repo. See `docs/architecture.md` §8.
+seed repo. See `.agents/standards/architecture-design.md` §8.

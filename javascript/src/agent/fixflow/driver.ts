@@ -65,7 +65,7 @@ export class Driver {
       name: TOOL_APPLY_FIX,
       description: 'Apply the fix for the current run and open/update its PR.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: (_input: unknown, ctx: any) => this.applyFixTool(ctx),
+      execute: (_input: unknown, ctx?: { sessionId?: string }) => this.applyFixTool(ctx),
     });
     const awaitCiTool = new LongRunningFunctionTool({
       name: TOOL_AWAIT_CI,
@@ -97,7 +97,7 @@ export class Driver {
    * id (Driver-owned), so the model's args cannot influence the target. Returns
    * `{ error }` on failure so the Sequencer's apply-error branch can conclude.
    */
-  private async applyFixTool(ctx: { sessionId?: string }): Promise<Record<string, unknown>> {
+  private async applyFixTool(ctx?: { sessionId?: string }): Promise<Record<string, unknown>> {
     try {
       const sid = ctx?.sessionId ?? '';
       const rp = this.runs.get(sid);

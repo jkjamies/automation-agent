@@ -31,4 +31,4 @@ flowchart TD
 
 - `loadFrom(lookup)` keeps loading testable without touching the real environment.
 - `Validate()` enforces invariants defaults can't (provider enums, `MaxIterations >= 1`).
-- See `docs/architecture.md` §12 and `.env.example` for the full variable list.
+- See `.agents/standards/architecture-design.md` §12 and `.env.example` for the full variable list.

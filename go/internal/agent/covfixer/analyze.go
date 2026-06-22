@@ -51,10 +51,14 @@ func execute(ctx context.Context, in fixflow.AnalyzeInput, plan map[string]planE
 	return fixflow.ParallelAnalyze(ctx, in.Work, func(ctx context.Context, w fixflow.FileWork) (fixflow.FileEdit, error) {
 		p, ok := plan[w.Path]
 		if !ok || strings.TrimSpace(p.TestPath) == "" {
-			return fixflow.FileEdit{}, nil // explorer couldn't place it -> skip
+			// Explorer couldn't place a test for this file -> skip. Log it so a skip is
+			// distinguishable from "nothing to do".
+			in.Logger().Warn("coverage analyze: skipping file with no test placement", "path", w.Path)
+			return fixflow.FileEdit{}, nil
 		}
 		src, err := fixflow.ReadFile(in.RepoDir, w.Path)
 		if err != nil {
+			in.Logger().Warn("coverage analyze: skipping unreadable file", "path", w.Path, "err", err)
 			return fixflow.FileEdit{}, nil
 		}
 		out, err := setup.GenerateText(ctx, in.Coder(), prompts.MustGet("analyze"), buildExecuteInput(w, src, p, in.Feedback))

@@ -2,7 +2,7 @@
 
 Cron, webhooks, and future hooks (GitHub/Jira/Confluence) are all normalized to
 an :class:`Envelope` before being handed to the root agent. See
-``docs/architecture.md`` §2.
+``.agents/standards/architecture-design.md`` §2.
 """
 
 from __future__ import annotations

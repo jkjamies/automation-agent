@@ -11,7 +11,7 @@ describe('config', () => {
     const c = loadFrom(mapLookup({}));
     expect(c.llmProvider).toBe(Provider.Ollama);
     expect(c.ollamaModel).toBe('gemma4:12b');
-    expect(c.ollamaCodeModel).toBe('gemma4:12b'); // fallback
+    expect(c.ollamaCodeModel).toBe('gemma4:26b'); // default
     expect(c.notifyProvider).toBe(NotifyProvider.Slack);
     expect(c.maxIterations).toBe(3);
     expect(c.ciTimeoutMs).toBe(90 * 60 * 1000);

@@ -16,7 +16,7 @@ flowchart TD
 
 - `Summary.kt` — `CommitLister` (consumer interface), `FetchAgent` (a custom `BaseAgent` that
   fetches commits and writes `commits:<repo>` to state), and the pure helpers `buildInstruction`,
-  `formatCommits`, `firstLine`, `shortSha`, `splitRepo`, `safeName`.
+  `formatCommits`, `firstLine`, `shortSha`, `splitRepo` (`safeName` is shared from `agent/setup`).
 - `SummaryAgents.kt` — `buildSummaryAgent(SummaryDeps)` composing
   `Sequential[ Parallel[fetch×N] -> SummarizeAndNotifyAgent ]`.
 - `resources/prompts/summary/summarize.md` — the summarizer prompt (loaded via `Prompts`).

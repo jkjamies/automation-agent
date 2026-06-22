@@ -2,7 +2,7 @@
  * Runtime configuration for automation-agent, loaded from the environment.
  *
  * This module is the single source of truth for settings; no other module should
- * read `process.env` directly. See docs/architecture.md §12.
+ * read `process.env` directly. See .agents/standards/architecture-design.md §12.
  */
 
 /** Looks up an environment variable, returning undefined when unset. */
@@ -78,7 +78,7 @@ export function loadFrom(get: Lookup): Config {
     llmProvider: getOr(get, 'LLM_PROVIDER', Provider.Ollama) as Provider,
     ollamaHost: getOr(get, 'OLLAMA_HOST', 'http://localhost:11434'),
     ollamaModel: getOr(get, 'OLLAMA_MODEL', 'gemma4:12b'),
-    ollamaCodeModel: getOr(get, 'OLLAMA_CODE_MODEL', ''),
+    ollamaCodeModel: getOr(get, 'OLLAMA_CODE_MODEL', 'gemma4:26b'),
     geminiModel: getOr(get, 'GEMINI_MODEL', ''),
     geminiCodeModel: getOr(get, 'GEMINI_CODE_MODEL', ''),
     repos: splitList(getOr(get, 'REPOS', '')),

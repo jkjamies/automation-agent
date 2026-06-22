@@ -5,6 +5,7 @@ import com.google.adk.kt.models.LlmResponse
 import com.google.adk.kt.models.Model
 import io.github.jkjamies.automationagent.agent.setup.drive
 import io.github.jkjamies.automationagent.agent.setup.newRunner
+import io.github.jkjamies.automationagent.agent.setup.safeName
 import io.github.jkjamies.automationagent.githubapi.Commit
 import io.github.jkjamies.automationagent.notify.Message
 import io.github.jkjamies.automationagent.notify.Notifier

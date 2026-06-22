@@ -58,13 +58,15 @@ async function execute(input: AnalyzeInput, plan: Map<string, PlanEntry>): Promi
   const edit = async (w: FileWork): Promise<FileEdit> => {
     const p = plan.get(w.path);
     if (!p || p.testPath.trim() === '') {
+      input.log?.warn('coverage analyze: skipping file with no test placement', { path: w.path });
       return { path: '', content: '' }; // explorer couldn't place it -> skip
     }
     let src: string;
     try {
       src = readFile(input.repoDir, w.path);
-    } catch {
+    } catch (err) {
       // Any read error (including a path escaping the repo root) -> skip.
+      input.log?.warn('coverage analyze: skipping unreadable file', { path: w.path, err: String(err) });
       return { path: '', content: '' };
     }
     const out = await generateText(

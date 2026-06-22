@@ -32,4 +32,4 @@ flowchart TD
   without waiting on real time; `now` is injectable.
 
 Note: the Monday lint trigger is expected to come from an external CI job posting to
-`/webhooks/lint`, not from a cron here — see `docs/architecture.md` §8.
+`/webhooks/lint`, not from a cron here — see `.agents/standards/architecture-design.md` §8.

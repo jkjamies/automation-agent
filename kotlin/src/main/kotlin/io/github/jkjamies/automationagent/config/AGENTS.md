@@ -3,7 +3,7 @@
 Single source of truth for runtime configuration: loaded once from the environment
 (`Config.load()`) and passed down; **no other package reads the environment**.
 
-For the full variable list see `docs/architecture.md` §12 and `.env.example`.
+For the full variable list see `.agents/standards/architecture-design.md` §12 and `.env.example`.
 
 ## Details
 

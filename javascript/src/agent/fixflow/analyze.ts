@@ -10,6 +10,7 @@ import { BaseAgent, type Event, ParallelAgent } from '@google/adk';
 
 import { newRunner, driveCollectState } from '../setup/runner';
 import { textEvent } from '../setup/events';
+import { safeName } from '../setup/names';
 import type { FileEdit } from './applyfix';
 import type { FileWork } from './engine';
 
@@ -22,10 +23,6 @@ const PATH_PREFIX = 'path:'; // state key per file: path:<path> -> target edit p
  * content) to skip this file.
  */
 export type EditFunc = (work: FileWork) => Promise<FileEdit>;
-
-function safeName(s: string): string {
-  return [...s].map((ch) => (/[a-zA-Z0-9]/.test(ch) ? ch : '_')).join('');
-}
 
 /**
  * A BaseAgent that runs the edit function for one file and emits its edit as a state

@@ -36,7 +36,7 @@ The image builds **only** `cmd/agent` (the playground is never deployed). Point
 
 ## Cloud (Phase 6 — outline, not yet built)
 
-Recall the design constraints (`docs/architecture.md` §8, §13): the fix loop's state
+Recall the design constraints (`.agents/standards/architecture-design.md` §8, §13): the fix loop's state
 is an **in-memory parked-run registry** (non-durable), so no persistent disk or
 database is needed — but the trade-off is that a restart strands in-flight runs.
 GitHub holds the durable PR artifacts but isn't consulted for recovery.

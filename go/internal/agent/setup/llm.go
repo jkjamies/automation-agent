@@ -14,7 +14,7 @@ import (
 
 // BuildLLM returns the default model.LLM (triage, explore, summary) for the
 // configured provider. Agents depend only on the returned interface, so switching
-// providers is a config change, not a code change. See docs/architecture.md §4.
+// providers is a config change, not a code change. See .agents/standards/architecture-design.md §4.
 func BuildLLM(ctx context.Context, cfg config.Config) (model.LLM, error) {
 	return buildLLM(ctx, cfg, cfg.OllamaModel, cfg.GeminiModel)
 }

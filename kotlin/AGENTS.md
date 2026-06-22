@@ -2,7 +2,7 @@
 
 This is the **Kotlin port** of `automation-agent`. The canonical reference is the **Go**
 implementation in [`../go/`](../go/); this port must stay **1:1 in functionality** with it.
-Read the language-neutral design in [`../docs/architecture.md`](../docs/architecture.md)
+Read the language-neutral design in [`../.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md)
 and the parity contract in
 [`../.agents/standards/language-parity.md`](../.agents/standards/language-parity.md) first.
 

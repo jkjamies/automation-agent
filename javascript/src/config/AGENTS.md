@@ -29,4 +29,4 @@ flowchart TD
   environment. `parseDuration` supports the duration-unit subset CI_TIMEOUT needs,
   returning milliseconds.
 - `validate()` enforces invariants defaults can't (provider enums, `maxIterations >= 1`).
-- See `docs/architecture.md` §12 and `.env.example` for the full variable list.
+- See `.agents/standards/architecture-design.md` §12 and `.env.example` for the full variable list.

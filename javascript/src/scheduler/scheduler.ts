@@ -3,7 +3,7 @@
  *
  * Each fire emits a normalized {@link Envelope} so the root agent treats
  * time-based triggers exactly like any other ingress. Deterministic tooling —
- * no agent imports. See docs/architecture.md §2.
+ * no agent imports. See .agents/standards/architecture-design.md §2.
  */
 
 import { Cron } from 'croner';
@@ -16,7 +16,7 @@ export type EmitFunc = (envelope: Envelope) => void;
 /** Registers cron specs that emit ingest envelopes. */
 export class Scheduler {
   private readonly emit: EmitFunc;
-  private now: () => Date;
+  private readonly now: () => Date;
   private readonly jobs: Cron[] = [];
   private running = false;
 

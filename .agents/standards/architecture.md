@@ -1,6 +1,6 @@
 # Architecture rules
 
-The authoritative design is `docs/architecture.md`. This file states the rules the
+The authoritative design is `.agents/standards/architecture-design.md`. This file states the rules the
 `ARCH/` suite enforces. These rules are **language-neutral**: they hold identically in
 the Go reference and in every port (`kotlin/`, `python/`). See
 `.agents/standards/language-parity.md` for the cross-language 1:1 contract.
@@ -28,4 +28,4 @@ a per-run `CI_TIMEOUT` timer bounds each wait. GitHub holds the durable PR artif
 (PR + label + check/SHA history) but is **not** consulted to recover in-flight state —
 a process restart strands parked runs (an accepted trade-off; crash recovery is out of
 scope). A database / shared registry is a scale-out concern only. See
-`docs/architecture.md` §8.
+`.agents/standards/architecture-design.md` §8.

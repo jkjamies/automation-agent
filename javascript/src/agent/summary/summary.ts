@@ -15,6 +15,7 @@ import {
 import type { Commit } from '../../githubapi/client';
 import { type Message, type Notifier } from '../../notify/notify';
 import { stateString, textEvent } from '../setup/events';
+import { safeName } from '../setup/names';
 
 export const STATE_PREFIX = 'commits:'; // one key per repo: commits:<owner/repo>
 export const DIGEST_KEY = 'digest'; // summarizer output
@@ -182,9 +183,4 @@ export function splitRepo(s: string): [string, string] | null {
     return null;
   }
   return [owner, repo];
-}
-
-/** Map `s` to an agent-name-safe string (non-alphanumerics become `_`). */
-export function safeName(s: string): string {
-  return [...s].map((ch) => (/[a-zA-Z0-9]/.test(ch) ? ch : '_')).join('');
 }

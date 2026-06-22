@@ -1,7 +1,7 @@
 /*
  * Package config loads the automation-agent runtime configuration from the
  * environment. It is the single source of truth for settings; no other package
- * should read the environment directly. See ../docs/architecture.md §12.
+ * should read the environment directly. See ../.agents/standards/architecture-design.md §12.
  */
 package io.github.jkjamies.automationagent.config
 
@@ -111,8 +111,9 @@ data class Config(
 
             val ollamaModel = getOr(get, "OLLAMA_MODEL", "gemma4:12b")
             val geminiModel = getOr(get, "GEMINI_MODEL", "")
-            // Code models default to the base models when unset.
-            val ollamaCodeModel = getOr(get, "OLLAMA_CODE_MODEL", "").ifEmpty { ollamaModel }
+            // Code-change steps use the larger 26b model by default; the Gemini code model
+            // still falls back to its base model when unset.
+            val ollamaCodeModel = getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b")
             val geminiCodeModel = getOr(get, "GEMINI_CODE_MODEL", "").ifEmpty { geminiModel }
 
             val c = Config(

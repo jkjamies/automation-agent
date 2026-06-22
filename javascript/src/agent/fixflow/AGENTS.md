@@ -40,4 +40,4 @@ flowchart TD
 - `util.ts` — text-recovery helpers for model output (JSON extraction, fence stripping).
 
 No durable store: parked runs live only in memory, so a process restart strands them
-(an accepted trade-off). See `docs/architecture.md` §8.
+(an accepted trade-off). See `.agents/standards/architecture-design.md` §8.

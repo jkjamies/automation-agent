@@ -1,7 +1,7 @@
 # automation-agent (Go / ADK)
 
 This module is an automation service built on the Agent Development Kit (ADK)
-(`google.golang.org/adk` v1.4.0). Read [`../docs/architecture.md`](../docs/architecture.md)
+(`google.golang.org/adk` v1.4.0). Read [`../.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md)
 first — it is the authoritative design.
 
 ## System flow

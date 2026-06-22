@@ -178,11 +178,15 @@ automation-agent/
 │   ├── AGENTS.md
 │   ├── skills/                    # reusable task recipes (e.g. add-workflow-agent.md)
 │   │   └── AGENTS.md
-│   ├── standards/                 # the rules of the codebase
+│   ├── standards/                 # the rules + canonical design/reference docs
+│   │   ├── architecture-design.md # THE authoritative design (this document)
+│   │   ├── architecture.md        # the import boundaries ARCH enforces
+│   │   ├── language-parity.md     # the cross-language 1:1 contract
+│   │   ├── ci-integration.md      # how CI sends lint/coverage reports
+│   │   ├── deployment.md          # local + cloud deployment
 │   │   ├── go-style.md
 │   │   ├── testing.md             # 80% rule, no-LLM-assert rule
 │   │   ├── agent-build-pattern.md # the setup-vs-logic split
-│   │   ├── architecture.md        # the import boundaries ARCH enforces
 │   │   └── AGENTS.md
 │   └── templates/                 # spec templates
 │       ├── add.spec.md
@@ -191,11 +195,8 @@ automation-agent/
 │       ├── migrate.spec.md
 │       └── AGENTS.md
 │
-├── specs/                         # GITIGNORED — developer memory, one file per change
+├── specs/                         # GITIGNORED — local dev/review docs (specs + parity-status.md)
 │   └── .gitkeep
-│
-├── docs/
-│   └── architecture.md            # this document
 │
 └── internal/
     ├── AGENTS.md

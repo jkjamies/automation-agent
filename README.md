@@ -18,7 +18,7 @@ Built on the [Agent Development Kit for Go](https://github.com/google/adk-go),
 local-first on **Ollama + Gemma**, with a config switch to **Gemini/Vertex** for
 cloud deployment.
 
-> **Design doc:** [`docs/architecture.md`](docs/architecture.md) is the source of
+> **Design doc:** [`.agents/standards/architecture-design.md`](.agents/standards/architecture-design.md) is the source of
 > truth for the architecture and decisions.
 
 ## Ports (Go · Kotlin · Python · TypeScript)
@@ -30,8 +30,8 @@ contract; a behavior change lands in Go first and is mirrored into every existin
 the same change (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
 - **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
-  (`com.google.adk:google-adk-kotlin-core:0.2.0`). Port in progress; see
-  [`kotlin/PORTING.md`](kotlin/PORTING.md).
+  (`com.google.adk:google-adk-kotlin-core:0.2.0`). A functional 1:1 port (`gradle build`
+  green).
 - **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
   port (`make ci` green).
 - **TypeScript** — [`javascript/`](javascript/), built on the official
@@ -50,8 +50,8 @@ make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
 
-See also [`docs/ci-integration.md`](docs/ci-integration.md) (how CI sends lint
-problems) and [`docs/deployment.md`](docs/deployment.md) (local + cloud).
+See also [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md) (how CI sends lint
+problems) and [`.agents/standards/deployment.md`](.agents/standards/deployment.md) (local + cloud).
 
 ## Status & TODO
 
@@ -61,7 +61,7 @@ work to reach a fully production-validated system:
 
 - [ ] **Add the `agent-lint-verify` GitHub Action** to each target repo (label-triggered
       check that reports lint results back to `/webhooks/github`). Template in
-      [`docs/ci-integration.md`](docs/ci-integration.md). *Without this, the lint-fixer
+      [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md). *Without this, the lint-fixer
       opens a PR but the loop never resumes.*
 - [ ] **Set `GITHUB_TOKEN`** (repo scope) in `.env` so the lint-fixer can push/PR and
       private repos (e.g. `omnivore`) can be read.
@@ -71,7 +71,7 @@ work to reach a fully production-validated system:
       to validate kickoff → PR → CI → resume → success/needs-review.
 - [ ] **Phase 6 — cloud deploy**: Cloud Run (`min-instances=1`) or GCE, Secret Manager,
       `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). Outline in
-      [`docs/deployment.md`](docs/deployment.md). No DB; in-flight fix runs are tracked
+      [`.agents/standards/deployment.md`](.agents/standards/deployment.md). No DB; in-flight fix runs are tracked
       in-memory, so run a single instance (a restart strands parked runs).
 
 Nice-to-haves:

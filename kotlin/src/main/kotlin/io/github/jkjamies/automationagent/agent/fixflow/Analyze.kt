@@ -6,6 +6,7 @@ import com.google.adk.kt.agents.ParallelAgent
 import com.google.adk.kt.events.Event
 import io.github.jkjamies.automationagent.agent.setup.driveCollectState
 import io.github.jkjamies.automationagent.agent.setup.newRunner
+import io.github.jkjamies.automationagent.agent.setup.safeName
 import io.github.jkjamies.automationagent.agent.setup.textEvent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -55,7 +56,3 @@ private class AnalyzerAgent(private val work: FileWork, private val fn: EditFunc
         }
     }
 }
-
-/** Replaces every non-ASCII-alphanumeric character with `_`, for a safe agent name. */
-internal fun safeName(s: String): String =
-    s.map { c -> if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') c else '_' }.joinToString("")

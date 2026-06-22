@@ -17,7 +17,7 @@ Each language targets its **own native ADK** (adk-go, adk-kotlin, adk-python, ad
 different idiomatic APIs. The shared contract is the *agent topology and behavior*, not the
 SDK calls.
 
-The language-neutral design lives in `docs/architecture.md`. When the design and a port
+The language-neutral design lives in `.agents/standards/architecture-design.md`. When the design and a port
 disagree, the design wins; when Go and a port disagree on undocumented behavior, **Go wins**.
 
 ## What "1:1" means
@@ -55,6 +55,6 @@ exceptions vs `error` returns, data classes vs structs). What must match across 
 - **Change Go first.** New behavior or fixes land in the reference, then propagate into
   every *existing* port within the same logical change set. Ports never silently drift.
 - **Touch one, check the rest.** A PR that edits any port must either update the others or
-  record the deliberate gap in that port's `PORTING.md` (status: not-yet-ported).
-- **Track status per port.** Each port root has a `PORTING.md` mapping every reference
-  package to its port state (done / in progress / pending) so drift is visible at a glance.
+  record the deliberate gap in the central parity record, `specs/parity-status.md`.
+- **Track drift centrally.** `specs/parity-status.md` maps each open divergence to its
+  per-port state (done / open / partial) so drift is visible at a glance.

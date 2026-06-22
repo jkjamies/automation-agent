@@ -14,7 +14,7 @@ class ConfigTest : BehaviorSpec({
             Then("it applies the documented defaults") {
                 c.llmProvider shouldBe Provider.OLLAMA
                 c.ollamaModel shouldBe "gemma4:12b"
-                c.ollamaCodeModel shouldBe "gemma4:12b"
+                c.ollamaCodeModel shouldBe "gemma4:26b"
                 c.notifyProvider shouldBe NotifyProvider.SLACK
                 c.maxIterations shouldBe 3
                 c.ciTimeout.inWholeMinutes shouldBe 90L

@@ -18,4 +18,4 @@ and Kotest. This is the analogue of the Go reference's `ARCH/` package and the P
 - **Every source package directory has an `AGENTS.md`.**
 
 These are language-neutral architecture rules; see `../../.agents/standards/architecture.md`
-and `docs/architecture.md` at the repo root.
+and `.agents/standards/architecture-design.md` at the repo root.
