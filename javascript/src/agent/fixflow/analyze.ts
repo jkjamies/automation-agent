@@ -62,6 +62,19 @@ class Analyzer extends BaseAgent {
 }
 
 /**
+ * Derive a unique sub-agent name from a path. safeName maps every non-alphanumeric char to
+ * `_`, so distinct paths (e.g. `a/b.kt` and `a-b.kt`) can collapse to the same name;
+ * ParallelAgent needs unique sub-agent names, so a collision gets a numeric suffix —
+ * otherwise one analyzer silently shadows another and that file's edits are dropped.
+ */
+function uniqueAnalyzerName(seen: Map<string, number>, path: string): string {
+  const base = 'analyze_' + safeName(path);
+  const n = (seen.get(base) ?? 0) + 1;
+  seen.set(base, n);
+  return n > 1 ? `${base}_${n}` : base;
+}
+
+/**
  * Fan out one analyzer per FileWork, call `fn` for each, and return the collected
  * non-empty edits sorted by path.
  *
@@ -73,7 +86,8 @@ export async function parallelAnalyze(work: FileWork[], fn: EditFunc): Promise<F
   }
   const sorted = [...work].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  const agents: BaseAgent[] = sorted.map((w) => new Analyzer('analyze_' + safeName(w.path), w, fn));
+  const seen = new Map<string, number>();
+  const agents: BaseAgent[] = sorted.map((w) => new Analyzer(uniqueAnalyzerName(seen, w.path), w, fn));
   const par = new ParallelAgent({
     name: 'analyze_all',
     description: 'Per-file analysis in parallel',

@@ -35,8 +35,9 @@ func ParallelAnalyze(ctx context.Context, work []FileWork, fn EditFunc) ([]FileE
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 
 	agents := make([]agent.Agent, 0, len(sorted))
+	seen := make(map[string]int, len(sorted))
 	for _, w := range sorted {
-		a, err := newAnalyzer(w, fn)
+		a, err := newAnalyzer(uniqueAnalyzerName(seen, w.Path), w, fn)
 		if err != nil {
 			return nil, fmt.Errorf("build analyzer for %s: %w", w.Path, err)
 		}
@@ -71,8 +72,21 @@ func ParallelAnalyze(ctx context.Context, work []FileWork, fn EditFunc) ([]FileE
 	return edits, nil
 }
 
-func newAnalyzer(w FileWork, fn EditFunc) (agent.Agent, error) {
-	name := "analyze_" + setup.SafeName(w.Path)
+// uniqueAnalyzerName derives a unique ADK sub-agent name from a path. SafeName maps every
+// non-alphanumeric character to '_', so distinct paths (e.g. "a/b.kt" and "a-b.kt") can
+// collapse to the same name; ParallelAgent requires unique sub-agent names, so a collision
+// gets a numeric suffix — otherwise one analyzer silently shadows another and that file's
+// edits are dropped. State keys use the full path, so they never collide.
+func uniqueAnalyzerName(seen map[string]int, path string) string {
+	base := "analyze_" + setup.SafeName(path)
+	seen[base]++
+	if n := seen[base]; n > 1 {
+		return fmt.Sprintf("%s_%d", base, n)
+	}
+	return base
+}
+
+func newAnalyzer(name string, w FileWork, fn EditFunc) (agent.Agent, error) {
 	return agent.New(agent.Config{
 		Name:        name,
 		Description: "Analyzes " + w.Path,

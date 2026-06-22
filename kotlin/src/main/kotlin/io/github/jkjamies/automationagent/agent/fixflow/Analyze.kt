@@ -31,7 +31,8 @@ suspend fun parallelAnalyze(work: List<FileWork>, fn: EditFunc): List<FileEdit> 
     require(work.isNotEmpty()) { "analyze: no files to work on" }
     val sorted = work.sortedBy { it.path }
 
-    val analyzers = sorted.map { AnalyzerAgent(it, fn) }
+    val seen = mutableMapOf<String, Int>()
+    val analyzers = sorted.map { AnalyzerAgent(uniqueAnalyzerName(seen, it.path), it, fn) }
     val parallel = ParallelAgent(name = "analyze_all", description = "Per-file analysis in parallel", subAgents = analyzers)
     val state = driveCollectState(newRunner("fix-analyze", parallel), "system", "analyze", "Produce the edits.")
 
@@ -45,8 +46,21 @@ suspend fun parallelAnalyze(work: List<FileWork>, fn: EditFunc): List<FileEdit> 
     return edits
 }
 
-private class AnalyzerAgent(private val work: FileWork, private val fn: EditFunc) :
-    BaseAgent(name = "analyze_${safeName(work.path)}", description = "Analyzes ${work.path}") {
+/**
+ * Derive a unique sub-agent name from a path. safeName maps every non-alphanumeric char to
+ * `_`, so distinct paths (e.g. `a/b.kt` and `a-b.kt`) can collapse to the same name;
+ * ParallelAgent needs unique sub-agent names, so a collision gets a numeric suffix —
+ * otherwise one analyzer silently shadows another and that file's edits are dropped.
+ */
+private fun uniqueAnalyzerName(seen: MutableMap<String, Int>, path: String): String {
+    val base = "analyze_${safeName(path)}"
+    val n = (seen[base] ?: 0) + 1
+    seen[base] = n
+    return if (n > 1) "${base}_$n" else base
+}
+
+private class AnalyzerAgent(name: String, private val work: FileWork, private val fn: EditFunc) :
+    BaseAgent(name = name, description = "Analyzes ${work.path}") {
     override fun runAsyncImpl(context: InvocationContext): Flow<Event> = flow {
         val edit = fn(work)
         if (edit.path.isEmpty() || edit.content.isBlank()) {

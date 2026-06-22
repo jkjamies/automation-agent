@@ -66,6 +66,17 @@ class _Analyzer(BaseAgent):
         )
 
 
+def _unique_analyzer_name(seen: dict[str, int], path: str) -> str:
+    """Derive a unique sub-agent name from a path. ``safe_name`` maps every non-alphanumeric
+    char to ``_``, so distinct paths (e.g. ``a/b.kt`` and ``a-b.kt``) can collapse to the same
+    name; ParallelAgent needs unique sub-agent names, so a collision gets a numeric suffix —
+    otherwise one analyzer silently shadows another and that file's edits are dropped."""
+    base = "analyze_" + setup.safe_name(path)
+    seen[base] = seen.get(base, 0) + 1
+    n = seen[base]
+    return f"{base}_{n}" if n > 1 else base
+
+
 async def parallel_analyze(work: list[FileWork], fn: EditFunc) -> list[FileEdit]:
     """Fan out one analyzer per FileWork, call ``fn`` for each, and return the collected
     non-empty edits sorted by path."""
@@ -73,8 +84,9 @@ async def parallel_analyze(work: list[FileWork], fn: EditFunc) -> list[FileEdit]
         raise ValueError("analyze: no files to work on")
     sorted_work = sorted(work, key=lambda w: w.path)
 
+    seen: dict[str, int] = {}
     agents: list[BaseAgent] = [
-        _Analyzer("analyze_" + setup.safe_name(w.path), w, fn) for w in sorted_work
+        _Analyzer(_unique_analyzer_name(seen, w.path), w, fn) for w in sorted_work
     ]
     par = ParallelAgent(
         name="analyze_all",

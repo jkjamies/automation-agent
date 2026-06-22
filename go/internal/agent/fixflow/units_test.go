@@ -94,3 +94,19 @@ func TestParallelAnalyzeSkips(t *testing.T) {
 		t.Fatal("expected error with no work")
 	}
 }
+
+func TestUniqueAnalyzerName(t *testing.T) {
+	seen := map[string]int{}
+	got := []string{
+		uniqueAnalyzerName(seen, "a/b.kt"),
+		uniqueAnalyzerName(seen, "a-b.kt"),
+		uniqueAnalyzerName(seen, "a.b.kt"),
+		uniqueAnalyzerName(seen, "x/y.go"),
+	}
+	want := []string{"analyze_a_b_kt", "analyze_a_b_kt_2", "analyze_a_b_kt_3", "analyze_x_y_go"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("name[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
