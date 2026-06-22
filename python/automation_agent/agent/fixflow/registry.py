@@ -36,6 +36,10 @@ class RunRegistry:
 
     def __init__(self) -> None:
         self._runs: dict[str, ParkedRun] = {}
+        # Strong refs to in-flight timeout tasks. CPython only weakly references a bare
+        # ensure_future task, so without this a fired timeout handler (which frees the run
+        # and notifies for review) could be garbage-collected before it completes.
+        self._timeout_tasks: set[asyncio.Future[None]] = set()
 
     def park(
         self,
@@ -53,10 +57,13 @@ class RunRegistry:
         if old is not None and old._timer is not None:
             old._timer.cancel()
         loop = asyncio.get_running_loop()
-        run._timer = loop.call_later(
-            timeout.total_seconds(),
-            lambda: asyncio.ensure_future(on_timeout(pr_key)),
-        )
+
+        def _arm() -> None:
+            task = asyncio.ensure_future(on_timeout(pr_key))
+            self._timeout_tasks.add(task)
+            task.add_done_callback(self._timeout_tasks.discard)
+
+        run._timer = loop.call_later(timeout.total_seconds(), _arm)
         self._runs[pr_key] = run
 
     def resolve(self, pr_key: str) -> ParkedRun | None:

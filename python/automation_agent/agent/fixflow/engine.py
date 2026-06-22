@@ -210,7 +210,14 @@ class Engine:
     def notify(self, title: str, text: str, link: str) -> None:
         if self.d.notify is None:
             return
-        self.d.notify.notify(Message(title=title, text=text, link=link))
+        try:
+            self.d.notify.notify(Message(title=title, text=text, link=link))
+        except Exception as exc:  # noqa: BLE001
+            # Notifications are best-effort: a transient Slack/Teams failure must not unwind
+            # an already-resolved run's terminal path (success/exhausted/timeout), which would
+            # lose the message entirely. Log and move on.
+            if self.d.log is not None:
+                self.d.log.warning("notify failed: title=%s err=%s", title, exc)
 
 
 # Imported after Engine so RunParams type hints resolve; the driver owns the type.
