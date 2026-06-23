@@ -6,6 +6,7 @@ require (
 	github.com/glebarez/sqlite v1.8.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/go-github/v78 v78.0.0
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/ollama/ollama v0.30.10
 	github.com/robfig/cron/v3 v3.0.1
@@ -45,7 +46,6 @@ require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.15 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect

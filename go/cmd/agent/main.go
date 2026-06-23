@@ -66,11 +66,16 @@ func run(logger *slog.Logger) error {
 	gh := githubapi.New(cfg.GitHubToken)
 	notifier := buildNotifier(logger, cfg)
 
-	// One session service, shared by both fix engines (namespaced by app name). memory
-	// (default) keeps today's behavior; sqlite persists parked runs across restarts.
+	// One session service + park store, shared by both fix engines (namespaced by app
+	// name). memory (default) keeps today's behavior; durable backends persist parked runs
+	// across restarts.
 	sessions, err := setup.NewSessionService(cfg)
 	if err != nil {
 		return fmt.Errorf("build session service: %w", err)
+	}
+	parkStore, err := setup.NewParkStore(cfg)
+	if err != nil {
+		return fmt.Errorf("build park store: %w", err)
 	}
 
 	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents
@@ -82,7 +87,7 @@ func run(logger *slog.Logger) error {
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
-		SessionService: sessions,
+		SessionService: sessions, ParkStore: parkStore,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)
