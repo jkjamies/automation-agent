@@ -38,6 +38,7 @@ class Deps:
     notify: Notifier
     repos: list[str]  # owner/repo entries; one parallel fetcher each
     window: timedelta = timedelta(hours=24)  # commit window; defaults to 24h
+    title: str = "Daily commit digest"  # digest notification title
     now: Callable[[], datetime] = field(default=default_now)  # injectable clock
 
 
@@ -74,6 +75,6 @@ def build_summary_agent(d: Deps) -> SequentialAgent:
 
     return SequentialAgent(
         name="summary_workflow",
-        description="Daily commit digest workflow",
-        sub_agents=[parallel, summarizer, new_notify_agent(d.notify)],
+        description="Commit digest workflow",
+        sub_agents=[parallel, summarizer, new_notify_agent(d.notify, d.title or "Daily commit digest")],
     )

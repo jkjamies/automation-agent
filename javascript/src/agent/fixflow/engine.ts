@@ -102,6 +102,8 @@ export interface Deps {
   gh: GitHub;
   notify?: Notifier | null;
   token?: string;
+  /** Kickoff allowlist (REPOS); when non-empty a kickoff whose repo is not listed is rejected. */
+  repos?: string[];
   maxIter?: number;
   ciTimeoutMs?: number;
   author?: Author;
@@ -116,6 +118,7 @@ export interface ResolvedDeps {
   gh: GitHub;
   notify: Notifier | null;
   token: string;
+  repos: string[];
   maxIter: number;
   ciTimeoutMs: number;
   author: Author;
@@ -160,8 +163,23 @@ export class Engine {
   /** Handle a kickoff envelope: start a suspended fix run (apply -> await CI). */
   async kickoff(raw: Buffer | string): Promise<void> {
     const k = parseKickoff(raw);
+    if (!this.repoAllowed(k.repo)) {
+      this.d.log?.warn('fix kickoff rejected: repo not in allowlist', {
+        workflow: this.spec.name,
+        repo: k.repo,
+      });
+      throw new Error(`kickoff: repo "${k.repo}" not in the configured allowlist`);
+    }
     this.d.log?.info('fix kickoff', { workflow: this.spec.name, repo: k.repo });
     await this.driver.kickoff(k);
+  }
+
+  /**
+   * Whether `repo` may be targeted by a kickoff. An empty allowlist (REPOS unset) imposes no
+   * restriction; otherwise the repo must be listed.
+   */
+  private repoAllowed(repo: string): boolean {
+    return this.d.repos.length === 0 || this.d.repos.includes(repo);
   }
 
   /**
@@ -238,6 +256,7 @@ export function newEngine(spec: Spec, d: Deps): Engine {
     gh: d.gh,
     notify: d.notify ?? null,
     token: d.token ?? '',
+    repos: d.repos ?? [],
     maxIter: d.maxIter && d.maxIter > 0 ? d.maxIter : 3,
     ciTimeoutMs: d.ciTimeoutMs && d.ciTimeoutMs > 0 ? d.ciTimeoutMs : DEFAULT_CI_TIMEOUT_MS,
     author: d.author && d.author.name !== '' ? d.author : DEFAULT_AUTHOR,

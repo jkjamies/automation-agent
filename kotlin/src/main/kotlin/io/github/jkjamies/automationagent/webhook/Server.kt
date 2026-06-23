@@ -41,8 +41,8 @@ fun interface IngestFunc {
 }
 
 /**
- * Installs the webhook routes on an [Application]. [secret] enables HMAC verification of
- * /webhooks/github (empty = skip, local dev only); [now] is injectable for deterministic
+ * Installs the webhook routes on an [Application]. [secret] enables HMAC verification of all
+ * webhook POST routes (empty = skip, local dev only); [now] is injectable for deterministic
  * `receivedAt` timestamps in tests.
  */
 fun Application.webhookRoutes(
@@ -55,21 +55,19 @@ fun Application.webhookRoutes(
 
         post("/webhooks/lint") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
+            if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
             dispatch(ingest, Envelope.new(Kind.LINT, "webhook:/lint", body, now()))
         }
 
         post("/webhooks/coverage") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
+            if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
             dispatch(ingest, Envelope.new(Kind.COVERAGE, "webhook:/coverage", body, now()))
         }
 
         post("/webhooks/github") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
-            val sig = call.request.header("X-Hub-Signature-256") ?: ""
-            if (secret.isNotEmpty() && !verifySignature(secret, sig, body)) {
-                call.respond(HttpStatusCode.Unauthorized, "invalid signature")
-                return@post
-            }
+            if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
             dispatch(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
         }
     }
@@ -81,6 +79,17 @@ fun Application.webhookRoutes(
  * rejected outright rather than silently truncated (which would only fail HMAC later). Memory is
  * bounded: at most `MAX_BODY_BYTES + 1` bytes are ever read.
  */
+/**
+ * Verifies the request's HMAC signature when [secret] is set. With no secret (local dev only)
+ * every request passes. A kickoff selects the caller-supplied target repo, so the lint/coverage
+ * routes are authenticated with the same secret as the GitHub webhook.
+ */
+private fun ApplicationCall.authenticated(secret: String, body: ByteArray): Boolean {
+    if (secret.isEmpty()) return true
+    val sig = request.header("X-Hub-Signature-256") ?: ""
+    return verifySignature(secret, sig, body)
+}
+
 private suspend fun ApplicationCall.receiveCapped(): ByteArray? {
     val bytes = receiveChannel().readRemaining((MAX_BODY_BYTES + 1).toLong()).readByteArray()
     return if (bytes.size > MAX_BODY_BYTES) null else bytes

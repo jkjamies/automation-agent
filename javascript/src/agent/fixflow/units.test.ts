@@ -1,5 +1,5 @@
 // Tests for fixflow units and tools: pure helpers, path-safety, envelope, repo tools.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -47,6 +47,9 @@ describe('util', () => {
     expect(extractJsonArray('none')).toBe('');
     expect(extractJsonObject('x {"a":1} y')).toBe('{"a":1}');
     expect(extractJsonObject('none')).toBe('');
+    // Trailing prose with a stray bracket: the first complete value is returned.
+    expect(extractJsonArray('[{"a":1}] then see [2]')).toBe('[{"a":1}]');
+    expect(extractJsonObject('{"a":1} note: closing }')).toBe('{"a":1}');
     expect(stripFences('```ts\nconst x = 1;\n```')).toBe('const x = 1;\n');
     expect(stripFences('const y = 2;')).toBe('const y = 2;\n');
   });
@@ -66,6 +69,22 @@ describe('files / safeJoin', () => {
     for (const ok of ['a.ts', 'sub/dir/b.test.ts', '.']) {
       expect(() => safeJoin(dir, ok)).not.toThrow();
     }
+  });
+
+  it('rejects a path that escapes via a symlinked directory', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'outside-'));
+    try {
+      symlinkSync(outside, join(dir, 'link'), 'dir');
+      expect(() => safeJoin(dir, 'link/x.txt')).toThrow();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a dangling symlink that points outside', () => {
+    // exists but points to a non-existent path outside the checkout
+    symlinkSync(join(dir, '..', 'ghost'), join(dir, 'link'), 'dir');
+    expect(() => safeJoin(dir, 'link')).toThrow();
   });
 });
 

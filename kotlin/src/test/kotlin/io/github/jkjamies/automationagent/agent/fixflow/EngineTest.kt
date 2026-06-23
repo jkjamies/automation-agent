@@ -41,6 +41,37 @@ class EngineTest : BehaviorSpec({
         }
     }
 
+    Given("a kickoff for a repo not in the allowlist") {
+        When("the engine handles it") {
+            Then("it is rejected and nothing is parked") {
+                val gh = FakeGitHub()
+                val e = Engine(
+                    fixSpec(AtomicInteger(0)),
+                    Deps(gh = gh, notifier = FakeNotifier(), repos = listOf("allowed/repo"), cloneUrl = { _, _ -> "unused" }),
+                )
+                shouldThrow<IllegalArgumentException> { e.kickoff(kickoffRaw) }
+                gh.created shouldBe null
+                e.driver.reg.size() shouldBe 0
+            }
+        }
+    }
+
+    Given("a kickoff for a repo in the allowlist") {
+        When("the engine handles it") {
+            Then("it is accepted, opens a PR, and parks awaiting CI") {
+                val gh = FakeGitHub()
+                val remote = seedRemote()
+                val e = Engine(
+                    fixSpec(AtomicInteger(0)),
+                    Deps(gh = gh, notifier = FakeNotifier(), repos = listOf("acme/api"), cloneUrl = { _, _ -> remote }),
+                )
+                e.kickoff(kickoffRaw)
+                gh.created?.head shouldBe "agent/fix"
+                e.driver.reg.size() shouldBe 1
+            }
+        }
+    }
+
     Given("a parked run") {
         When("CI reports success") {
             Then("it notifies success and frees the run") {

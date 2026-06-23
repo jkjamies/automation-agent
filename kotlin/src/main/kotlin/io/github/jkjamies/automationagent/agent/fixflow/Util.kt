@@ -1,20 +1,58 @@
 package io.github.jkjamies.automationagent.agent.fixflow
 
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+
 /**
- * Returns the substring from the first '[' to the last ']', so a JSON array can be recovered from
- * model output that adds prose or code fences. Empty when no array is present.
+ * Returns the first complete JSON array in model output (which may add prose or code fences),
+ * scanning from the first '[' — so trailing prose or a stray bracket can't corrupt the span.
+ * Empty when none parses.
  */
-fun extractJsonArray(s: String): String {
-    val i = s.indexOf('[')
-    val j = s.lastIndexOf(']')
-    return if (i < 0 || j < 0 || j < i) "" else s.substring(i, j + 1)
+fun extractJsonArray(s: String): String = firstJsonValue(s, '[', ']')
+
+/** Returns the first complete JSON object in model output. Empty when none parses. */
+fun extractJsonObject(s: String): String = firstJsonValue(s, '{', '}')
+
+private fun firstJsonValue(s: String, open: Char, close: Char): String {
+    var start = s.indexOf(open)
+    while (start >= 0) {
+        val end = matchingClose(s, start, open, close)
+        if (end >= 0) {
+            val candidate = s.substring(start, end + 1)
+            try {
+                Json.parseToJsonElement(candidate)
+                return candidate
+            } catch (_: SerializationException) {
+                // balanced but not valid JSON; try the next opener
+            }
+        }
+        start = s.indexOf(open, start + 1)
+    }
+    return ""
 }
 
-/** Returns the substring from the first '{' to the last '}'. Empty when no object is present. */
-fun extractJsonObject(s: String): String {
-    val i = s.indexOf('{')
-    val j = s.lastIndexOf('}')
-    return if (i < 0 || j < 0 || j < i) "" else s.substring(i, j + 1)
+/** Index of the [close] that balances the [open] at [start] (string-aware), or -1. */
+private fun matchingClose(s: String, start: Int, open: Char, close: Char): Int {
+    var depth = 0
+    var inStr = false
+    var escaped = false
+    for (i in start until s.length) {
+        val c = s[i]
+        if (inStr) {
+            when {
+                escaped -> escaped = false
+                c == '\\' -> escaped = true
+                c == '"' -> inStr = false
+            }
+            continue
+        }
+        when (c) {
+            '"' -> inStr = true
+            open -> depth++
+            close -> if (--depth == 0) return i
+        }
+    }
+    return -1
 }
 
 /** Removes surrounding markdown code fences a model may add and normalizes a trailing newline. */

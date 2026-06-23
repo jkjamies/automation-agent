@@ -116,6 +116,32 @@ async def test_engine_kickoff_parks(tmp_path) -> None:
     assert e.driver.reg.len() == 1
 
 
+async def test_engine_kickoff_rejects_repo_not_in_allowlist() -> None:
+    gh = FakeGH()
+    e = new_engine(
+        _spec(),
+        Deps(gh=gh, notify=FakeNotifier(), repos=["allowed/repo"],
+             clone_url=lambda _o, _r: "unused"),
+    )
+    with pytest.raises(ValueError, match="allowlist"):
+        await e.kickoff(b'{"repo":"acme/api","report":"r"}')
+    assert gh.created is None
+    assert e.driver.reg.len() == 0
+
+
+async def test_engine_kickoff_allows_repo_in_allowlist(tmp_path) -> None:
+    remote = _seed_remote(tmp_path)
+    gh = FakeGH()
+    e = new_engine(
+        _spec(),
+        Deps(gh=gh, notify=FakeNotifier(), repos=["acme/api"],
+             ci_timeout=timedelta(hours=1), clone_url=lambda _o, _r: remote),
+    )
+    await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
+    assert gh.created is not None and gh.created.head == "agent/fix"
+    assert e.driver.reg.len() == 1
+
+
 async def test_engine_resume_success(tmp_path) -> None:
     n = FakeNotifier()
     e = _new_engine(_seed_remote(tmp_path), FakeGH(), n)

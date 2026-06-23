@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,9 +86,12 @@ type Deps struct {
 	Token     string
 	MaxIter   int
 	CITimeout time.Duration
-	Author    gitrepo.Author
-	Log       *slog.Logger
-	CloneURL  func(owner, repo string) string // overridable in tests
+	// Repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
+	// listed is rejected; empty imposes no restriction (restriction is opt-in).
+	Repos    []string
+	Author   gitrepo.Author
+	Log      *slog.Logger
+	CloneURL func(owner, repo string) string // overridable in tests
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is
@@ -135,8 +139,18 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 	if err != nil {
 		return err
 	}
+	if !e.repoAllowed(k.Repo) {
+		e.d.Log.Warn("fix kickoff rejected: repo not in allowlist", "workflow", e.spec.Name, "repo", k.Repo)
+		return fmt.Errorf("kickoff: repo %q not in the configured allowlist", k.Repo)
+	}
 	e.d.Log.Info("fix kickoff", "workflow", e.spec.Name, "repo", k.Repo)
 	return e.driver.Kickoff(ctx, k)
+}
+
+// repoAllowed reports whether repo may be targeted by a kickoff. An empty allowlist
+// (REPOS unset) imposes no restriction; otherwise the repo must be listed.
+func (e *Engine) repoAllowed(repo string) bool {
+	return len(e.d.Repos) == 0 || slices.Contains(e.d.Repos, repo)
 }
 
 // ResumeInput is the normalized resume context derived from a check_run webhook. The

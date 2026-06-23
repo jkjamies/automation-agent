@@ -96,6 +96,9 @@ class Deps:
     gh: GitHub | None = None
     notify: Notifier | None = None
     token: str = ""
+    # repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
+    # listed is rejected; empty imposes no restriction (restriction is opt-in).
+    repos: list[str] = field(default_factory=list)
     max_iter: int = 3
     ci_timeout: timedelta = field(default_factory=lambda: timedelta(minutes=90))
     author: Author = field(
@@ -142,11 +145,23 @@ class Engine:
     async def kickoff(self, raw: bytes) -> None:
         """Handle a kickoff envelope: start a suspended fix run (apply -> await CI)."""
         k = parse_kickoff(raw)
+        if not self._repo_allowed(k.repo):
+            if self.d.log is not None:
+                self.d.log.warning(
+                    "fix kickoff rejected: repo not in allowlist",
+                    extra={"workflow": self.spec.name, "repo": k.repo},
+                )
+            raise ValueError(f"kickoff: repo {k.repo!r} not in the configured allowlist")
         if self.d.log is not None:
             self.d.log.info(
                 "fix kickoff", extra={"workflow": self.spec.name, "repo": k.repo}
             )
         await self.driver.kickoff(k)
+
+    def _repo_allowed(self, repo: str) -> bool:
+        """Whether ``repo`` may be targeted by a kickoff. An empty allowlist (REPOS unset)
+        imposes no restriction; otherwise the repo must be listed."""
+        return not self.d.repos or repo in self.d.repos
 
     async def resume(self, raw: bytes) -> None:
         """Handle a GitHub check_run webhook. No-op unless the event is this engine's

@@ -125,6 +125,7 @@ async function run(): Promise<void> {
     gh,
     notify: notifier,
     token: cfg.githubToken,
+    repos: cfg.repos,
     maxIter: cfg.maxIterations,
     ciTimeoutMs: cfg.ciTimeoutMs,
     log,

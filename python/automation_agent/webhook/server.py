@@ -70,6 +70,8 @@ class Server:
             body = await self._take_body(request)
             if isinstance(body, Response):
                 return body
+            if not self._authenticated(request, body):
+                return Response(content="invalid signature", status_code=401)
             return await self._dispatch(
                 new(Kind.LINT, "webhook:/lint", body, self.now())
             )
@@ -79,6 +81,8 @@ class Server:
             body = await self._take_body(request)
             if isinstance(body, Response):
                 return body
+            if not self._authenticated(request, body):
+                return Response(content="invalid signature", status_code=401)
             return await self._dispatch(
                 new(Kind.COVERAGE, "webhook:/coverage", body, self.now())
             )
@@ -88,17 +92,24 @@ class Server:
             body = await self._take_body(request)
             if isinstance(body, Response):
                 return body
-            if self.secret != "" and not verify_signature(
-                self.secret,
-                request.headers.get("X-Hub-Signature-256", ""),
-                body,
-            ):
+            if not self._authenticated(request, body):
                 return Response(content="invalid signature", status_code=401)
             return await self._dispatch(
                 new(Kind.CI, "webhook:/github", body, self.now())
             )
 
         return app
+
+    def _authenticated(self, request: Request, body: bytes) -> bool:
+        """Verify the request's HMAC signature when a secret is configured. With no secret
+        (local dev only) every request passes. A kickoff selects the caller-supplied target
+        repo, so the lint/coverage routes are authenticated with the same secret as the
+        GitHub webhook."""
+        if self.secret == "":
+            return True
+        return verify_signature(
+            self.secret, request.headers.get("X-Hub-Signature-256", ""), body
+        )
 
     async def _take_body(self, request: Request) -> bytes | Response:
         """Read the request body, or return the error response to send: a transport read

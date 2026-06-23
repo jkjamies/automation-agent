@@ -42,6 +42,9 @@ class UnitsTest : BehaviorSpec({
                 extractJsonArray("none") shouldBe ""
                 extractJsonObject("""x {"a":1} y""") shouldBe """{"a":1}"""
                 extractJsonObject("none") shouldBe ""
+                // Trailing prose with a stray bracket: the first complete value is returned.
+                extractJsonArray("""[{"a":1}] then see [2]""") shouldBe """[{"a":1}]"""
+                extractJsonObject("""{"a":1} note: closing }""") shouldBe """{"a":1}"""
                 stripFences("```go\npackage x\n```") shouldBe "package x\n"
                 stripFences("package y") shouldBe "package y\n"
             }

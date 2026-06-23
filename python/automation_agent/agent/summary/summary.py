@@ -93,14 +93,16 @@ class _NotifyAgent(BaseAgent):
     """A BaseAgent that posts the summarizer's digest to chat."""
 
     _notify: Notifier
+    _title: str
     model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, notify: Notifier) -> None:
+    def __init__(self, notify: Notifier, title: str) -> None:
         super().__init__(
             name="notify",
             description="Posts the commit digest to Slack or Teams",
         )
         object.__setattr__(self, "_notify", notify)
+        object.__setattr__(self, "_title", title)
 
     @override
     async def _run_async_impl(
@@ -110,7 +112,7 @@ class _NotifyAgent(BaseAgent):
         if digest == "":
             digest = "(no digest was produced)"
         try:
-            self._notify.notify(Message(title="Daily commit digest", text=digest))
+            self._notify.notify(Message(title=self._title, text=digest))
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"notify: {exc}") from exc
         yield setup.text_event("notify", "Posted digest to chat.")
@@ -123,9 +125,9 @@ def new_fetch_agent(
     return _FetchAgent(repo, gh, window, now)
 
 
-def new_notify_agent(notify: Notifier) -> BaseAgent:
-    """Return a code agent that posts the digest to chat."""
-    return _NotifyAgent(notify)
+def new_notify_agent(notify: Notifier, title: str) -> BaseAgent:
+    """Return a code agent that posts the digest to chat under ``title``."""
+    return _NotifyAgent(notify, title)
 
 
 def summary_instruction(

@@ -74,7 +74,7 @@ func run(logger *slog.Logger) error {
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
-		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Log: logger,
+		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)

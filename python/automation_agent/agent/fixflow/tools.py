@@ -36,12 +36,20 @@ def repo_tools(root: str) -> list[BaseTool]:
     def read_file_tool(path: str) -> dict:
         """Read a repository file by its repo-relative path (e.g. "src/main.go" or
         "AGENTS.md")."""
-        return {"content": read_file(root, path)}
+        # Self-wrap so a bad/missing path is a recoverable tool error (the model can retry),
+        # not a raised exception that aborts the analyze/explore run.
+        try:
+            return {"content": read_file(root, path)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     def list_dir_tool(path: str) -> dict:
         """List the files and subdirectories of a repository directory by its
         repo-relative path. Use "." for the repository root."""
-        return {"entries": list_dir_entries(root, path)}
+        try:
+            return {"entries": list_dir_entries(root, path)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     read_file_tool.__name__ = "read_file"
     list_dir_tool.__name__ = "list_dir"

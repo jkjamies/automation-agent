@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 import uvicorn
 from dotenv import load_dotenv
@@ -42,9 +43,15 @@ def build_notifier(cfg: Config) -> Notifier | None:
 
 
 def build_summary_agent(
-    cfg: Config, llm: BaseLlm, gh: summary.CommitLister, notifier: Notifier | None
+    cfg: Config,
+    llm: BaseLlm,
+    gh: summary.CommitLister,
+    notifier: Notifier | None,
+    window: timedelta,
+    title: str,
 ) -> BaseAgent | None:
-    """Return the summary workflow agent, or None if it can't be fully configured."""
+    """Return a summary workflow agent for the given window/title, or None if it can't be
+    fully configured."""
     if not cfg.repos:
         log.warning("no REPOS configured; summary workflow disabled")
         return None
@@ -52,7 +59,9 @@ def build_summary_agent(
         return None  # build_notifier already warned
     try:
         return summary.build_summary_agent(
-            summary.Deps(llm=llm, gh=gh, notify=notifier, repos=cfg.repos)
+            summary.Deps(
+                llm=llm, gh=gh, notify=notifier, repos=cfg.repos, window=window, title=title
+            )
         )
     except Exception as exc:
         log.warning("summary workflow disabled: %s", exc)
@@ -95,7 +104,14 @@ async def run() -> None:
     gh = Client(cfg.github_token)
     notifier = build_notifier(cfg)
 
-    summary_agent = build_summary_agent(cfg, llm, gh, notifier)
+    # Daily and weekly are distinct agents so the weekly cron posts a real 7-day digest,
+    # not a copy of the daily one.
+    summary_daily = build_summary_agent(
+        cfg, llm, gh, notifier, timedelta(hours=24), "Daily commit digest"
+    )
+    summary_weekly = build_summary_agent(
+        cfg, llm, gh, notifier, timedelta(days=7), "Weekly commit digest"
+    )
 
     # Fix engines (event-driven; work without a notifier — they just won't post results).
     fix_deps = FixDeps(
@@ -106,6 +122,7 @@ async def run() -> None:
         token=cfg.github_token,
         max_iter=cfg.max_iterations,
         ci_timeout=cfg.ci_timeout,
+        repos=cfg.repos,
         log=log,
     )
     lint_engine = lintfixer.new_engine(fix_deps)
@@ -114,7 +131,8 @@ async def run() -> None:
 
     dispatcher = root.build_root_dispatcher(
         root.Deps(
-            summary_agent=summary_agent,
+            summary_daily=summary_daily,
+            summary_weekly=summary_weekly,
             lint_kickoff=_payload_handler(lint_engine.kickoff),
             coverage_kickoff=_payload_handler(cov_engine.kickoff),
             ci_resume=_ci_resume_handler(engines),
@@ -171,7 +189,7 @@ async def run() -> None:
         cfg.llm_provider.value,
         len(cfg.repos),
         cfg.notify_provider.value,
-        summary_agent is not None,
+        summary_daily is not None or summary_weekly is not None,
     )
     try:
         await server.serve()

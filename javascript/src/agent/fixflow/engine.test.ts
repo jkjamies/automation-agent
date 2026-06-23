@@ -114,6 +114,35 @@ describe('Engine', () => {
     expect(e.driver.reg.size()).toBe(1);
   });
 
+  it('rejects a kickoff for a repo not in the allowlist', async () => {
+    const gh = new FakeGH();
+    const e = newEngine(spec(), {
+      llm: new FakeLlm(),
+      gh,
+      notify: new FakeNotifier(),
+      repos: ['allowed/repo'],
+      cloneUrl: () => 'unused',
+    });
+    await expect(e.kickoff('{"repo":"acme/api","report":"r"}')).rejects.toThrow(/allowlist/);
+    expect(gh.created).toBeFalsy();
+    expect(e.driver.reg.size()).toBe(0);
+  });
+
+  it('accepts a kickoff for a repo in the allowlist', async () => {
+    const gh = new FakeGH();
+    const remote = await seedRemote();
+    const e = newEngine(spec(), {
+      llm: new FakeLlm(),
+      gh,
+      notify: new FakeNotifier(),
+      repos: ['acme/api'],
+      cloneUrl: () => remote,
+    });
+    await e.kickoff('{"repo":"acme/api","base":"main","report":"r"}');
+    expect(gh.created?.head).toBe('agent/fix');
+    expect(e.driver.reg.size()).toBe(1);
+  });
+
   it('notifies success and clears the run on a passing resume', async () => {
     const n = new FakeNotifier();
     const e = newEngineFor(await seedRemote(), new FakeGH(), n);

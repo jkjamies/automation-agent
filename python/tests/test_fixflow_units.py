@@ -52,6 +52,10 @@ def test_extract_and_strip() -> None:
     assert extract_json_array("none") == ""
     assert extract_json_object('x {"a":1} y') == '{"a":1}'
     assert extract_json_object("none") == ""
+    # Trailing prose with a stray bracket: the first complete value is returned (the old
+    # first-bracket-to-last-bracket heuristic over-grabbed and failed to parse).
+    assert extract_json_array('[{"a":1}] then see [2]') == '[{"a":1}]'
+    assert extract_json_object('{"a":1} note: closing }') == '{"a":1}'
     assert strip_fences("```go\npackage x\n```") == "package x\n"
     assert strip_fences("package y") == "package y\n"
 
@@ -73,6 +77,26 @@ def testsafe_join_rejects_escapes(tmp_path) -> None:
             safe_join(root, bad)
     for ok in ("a.go", "sub/dir/b_test.go", "."):
         safe_join(root, ok)  # must not raise
+
+
+def test_safe_join_rejects_symlink_escape(tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+    # A symlinked directory inside the checkout that points outside it.
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        safe_join(str(root), "link/x.txt")
+
+
+def test_safe_join_rejects_dangling_symlink(tmp_path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    # A symlink that exists but points to a non-existent path outside the root.
+    (root / "link").symlink_to(tmp_path / "ghost")
+    with pytest.raises(ValueError, match="symlink"):
+        safe_join(str(root), "link")
 
 
 # --- tools ------------------------------------------------------------------

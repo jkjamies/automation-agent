@@ -58,6 +58,14 @@ func TestExtractAndStrip(t *testing.T) {
 	if ExtractJSONObject("none") != "" {
 		t.Error("object empty")
 	}
+	// Trailing prose with a stray bracket: the first complete value is returned (the old
+	// first-bracket-to-last-bracket heuristic over-grabbed and failed to parse).
+	if ExtractJSONArray(`[{"a":1}] then see [2]`) != `[{"a":1}]` {
+		t.Error("array trailing prose")
+	}
+	if ExtractJSONObject(`{"a":1} note: closing }`) != `{"a":1}` {
+		t.Error("object trailing prose")
+	}
 	if StripFences("```go\npackage x\n```") != "package x\n" {
 		t.Error("fenced")
 	}
@@ -108,5 +116,20 @@ func TestUniqueAnalyzerName(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("name[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestRepoAllowed(t *testing.T) {
+	// Empty allowlist (REPOS unset) imposes no restriction.
+	if open := (&Engine{d: Deps{}}); !open.repoAllowed("anyone/anything") {
+		t.Error("empty allowlist should allow any repo")
+	}
+	// A configured allowlist admits only listed repos.
+	e := &Engine{d: Deps{Repos: []string{"acme/api", "acme/web"}}}
+	if !e.repoAllowed("acme/api") {
+		t.Error("listed repo should be allowed")
+	}
+	if e.repoAllowed("evil/x") {
+		t.Error("unlisted repo should be rejected")
 	}
 }

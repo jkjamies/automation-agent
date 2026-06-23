@@ -53,6 +53,30 @@ class ToolsTest : BehaviorSpec({
         }
     }
 
+    Given("a symlinked directory inside the checkout pointing outside") {
+        When("joining a path through it") {
+            Then("it is rejected") {
+                val base = tempDir()
+                val outside = File(base, "outside").apply { mkdirs() }
+                val root = File(base, "root").apply { mkdirs() }
+                Files.createSymbolicLink(File(root, "link").toPath(), outside.toPath())
+                shouldThrow<IllegalArgumentException> { safeJoin(root.path, "link/x.txt") }
+            }
+        }
+    }
+
+    Given("a dangling symlink pointing outside the checkout") {
+        When("joining the link itself") {
+            Then("it is rejected") {
+                val base = tempDir()
+                val root = File(base, "root").apply { mkdirs() }
+                // exists but points to a non-existent path outside the root
+                Files.createSymbolicLink(File(root, "link").toPath(), File(base, "ghost").toPath())
+                shouldThrow<IllegalArgumentException> { safeJoin(root.path, "link") }
+            }
+        }
+    }
+
     Given("a checkout root") {
         When("building repo tools") {
             Then("it returns read_file and list_dir") {

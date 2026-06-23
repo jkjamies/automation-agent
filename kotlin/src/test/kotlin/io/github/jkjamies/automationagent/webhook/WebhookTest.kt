@@ -60,6 +60,25 @@ class WebhookTest : BehaviorSpec({
         }
     }
 
+    Given("a lint kickoff with a configured secret") {
+        When("POSTing to /webhooks/lint") {
+            Then("an unsigned request is rejected and a signed one accepted") {
+                val c = Capture()
+                val body = "{\"problems\":[]}"
+                testApplication {
+                    application { webhookRoutes(c.ingest, secret = "topsecret") }
+                    client.post("/webhooks/lint") { setBody(body) }.status shouldBe HttpStatusCode.Unauthorized
+                    val ok = client.post("/webhooks/lint") {
+                        header("X-Hub-Signature-256", sign("topsecret", body))
+                        setBody(body)
+                    }
+                    ok.status shouldBe HttpStatusCode.Accepted
+                }
+                c.env.shouldNotBeNull().kind shouldBe Kind.LINT
+            }
+        }
+    }
+
     Given("a GitHub event with a valid signature") {
         When("POSTing to /webhooks/github") {
             Then("it accepts and emits a CI envelope") {

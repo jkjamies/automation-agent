@@ -39,7 +39,15 @@ export function repoTools(root: string): BaseTool[] {
       properties: { path: { type: Type.STRING, description: 'repo-relative file path' } },
       required: ['path'],
     },
-    execute: (input) => ({ content: readFile(root, (input as { path: string }).path) }),
+    // Self-wrap so a bad/missing path is a recoverable tool error (the model can retry),
+    // not a thrown rejection that aborts the analyze/explore run.
+    execute: (input) => {
+      try {
+        return { content: readFile(root, (input as { path: string }).path) };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
   });
 
   const listDirTool = new FunctionTool({
@@ -51,7 +59,13 @@ export function repoTools(root: string): BaseTool[] {
       properties: { path: { type: Type.STRING, description: 'repo-relative directory path' } },
       required: ['path'],
     },
-    execute: (input) => ({ entries: listDirEntries(root, (input as { path: string }).path) }),
+    execute: (input) => {
+      try {
+        return { entries: listDirEntries(root, (input as { path: string }).path) };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
   });
 
   return [readFileTool, listDirTool];

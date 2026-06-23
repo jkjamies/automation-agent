@@ -60,6 +60,41 @@ func TestSafeJoinRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestSafeJoinRejectsSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A symlinked directory inside the checkout that points outside it.
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeJoin(root, "link/x.txt"); err == nil {
+		t.Error("safeJoin should reject a path that escapes via a symlinked directory")
+	}
+}
+
+func TestSafeJoinRejectsDanglingSymlink(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink that exists but points to a non-existent path outside the root; writing
+	// through it would escape, so it must be rejected (not treated as a new in-repo file).
+	if err := os.Symlink(filepath.Join(base, "ghost"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeJoin(root, "link"); err == nil {
+		t.Error("safeJoin should reject a dangling symlink")
+	}
+}
+
 func TestRepoTools(t *testing.T) {
 	tools, err := repoTools(t.TempDir())
 	if err != nil || len(tools) != 2 {

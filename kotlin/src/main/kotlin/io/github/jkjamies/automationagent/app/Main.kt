@@ -80,7 +80,7 @@ private fun run() {
     val fixDeps =
         Deps(
             gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier, token = cfg.githubToken,
-            maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout,
+            maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout, repos = cfg.repos,
         )
     val lintEngine = newLintEngine(fixDeps)
     val coverageEngine = newCoverageEngine(fixDeps)

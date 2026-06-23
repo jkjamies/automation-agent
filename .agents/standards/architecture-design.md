@@ -571,7 +571,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `OLLAMA_HOST` | Ollama base URL | `http://localhost:11434` |
 | `OLLAMA_MODEL` | model tag | `gemma4:12b` |
 | `GEMINI_MODEL` / Vertex creds | prod path | — |
-| `REPOS` | comma-separated `owner/repo` | — |
+| `REPOS` | comma-separated `owner/repo`; also the kickoff allowlist — when non-empty, the fix-loop only acts on listed repos (empty = no restriction) | — |
 | `GITHUB_TOKEN` | go-github auth | — |
 | `NOTIFY_PROVIDER` | `slack` \| `teams` | `slack` |
 | `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` | notify targets | — |

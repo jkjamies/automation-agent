@@ -26,7 +26,8 @@ class Deps:
     engine no-ops unless its check matches.
     """
 
-    summary_agent: BaseAgent | None = None
+    summary_daily: BaseAgent | None = None  # Kind.CRON_DAILY
+    summary_weekly: BaseAgent | None = None  # Kind.CRON_WEEKLY
     lint_kickoff: Handler | None = None  # Kind.LINT
     coverage_kickoff: Handler | None = None  # Kind.COVERAGE
     ci_resume: Handler | None = None  # Kind.CI (dispatched to all fix engines)
@@ -40,11 +41,22 @@ def build_root_dispatcher(d: Deps) -> Dispatcher:
     """
     disp = Dispatcher(d.log)
 
-    if d.summary_agent is not None:
-        runner = setup.new_runner("automation-agent", d.summary_agent)
-        handler = summary_handler(runner)
-        disp.register(Kind.CRON_DAILY, handler)
-        disp.register(Kind.CRON_WEEKLY, handler)
+    if d.summary_daily is not None:
+        disp.register(
+            Kind.CRON_DAILY,
+            summary_handler(
+                setup.new_runner("automation-agent", d.summary_daily),
+                "Run the daily commit digest.",
+            ),
+        )
+    if d.summary_weekly is not None:
+        disp.register(
+            Kind.CRON_WEEKLY,
+            summary_handler(
+                setup.new_runner("automation-agent", d.summary_weekly),
+                "Run the weekly commit digest.",
+            ),
+        )
     if d.lint_kickoff is not None:
         disp.register(Kind.LINT, d.lint_kickoff)
     if d.coverage_kickoff is not None:
@@ -54,12 +66,12 @@ def build_root_dispatcher(d: Deps) -> Dispatcher:
     return disp
 
 
-def summary_handler(runner: Runner) -> Handler:
+def summary_handler(runner: Runner, trigger: str) -> Handler:
     """Drive the summary workflow runner for a cron envelope, with a fresh session per
-    fire."""
+    fire. ``trigger`` is the agent input (distinct text for daily vs weekly)."""
 
     async def handle(e: Envelope) -> None:
         session_id = f"summary-{time.monotonic_ns()}"
-        await setup.drive(runner, "system", session_id, "Run the daily commit digest.")
+        await setup.drive(runner, "system", session_id, trigger)
 
     return handle

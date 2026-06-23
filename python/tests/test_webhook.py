@@ -52,6 +52,31 @@ def test_coverage_kickoff() -> None:
     assert c.env.source == "webhook:/coverage"
 
 
+def test_lint_kickoff_requires_signature() -> None:
+    c = Capture()
+    client = TestClient(Server(c.ingest, secret="topsecret").app)
+    body = '{"problems":[]}'
+    # No signature -> rejected (kickoff selects a caller-supplied target repo).
+    assert client.post("/webhooks/lint", content=body).status_code == 401
+    assert c.env is None
+    # Valid signature -> accepted.
+    resp = client.post(
+        "/webhooks/lint",
+        content=body,
+        headers={"X-Hub-Signature-256": sign("topsecret", body)},
+    )
+    assert resp.status_code == 202
+    assert c.env is not None and c.env.kind == Kind.LINT
+
+
+def test_coverage_kickoff_requires_signature() -> None:
+    c = Capture()
+    client = TestClient(Server(c.ingest, secret="topsecret").app)
+    resp = client.post("/webhooks/coverage", content='{"report":"jacoco"}')
+    assert resp.status_code == 401
+    assert c.env is None
+
+
 def test_github_signature_valid() -> None:
     c = Capture()
     client = TestClient(Server(c.ingest, secret="topsecret").app)

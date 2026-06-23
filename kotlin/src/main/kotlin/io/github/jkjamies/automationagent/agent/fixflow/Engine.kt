@@ -68,6 +68,8 @@ data class Deps(
     val codeLlm: Model? = null,
     val notifier: Notifier? = null,
     val token: String = "",
+    /** Kickoff allowlist (REPOS); when non-empty a kickoff whose repo is not listed is rejected. */
+    val repos: List<String> = emptyList(),
     val maxIter: Int = 3,
     val ciTimeout: Duration = 90.minutes,
     val author: Author = defaultAuthor,
@@ -98,9 +100,19 @@ class Engine(val spec: Spec, val deps: Deps) {
     /** Handles a kickoff envelope: starts a suspended fix run (apply → await CI). */
     suspend fun kickoff(raw: ByteArray) {
         val k = parseKickoff(raw)
+        if (!repoAllowed(k.repo)) {
+            log.log(System.Logger.Level.WARNING, "fix kickoff rejected: repo not in allowlist workflow=${spec.name} repo=${k.repo}")
+            throw IllegalArgumentException("kickoff: repo \"${k.repo}\" not in the configured allowlist")
+        }
         log.log(System.Logger.Level.INFO, "fix kickoff workflow=${spec.name} repo=${k.repo}")
         driver.kickoff(k)
     }
+
+    /**
+     * Whether [repo] may be targeted by a kickoff. An empty allowlist (REPOS unset) imposes no
+     * restriction; otherwise the repo must be listed.
+     */
+    private fun repoAllowed(repo: String): Boolean = deps.repos.isEmpty() || repo in deps.repos
 
     /**
      * Handles a GitHub check_run webhook. No-ops unless the event is this engine's check completing

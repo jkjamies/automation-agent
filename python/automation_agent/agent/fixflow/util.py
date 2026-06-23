@@ -6,24 +6,31 @@ and strip surrounding markdown fences from generated code.
 
 from __future__ import annotations
 
+import json
+
 
 def extract_json_array(s: str) -> str:
-    """Return the substring from the first ``[`` to the last ``]``, so a JSON array
-    can be recovered from model output that adds prose or code fences. "" if none."""
-    i = s.find("[")
-    j = s.rfind("]")
-    if i < 0 or j < 0 or j < i:
-        return ""
-    return s[i : j + 1]
+    """Return the first complete JSON array in model output (which may add prose or code
+    fences), scanning from the first ``[`` and decoding a single value — so trailing prose
+    or a stray bracket can't corrupt the span. "" if none parses."""
+    return _first_json_value(s, "[")
 
 
 def extract_json_object(s: str) -> str:
-    """Return the substring from the first ``{`` to the last ``}``. "" if none."""
-    i = s.find("{")
-    j = s.rfind("}")
-    if i < 0 or j < 0 or j < i:
-        return ""
-    return s[i : j + 1]
+    """Return the first complete JSON object in model output. "" if none parses."""
+    return _first_json_value(s, "{")
+
+
+def _first_json_value(s: str, opener: str) -> str:
+    decoder = json.JSONDecoder()
+    start = s.find(opener)
+    while start >= 0:
+        try:
+            _, end = decoder.raw_decode(s, start)
+            return s[start:end]
+        except json.JSONDecodeError:
+            start = s.find(opener, start + 1)
+    return ""
 
 
 def strip_fences(out: str) -> str:
