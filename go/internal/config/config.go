@@ -60,6 +60,10 @@ type Config struct {
 	// SQLiteDSN is the data source for SESSION_BACKEND=sqlite (ignored otherwise). A
 	// glebarez/modernc DSN: a file path, optionally with ?_pragma=… options.
 	SQLiteDSN string
+	// FirestoreProject is the GCP project for SESSION_BACKEND=firestore; empty detects it
+	// from ADC / GOOGLE_CLOUD_PROJECT. FirestoreCollection is the collection-name prefix.
+	FirestoreProject    string
+	FirestoreCollection string
 
 	// GitHub / repos
 	Repos       []string
@@ -100,6 +104,8 @@ func loadFrom(get lookup) (Config, error) {
 		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
 		SessionBackend:      SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
 		SQLiteDSN:           getOr(get, "SQLITE_DSN", "file:automation-agent.db?_pragma=busy_timeout(5000)"),
+		FirestoreProject:    getOr(get, "FIRESTORE_PROJECT", ""),
+		FirestoreCollection: getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
 		Repos:               splitList(getOr(get, "REPOS", "")),
 		GitHubToken:         getOr(get, "GITHUB_TOKEN", ""),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),

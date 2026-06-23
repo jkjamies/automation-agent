@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -69,13 +70,17 @@ func run(logger *slog.Logger) error {
 	// One session service + park store, shared by both fix engines (namespaced by app
 	// name). memory (default) keeps today's behavior; durable backends persist parked runs
 	// across restarts.
-	sessions, err := setup.NewSessionService(cfg)
+	sessions, err := setup.NewSessionService(sigCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("build session service: %w", err)
 	}
-	parkStore, err := setup.NewParkStore(cfg)
+	parkStore, err := setup.NewParkStore(sigCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("build park store: %w", err)
+	}
+	// Release a network-backed store's client (e.g. firestore) on shutdown.
+	if closer, ok := parkStore.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
 	}
 
 	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents

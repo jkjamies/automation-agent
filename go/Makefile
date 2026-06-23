@@ -2,7 +2,7 @@ MODULE    := github.com/jkjamies/automation-agent
 COVER_MIN := 80
 OLLAMA_HOST ?= http://localhost:11434
 
-.PHONY: help build run test cover lint fmt vet arch tidy spec docs-check ollama-check ci
+.PHONY: help build run test cover cover-firestore lint fmt vet arch tidy spec docs-check ollama-check ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -21,9 +21,17 @@ test: ## Run all tests
 
 cover: ## Run tests with coverage gate (>= $(COVER_MIN)%) over internal/ (cmd is composition-only)
 	go test -coverprofile=coverage.out -covermode=atomic ./internal/...
-	@total=$$(go tool cover -func=coverage.out | awk '/total:/ {gsub("%","",$$3); print $$3}'); \
-	echo "total coverage: $$total%"; \
+	@# Emulator-only backends (*_firestore.go) are validated by the FIRESTORE_EMULATOR_HOST-
+	@# gated integration suite (make cover-firestore), not the default unit run, so exclude
+	@# them from the gate denominator rather than require every dev to run the emulator.
+	@grep -vE '_firestore\.go:' coverage.out > coverage.gate.out
+	@total=$$(go tool cover -func=coverage.gate.out | awk '/total:/ {gsub("%","",$$3); print $$3}'); \
+	echo "total coverage: $$total% (excludes emulator-only *_firestore.go)"; \
 	awk "BEGIN{exit !($$total >= $(COVER_MIN))}" || { echo "FAIL: coverage $$total% < $(COVER_MIN)%"; exit 1; }
+
+cover-firestore: ## Run the firestore-backed tests against a running emulator (needs FIRESTORE_EMULATOR_HOST)
+	@test -n "$$FIRESTORE_EMULATOR_HOST" || { echo "set FIRESTORE_EMULATOR_HOST first (gcloud beta emulators firestore start)"; exit 1; }
+	go test ./internal/agent/setup/... -run 'Firestore|ParkStoreConformance' -count=1
 
 lint: ## Run golangci-lint
 	golangci-lint run

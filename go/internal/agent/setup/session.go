@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/glebarez/sqlite"
@@ -24,7 +25,8 @@ import (
 //
 // Only the long-running fix loop needs durability; ephemeral one-shot runners
 // (explore/analyze/triage) keep using an in-memory session via NewRunner.
-func NewSessionService(cfg config.Config) (session.Service, error) {
+func NewSessionService(ctx context.Context, cfg config.Config) (session.Service, error) {
+	_ = ctx // used by the firestore backend (next step)
 	switch cfg.SessionBackend {
 	case config.SessionMemory:
 		return session.InMemoryService(), nil

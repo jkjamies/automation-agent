@@ -2,7 +2,9 @@ package setup
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,12 +24,32 @@ func newSQLiteParkStore(t *testing.T) ParkStore {
 	return s
 }
 
+// newFirestoreParkStore builds a store against the Firestore emulator (FIRESTORE_EMULATOR_HOST).
+// Each call uses a collection unique to the running subtest, so the shared emulator state
+// does not leak between cases.
+func newFirestoreParkStore(t *testing.T) ParkStore {
+	t.Helper()
+	ctx := context.Background()
+	coll := "park_" + strings.ReplaceAll(t.Name(), "/", "_")
+	s, err := NewFirestoreParkStore(ctx, "test-project", coll)
+	if err != nil {
+		t.Fatalf("new firestore park store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 // TestParkStoreConformance runs one behavior suite against every ParkStore implementation,
 // so the memory and sqlite backends are guaranteed to behave identically.
 func TestParkStoreConformance(t *testing.T) {
 	backends := map[string]func(t *testing.T) ParkStore{
 		"memory": func(t *testing.T) ParkStore { return NewMemoryParkStore() },
 		"sqlite": newSQLiteParkStore,
+	}
+	// The firestore backend joins the suite only when the emulator is reachable, so CI
+	// without it still runs memory + sqlite.
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") != "" {
+		backends["firestore"] = newFirestoreParkStore
 	}
 	for name, newStore := range backends {
 		t.Run(name, func(t *testing.T) { runParkStoreSuite(t, newStore) })

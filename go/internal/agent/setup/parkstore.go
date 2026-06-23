@@ -59,16 +59,15 @@ type ParkStore interface {
 }
 
 // NewParkStore builds the park-record store for the configured backend, mirroring the
-// session backend. The firestore store lands in the follow-up step; selecting it before
-// then returns a not-implemented error.
-func NewParkStore(cfg config.Config) (ParkStore, error) {
+// session backend. ctx scopes the construction of network-backed stores (firestore).
+func NewParkStore(ctx context.Context, cfg config.Config) (ParkStore, error) {
 	switch cfg.SessionBackend {
 	case config.SessionMemory:
 		return NewMemoryParkStore(), nil
 	case config.SessionSQLite:
 		return NewSQLiteParkStore(cfg.SQLiteDSN)
 	case config.SessionFirestore:
-		return nil, fmt.Errorf("park store backend %q not yet implemented (next step)", cfg.SessionBackend)
+		return NewFirestoreParkStore(ctx, cfg.FirestoreProject, cfg.FirestoreCollection+"_parked_runs")
 	default:
 		return nil, fmt.Errorf("unknown session backend %q", cfg.SessionBackend)
 	}

@@ -124,7 +124,7 @@ func TestToolingDoesNotImportAgents(t *testing.T) {
 func TestProviderSDKsOnlyInSetup(t *testing.T) {
 	root := repoRoot(t)
 	setupDir := filepath.Join(root, "internal", "agent", "setup")
-	providerPat := regexp.MustCompile(`(ollama/ollama|adk/model/gemini|google\.golang\.org/genai|adk/session/database|glebarez/sqlite|gorm\.io/gorm)`)
+	providerPat := regexp.MustCompile(`(ollama/ollama|adk/model/gemini|google\.golang\.org/genai|adk/session/database|glebarez/sqlite|gorm\.io/gorm|cloud\.google\.com/go/firestore)`)
 	for _, fi := range goFiles(t, filepath.Join(root, "internal")) {
 		dir := filepath.Dir(fi.path)
 		if dir == setupDir || strings.HasPrefix(dir, setupDir+string(filepath.Separator)) {
