@@ -2,14 +2,23 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+var fsPrefixSeq atomic.Int64
+
+// firestorePrefix returns a collection prefix unique to this process and call, so the
+// shared Firestore emulator (whose data persists across test runs) cannot leak state
+// between cases or between repeated runs.
+func firestorePrefix(base string) string {
+	return fmt.Sprintf("%s_%d_%d", base, time.Now().UnixNano(), fsPrefixSeq.Add(1))
+}
 
 func parkRec(sid, prKey, callID string, attempts int) ParkRecord {
 	return ParkRecord{SessionID: sid, PRKey: prKey, CallID: callID, Attempts: attempts, ParkedAt: time.Now()}
@@ -30,8 +39,7 @@ func newSQLiteParkStore(t *testing.T) ParkStore {
 func newFirestoreParkStore(t *testing.T) ParkStore {
 	t.Helper()
 	ctx := context.Background()
-	coll := "park_" + strings.ReplaceAll(t.Name(), "/", "_")
-	s, err := NewFirestoreParkStore(ctx, "test-project", coll)
+	s, err := NewFirestoreParkStore(ctx, "test-project", firestorePrefix("park"))
 	if err != nil {
 		t.Fatalf("new firestore park store: %v", err)
 	}

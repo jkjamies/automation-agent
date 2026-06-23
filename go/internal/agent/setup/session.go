@@ -26,7 +26,6 @@ import (
 // Only the long-running fix loop needs durability; ephemeral one-shot runners
 // (explore/analyze/triage) keep using an in-memory session via NewRunner.
 func NewSessionService(ctx context.Context, cfg config.Config) (session.Service, error) {
-	_ = ctx // used by the firestore backend (next step)
 	switch cfg.SessionBackend {
 	case config.SessionMemory:
 		return session.InMemoryService(), nil
@@ -46,7 +45,7 @@ func NewSessionService(ctx context.Context, cfg config.Config) (session.Service,
 		}
 		return svc, nil
 	case config.SessionFirestore:
-		return nil, fmt.Errorf("session backend %q not yet implemented (Phase B)", cfg.SessionBackend)
+		return NewFirestoreSessionService(ctx, cfg.FirestoreProject, cfg.FirestoreCollection)
 	default:
 		return nil, fmt.Errorf("unknown session backend %q", cfg.SessionBackend)
 	}

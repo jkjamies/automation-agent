@@ -2,8 +2,8 @@ package setup
 
 import (
 	"context"
+	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jkjamies/automation-agent/internal/config"
@@ -32,16 +32,19 @@ func TestNewSessionServiceSQLite(t *testing.T) {
 	}
 }
 
-// TestNewSessionServiceFirestoreNotYet: firestore is a recognized backend whose impl
-// lands in Phase B; until then it returns a clear not-implemented error rather than a
-// nil service.
-func TestNewSessionServiceFirestoreNotYet(t *testing.T) {
-	_, err := NewSessionService(context.Background(), config.Config{SessionBackend: config.SessionFirestore})
-	if err == nil {
-		t.Fatal("expected a not-implemented error for the firestore backend")
+// TestNewSessionServiceFirestore: the firestore backend constructs against the emulator.
+func TestNewSessionServiceFirestore(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("set FIRESTORE_EMULATOR_HOST to run the firestore session backend test")
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("error = %v, want a not-implemented message", err)
+	svc, err := NewSessionService(context.Background(), config.Config{
+		SessionBackend: config.SessionFirestore, FirestoreProject: "test-project", FirestoreCollection: "test_sess",
+	})
+	if err != nil {
+		t.Fatalf("firestore backend: %v", err)
+	}
+	if svc == nil {
+		t.Fatal("firestore backend returned a nil service")
 	}
 }
 
