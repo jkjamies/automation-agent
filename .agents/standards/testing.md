@@ -3,9 +3,9 @@
 How to run **every** kind of test for each port, plus the rules they must obey. This
 is the source of truth — read it and you can run the suite without asking anyone.
 
-> **Scope:** the **Go** reference (`go/`) is fully documented and current. The Python /
-> TS / Kotlin ports mirror this design but their test docs are **pending parity** (see
-> [Other ports](#other-ports-pending-parity) and `specs/parity-status.md`).
+> **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same test
+> kinds and `make` targets apply to every port — run them from that port's directory. Per-port
+> drift is tracked in `specs/parity-status.md`.
 
 ---
 
@@ -133,16 +133,35 @@ go test ./internal/agent/setup/ -run TestParkStoreConformance/sqlite -count=1
 
 ---
 
-## Other ports (pending parity)
+## Other ports
 
-The Python (`python/`), TypeScript (`javascript/`), and Kotlin (`kotlin/`) ports follow
-the same principles above with their native test frameworks, but a port-specific
-run-the-tests walkthrough has **not** been written yet. Track the gap in
-`specs/parity-status.md`. When filling these in, mirror the Go section's structure:
-one-liners → test kinds → storage stacks → coverage → lint.
+Each port has the same `make` targets as Go (`make test`, `make cover`, `make arch`,
+`make ci`), run from its own directory. The frameworks differ:
 
-| Port | Framework | Coverage tool | Status |
+| Port | Framework | Coverage tool | Run the suite |
 |---|---|---|---|
-| Python `python/` | pytest | coverage.py / `pytest --cov` | _pending — document run commands_ |
-| TypeScript `javascript/` | (port's runner) | (port's coverage) | _pending_ |
-| Kotlin `kotlin/` | JUnit / kotlin-test | JaCoCo | _pending_ |
+| Go `go/` | `go test` | `go tool cover` | `cd go && make ci` |
+| Python `python/` | pytest (`pytest-asyncio`) | coverage.py (`pytest --cov`) | `cd python && make ci` |
+| TypeScript `javascript/` | the port's runner | the port's coverage | `cd javascript && make ci` |
+| Kotlin `kotlin/` | Kotest / JUnit | Kover | `cd kotlin && make ci` (or `./gradlew check`) |
+
+### Python (`python/`)
+
+```bash
+cd python
+make ci              # ruff + mypy + arch + pytest + coverage gate (>= 80%)
+make test            # pytest -q
+make cover           # pytest --cov (firestore park store omitted — emulator-only)
+make cover-firestore # the firestore-backed tests against a running emulator
+```
+
+`SESSION_BACKEND` selects the durable store the suspend/resume tests exercise: `memory`
+(default), `sqlite` (adk `SqliteSessionService` + an `aiosqlite` park store), or `firestore`
+(adk's native `FirestoreSessionService` + a custom park store on `google-cloud-firestore`).
+The firestore park store is emulator-only, so `make cover` omits it from the gate and the
+firestore conformance tests are skipped unless `FIRESTORE_EMULATOR_HOST` is set:
+
+```bash
+gcloud emulators firestore start --host-port=localhost:8765 &
+FIRESTORE_EMULATOR_HOST=localhost:8765 make cover-firestore
+```

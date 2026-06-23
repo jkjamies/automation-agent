@@ -4,8 +4,10 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -92,7 +94,31 @@ type Config struct {
 
 // Load reads configuration from the process environment, applying defaults.
 func Load() (Config, error) {
-	return loadFrom(os.LookupEnv)
+	c, err := loadFrom(os.LookupEnv)
+	if err != nil {
+		return Config{}, err
+	}
+	// When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
+	// CLI login so a local run authenticates to GitHub without a hand-set token. Any
+	// failure (gh absent, not logged in, timeout) leaves the token empty (anonymous).
+	if c.GitHubToken == "" {
+		c.GitHubToken = ghCLIToken()
+	}
+	return c, nil
+}
+
+// ghCLIToken returns the token from `gh auth token`, or "" if the gh CLI is missing,
+// unauthenticated, or errors. This is the one place config shells out rather than
+// reading the environment; it exists so local runs reuse an existing gh login. The
+// short timeout guards against a hung subprocess stalling startup.
+func ghCLIToken() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // loadFrom builds a Config from an arbitrary lookup func, which keeps Load
@@ -110,7 +136,7 @@ func loadFrom(get lookup) (Config, error) {
 		FirestoreProject:    getOr(get, "FIRESTORE_PROJECT", ""),
 		FirestoreCollection: getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
 		Repos:               splitList(getOr(get, "REPOS", "")),
-		GitHubToken:         getOr(get, "GITHUB_TOKEN", ""),
+		GitHubToken:         getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
 		SlackWebhookURL:     getOr(get, "SLACK_WEBHOOK_URL", ""),
 		TeamsWebhookURL:     getOr(get, "TEAMS_WEBHOOK_URL", ""),

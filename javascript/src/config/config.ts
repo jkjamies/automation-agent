@@ -5,6 +5,8 @@
  * read `process.env` directly. See .agents/standards/architecture-design.md §12.
  */
 
+import { execFileSync } from 'node:child_process';
+
 /** Looks up an environment variable, returning undefined when unset. */
 export type Lookup = (key: string) => string | undefined;
 
@@ -58,7 +60,31 @@ export interface Config {
 
 /** Read configuration from the process environment, applying defaults. */
 export function load(): Config {
-  return loadFrom((key) => process.env[key]);
+  const cfg = loadFrom((key) => process.env[key]);
+  // When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
+  // CLI login so a local run authenticates to GitHub without a hand-set token.
+  if (cfg.githubToken === '') {
+    cfg.githubToken = ghCliToken();
+  }
+  return cfg;
+}
+
+/**
+ * Return the token from `gh auth token`, or '' if the gh CLI is missing,
+ * unauthenticated, or errors. This is the one place config shells out rather than
+ * reading the environment; it exists so local runs reuse an existing gh login. The
+ * short timeout guards against a hung subprocess stalling startup.
+ */
+function ghCliToken(): string {
+  try {
+    return execFileSync('gh', ['auth', 'token'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -82,7 +108,7 @@ export function loadFrom(get: Lookup): Config {
     geminiModel: getOr(get, 'GEMINI_MODEL', ''),
     geminiCodeModel: getOr(get, 'GEMINI_CODE_MODEL', ''),
     repos: splitList(getOr(get, 'REPOS', '')),
-    githubToken: getOr(get, 'GITHUB_TOKEN', ''),
+    githubToken: getOr(get, 'GITHUB_TOKEN', getOr(get, 'GH_TOKEN', '')),
     notifyProvider: getOr(get, 'NOTIFY_PROVIDER', NotifyProvider.Slack) as NotifyProvider,
     slackWebhookUrl: getOr(get, 'SLACK_WEBHOOK_URL', ''),
     teamsWebhookUrl: getOr(get, 'TEAMS_WEBHOOK_URL', ''),

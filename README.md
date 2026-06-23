@@ -52,21 +52,21 @@ make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
 
-How-to guides (Go reference; other ports pending parity):
+How-to guides:
 [`local-development.md`](.agents/standards/local-development.md) (run modes, env vars,
 container), [`testing.md`](.agents/standards/testing.md) (every test kind + the Firestore
 emulator), [`deployment.md`](.agents/standards/deployment.md) (cloud architecture + GCP
 setup — source of truth), and [`ci-integration.md`](.agents/standards/ci-integration.md)
 (how CI drives the fixers). [`DEPLOYMENT.md`](DEPLOYMENT.md) is the short status/checklist.
 
-### Durable sessions (Go)
+### Durable sessions
 
 The fix loop's suspend/resume state is stored behind one `SESSION_BACKEND` switch —
 `memory` (default, zero-dependency), `sqlite` (durable local file), or `firestore` (cloud,
 scale-to-zero). Cloud Scheduler can drive the digests and the timeout sweep via
 `POST /internal/cron/{daily,weekly}` and `POST /internal/sweep` (Bearer-auth'd with
-`INTERNAL_TOKEN`). This landed in **Go first**; the Python / TS / Kotlin ports still use the
-in-memory design and are pending parity (see [`DEPLOYMENT.md`](DEPLOYMENT.md) TODOs).
+`INTERNAL_TOKEN`). With a durable backend a process restart resumes parked runs cleanly,
+which is what lets Cloud Run scale toward zero.
 
 ## Status & TODO
 
@@ -91,8 +91,9 @@ work to reach a fully production-validated system:
       `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). With durable sessions a restart
       resumes cleanly, so Cloud Run can scale toward zero (Cloud Scheduler drives the cron +
       sweep). Full step-by-step + remaining infra TODOs in [`DEPLOYMENT.md`](DEPLOYMENT.md).
-- [ ] **Port parity (Phase F)**: mirror the durable-session design (sessions + park store +
-      `/internal` ingress + status-aware summaries) into Python / TS / Kotlin.
+- [ ] **Cross-port parity**: keep the ports in lockstep on the durable-session design
+      (sessions + park store + `/internal` ingress + status-aware summaries); current
+      per-port drift is tracked in `specs/parity-status.md`.
 
 Nice-to-haves:
 

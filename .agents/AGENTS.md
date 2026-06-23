@@ -57,8 +57,8 @@ The rules of the codebase. Enforced where possible by `ARCH/`, `make ci`, and
 - `architecture-design.md` — the authoritative language-neutral design.
 - `language-parity.md` — the 1:1 cross-port contract (Go is the reference).
 
-The Go reference is fully documented; the Python / TS / Kotlin sections of the
-how-to-run docs are pending parity (`specs/parity-status.md`).
+The how-to-run docs document the design and how each port runs/tests/deploys; per-port
+drift is tracked in `specs/parity-status.md`.
 
 When standards and convenience conflict, the standards win.
 

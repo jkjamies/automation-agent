@@ -45,6 +45,24 @@ class ConfigTest : BehaviorSpec({
         }
     }
 
+    Given("GH_TOKEN set but GITHUB_TOKEN unset") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(lookupOf(mapOf("GH_TOKEN" to "gh_abc")))
+            Then("GH_TOKEN is honoured so a local gh-style env works") {
+                c.githubToken shouldBe "gh_abc"
+            }
+        }
+    }
+
+    Given("both GITHUB_TOKEN and GH_TOKEN set") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(lookupOf(mapOf("GITHUB_TOKEN" to "primary", "GH_TOKEN" to "fallback")))
+            Then("GITHUB_TOKEN takes precedence") {
+                c.githubToken shouldBe "primary"
+            }
+        }
+    }
+
     Given("a compound CI_TIMEOUT duration") {
         When("loading the configuration") {
             val c = Config.loadFrom(lookupOf(mapOf("CI_TIMEOUT" to "1h30m")))

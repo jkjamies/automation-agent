@@ -102,7 +102,7 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC for `/webhooks/*`; **blank locally = verification skipped (dev only)** |
 | `INTERNAL_TOKEN` | — | Bearer for `/internal/*`; blank = those routes are 404 |
 | **GitHub** | | |
-| `GITHUB_TOKEN` | — | PR create/label/compare (repo scope) |
+| `GITHUB_TOKEN` | `GH_TOKEN`, then `gh auth token` | PR create/label/compare (repo scope); blank reuses your local `gh` login |
 | `REPOS` | — | `owner/repo,owner/repo2` kickoff allowlist (empty = no restriction) |
 | **Notify** | | |
 | `NOTIFY_PROVIDER` | `slack` | `slack` \| `teams` |

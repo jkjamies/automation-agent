@@ -5,9 +5,10 @@ cloud, the HTTP surface, and the step-by-step GCP setup. This is the **source of
 the repo-root [`DEPLOYMENT.md`](../../DEPLOYMENT.md) is a thin status/checklist pointer
 back here (no environment is stood up yet — the repo is code only).
 
-> **Scope:** the **Go** reference (`go/`) is fully documented and current. The Python /
-> TS / Kotlin ports still mirror the older in-memory design and are **pending parity**
-> (see [Other ports](#other-ports-pending-parity) and `specs/parity-status.md`).
+> **Scope:** the GCP walkthrough below uses the **Go** reference (`go/`) as the worked
+> example; the same design, HTTP surface, and `SESSION_BACKEND` switch apply to every port
+> (see [Other ports](#other-ports) for the per-port backend stacks). Per-port drift:
+> `specs/parity-status.md`.
 >
 > Related: [`local-development.md`](local-development.md) (run it on your machine) ·
 > [`testing.md`](testing.md) (Firestore emulator) · [`ci-integration.md`](ci-integration.md)
@@ -146,16 +147,23 @@ GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is a
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds back into measured
       coverage (see [`testing.md`](testing.md)).
-- [ ] **Parity:** mirror the durable-session design to Python / TS / Kotlin.
+- [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
+      current per-port drift is tracked in `specs/parity-status.md`.
 - [ ] **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
 
 ---
 
-## Other ports (pending parity)
+## Other ports
 
-The Python (`python/`), TypeScript (`javascript/`), and Kotlin (`kotlin/`) ports mirror
-the Go topology but still carry the older **in-memory** session design and have **no**
-documented cloud deployment yet. Standing them up durably (Firestore-equivalent backend,
-the same HTTP + scheduler surface) is tracked in `specs/parity-status.md`. When filling
-these in, mirror the Go section: mental model → HTTP hooks → config → GCP steps → stack
-table.
+The mental model, HTTP surface (`/webhooks/*` + `/internal/*`), env vars, and GCP steps
+above apply to every port — they share one design and the `SESSION_BACKEND` switch. The
+per-port difference is only the backend SDKs sitting behind the same interfaces:
+
+| Port | sqlite session | firestore session | firestore park store |
+|---|---|---|---|
+| Go `go/` | adk `database` (gorm) | hand-rolled `session.Service` | custom on `cloud.google.com/go/firestore` |
+| Python `python/` | adk `SqliteSessionService` | adk **native** `FirestoreSessionService` | custom on `google-cloud-firestore` |
+
+Each port builds its own container (`cd <port> && make docker`, building that port's
+`cmd/agent`). Where a port's backend SDKs or coverage differ, `specs/parity-status.md` is
+the record.

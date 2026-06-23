@@ -2,10 +2,10 @@
 
 The authoritative design is `.agents/standards/architecture-design.md`. This file states the rules the
 `ARCH/` suite enforces. The **import-boundary** rules are **language-neutral**: they hold
-identically in the Go reference and in every port (`kotlin/`, `python/`). The **durable-session
-state** model below is implemented in the **Go reference only**; the ports still run the older
-in-memory-only design (parity pending — Phase F). See
-`.agents/standards/language-parity.md` for the cross-language 1:1 contract.
+identically across every port (`go/`, `python/`, `kotlin/`, `javascript/`). The
+**durable-session state** model below is the design for the fix-loop's suspend/resume state.
+See `.agents/standards/language-parity.md` for the cross-language 1:1 contract and
+`specs/parity-status.md` for where ports currently diverge.
 
 ## Flow
 
@@ -26,7 +26,7 @@ Ingest (cron / webhook / future hooks) → `ingest.Envelope` → **root agent** 
 3. **Nothing imports `cmd/...`.** Entrypoints are leaves.
 4. **Only `internal/config` reads the environment.**
 
-## State (Go reference)
+## State
 
 The fix-loop's (lint + coverage) suspend/resume state lives in **two provider-switched stores**,
 both confined to `internal/agent/setup` and selected by one `SESSION_BACKEND` env
@@ -46,5 +46,6 @@ GitHub still holds the durable PR artifacts (PR + label + check/SHA history) but
 to recover in-flight state. See `.agents/standards/architecture-design.md` §8 and
 `DEPLOYMENT.md`.
 
-> The Python / TS / Kotlin ports do **not** yet have this; they keep the in-memory-only design
-> (parity pending — Phase F).
+The ARCH boundary names Go SDKs (`glebarez/sqlite`, `gorm`, `cloud.google.com/go/firestore`)
+as the worked example; each port confines its own backend SDKs the same way (e.g. Python's
+`aiosqlite` + `google-cloud-firestore` in `agent/setup`, with adk's native session services).

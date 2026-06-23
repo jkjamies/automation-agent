@@ -82,6 +82,26 @@ func TestCodeModelOverride(t *testing.T) {
 	}
 }
 
+func TestGitHubTokenEnvChain(t *testing.T) {
+	// GH_TOKEN is honoured when GITHUB_TOKEN is unset, so a local gh-style env works.
+	c, err := loadFrom(mapLookup(map[string]string{"GH_TOKEN": "gh_abc"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.GitHubToken != "gh_abc" {
+		t.Errorf("GitHubToken = %q, want gh_abc", c.GitHubToken)
+	}
+
+	// GITHUB_TOKEN takes precedence over GH_TOKEN.
+	c, err = loadFrom(mapLookup(map[string]string{"GITHUB_TOKEN": "primary", "GH_TOKEN": "fallback"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.GitHubToken != "primary" {
+		t.Errorf("GitHubToken = %q, want primary", c.GitHubToken)
+	}
+}
+
 func TestInvalidProvider(t *testing.T) {
 	if _, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "openai"})); err == nil {
 		t.Fatal("expected error for invalid LLM_PROVIDER")

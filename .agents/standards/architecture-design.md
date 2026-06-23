@@ -4,9 +4,8 @@
 > Phases 1–5 are implemented and `make ci` is green. The CI feedback loop now runs on
 > **durable sessions** (§8): one `SESSION_BACKEND` env selects an in-memory (default),
 > sqlite (durable local), or firestore (cloud) backend, so a parked run survives a process
-> restart — the change that unlocks Cloud Run scale-to-zero. **Go is the reference
-> implementation; the Python / TS / Kotlin ports are pending (parity, Phase F).**
-> Last updated: 2026-06-23.
+> restart — the change that unlocks Cloud Run scale-to-zero. Per-port drift is tracked in
+> `specs/parity-status.md`. Last updated: 2026-06-23.
 
 A single long-running Go service that ingests events from many sources, routes every
 ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
@@ -366,10 +365,9 @@ uses branch `automation-agent/test-coverage`, label `automation-agent-coverage`,
 
 ## 8. Suspend / resume design (CI feedback loop)
 
-> **Status:** implemented in Go on **durable sessions**. One `SESSION_BACKEND` env
-> (`memory`|`sqlite`|`firestore`) selects two provider-switched stores; `memory` is the
-> zero-dependency default, `firestore` is the prod path. The Python / TS / Kotlin ports
-> still run the older in-memory-only design and are pending (parity, Phase F).
+> **Durable sessions.** One `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`) selects
+> two provider-switched stores; `memory` is the zero-dependency default, `firestore` is the
+> prod path. Per-port drift is tracked in `specs/parity-status.md`.
 
 ### The hard constraint: CI takes 20–40 minutes (often more with retries)
 
@@ -731,7 +729,7 @@ Each phase is independently testable.
 5. **Lint-fixer** — the suspend/resume workflow, incorporating the detailed notes.
 6. **Deployment** — Cloud Run or GCE; decide Ollama-on-GPU vs Gemini.
 
-**Durable-sessions migration (Go reference implementation):**
+**Durable-sessions migration:**
 
 - **Spike** — confirm Firestore + Cloud Run durable sessions over Agent Runtime + Cloud SQL.
   ✅ done.
@@ -747,18 +745,18 @@ Each phase is independently testable.
   Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, an in-process-scheduler
   disable flag (so `min-instances=0` is safe), and CI running the Firestore emulator. Detail in
   [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
-- **Phase F (pending)** — **parity:** mirror the durable-session design to the Python / TS /
-  Kotlin ports (today still in-memory-only).
+- **Cross-port parity** — keep the ports in lockstep on the durable-session design; current
+  per-port drift is tracked in `specs/parity-status.md`.
 
 ---
 
 ## 15. Open questions
 
-1. **Persistence:** ✅ **resolved — durable sessions (Go).** One `SESSION_BACKEND` env selects
+1. **Persistence:** ✅ **resolved — durable sessions.** One `SESSION_BACKEND` env selects
    the ADK `session.Service` + `setup.ParkStore`: `memory` (default, non-durable — the old
    behavior) | `sqlite` (durable local) | `firestore` (durable cloud, scale-to-zero). With a
    durable backend a restart resumes parked runs; GitHub still holds the durable PR artifacts.
-   Ports pending (Phase F). See §8.
+   Per-port drift: `specs/parity-status.md`. See §8.
 2. **Notify:** build the `Notifier` interface + both Slack and Teams impls; choice is one
    env var. Teams targets the new **Workflows/Adaptive Card** format (O365 connectors
    deprecating). ✅ assumed.

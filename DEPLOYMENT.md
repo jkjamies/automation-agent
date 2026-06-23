@@ -5,8 +5,9 @@
 > auth rationale, full GCP walkthrough, prod-vs-local stack table) is the source of truth
 > in [`.agents/standards/deployment.md`](.agents/standards/deployment.md).
 >
-> Scope: the Go service (`go/`). The Python / TS / Kotlin ports mirror the design but are
-> not yet updated for durable cloud sessions (see **TODO: parity**).
+> Scope: the GCP walkthrough below uses the Go service (`go/`) as the worked example; the
+> same durable-sessions design, `SESSION_BACKEND` switch, and env vars apply to every port.
+> Per-port drift is tracked in `specs/parity-status.md`.
 
 ## Where to find what
 
@@ -41,7 +42,8 @@ The detailed, copy-paste steps for each item are in
 - [ ] **Disable the in-process scheduler** via a flag (e.g. `SCHEDULER=external`).
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds into measured coverage.
-- [ ] **Parity:** mirror the durable-session design to Python / TS / Kotlin.
+- [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
+      current per-port drift is tracked in `specs/parity-status.md`.
 - [ ] **OIDC instead of a shared bearer** for `/internal/*`.
 
 Full rationale and detail for every item: [`.agents/standards/deployment.md`](.agents/standards/deployment.md).
