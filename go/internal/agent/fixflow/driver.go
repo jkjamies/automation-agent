@@ -382,10 +382,15 @@ func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) erro
 	return dr.store.Put(ctx, rec)
 }
 
-// clear is terminal cleanup: it removes the run from the store and stops any timer.
+// clear is terminal cleanup: it removes the run from the park store and deletes the ADK
+// session so a durable backend does not leak completed runs. (The timer, if any, is
+// stopped by the resolve that precedes clear.)
 func (dr *Driver) clear(ctx context.Context, sid string) {
 	if err := dr.store.Delete(ctx, sid); err != nil {
 		dr.engine.d.Log.Error("clear run failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
+	}
+	if err := dr.lr.DeleteSession(ctx, sid); err != nil {
+		dr.engine.d.Log.Error("delete session failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
 	}
 }
 

@@ -58,13 +58,17 @@ type ParkStore interface {
 	ParkedCount(ctx context.Context) (int, error)
 }
 
-// NewParkStore builds the park-record store for the configured backend. Durable
-// sqlite/firestore stores land in the follow-up steps; until then every backend uses the
-// in-memory store, so parked runs do not yet survive a restart even on SESSION_BACKEND=sqlite.
+// NewParkStore builds the park-record store for the configured backend, mirroring the
+// session backend. The firestore store lands in the follow-up step; selecting it before
+// then returns a not-implemented error.
 func NewParkStore(cfg config.Config) (ParkStore, error) {
 	switch cfg.SessionBackend {
-	case config.SessionMemory, config.SessionSQLite, config.SessionFirestore:
+	case config.SessionMemory:
 		return NewMemoryParkStore(), nil
+	case config.SessionSQLite:
+		return NewSQLiteParkStore(cfg.SQLiteDSN)
+	case config.SessionFirestore:
+		return nil, fmt.Errorf("park store backend %q not yet implemented (next step)", cfg.SessionBackend)
 	default:
 		return nil, fmt.Errorf("unknown session backend %q", cfg.SessionBackend)
 	}
@@ -107,6 +111,9 @@ func (m *memoryParkStore) Get(_ context.Context, sessionID string) (ParkRecord, 
 }
 
 func (m *memoryParkStore) ResolveByPRKey(_ context.Context, prKey string) (ParkRecord, bool, error) {
+	if prKey == "" {
+		return ParkRecord{}, false, nil // never resolve by an empty key (parity with sqlite)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sid, ok := m.index[prKey]
