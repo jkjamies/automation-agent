@@ -43,9 +43,7 @@ def _commit(sha, message, author_name, when, html_url):
 def _pull(number, title, ref, sha, html_url, labels):
     head = SimpleNamespace(ref=ref, sha=sha)
     lbls = [SimpleNamespace(name=n) for n in labels]
-    return SimpleNamespace(
-        number=number, title=title, head=head, html_url=html_url, labels=lbls
-    )
+    return SimpleNamespace(number=number, title=title, head=head, html_url=html_url, labels=lbls)
 
 
 def _check_run(name, status, conclusion, started_at, completed_at, text=None, summary=None):
@@ -111,6 +109,16 @@ class FakeRepo:
         self._kw["contents_ref"] = ref
         return self._kw["contents"]
 
+    def compare(self, base, head):
+        self._kw["compare_args"] = (base, head)
+        return self._kw["comparison"]
+
+
+def _comparison(total_commits, files):
+    """files: list of (path, status, additions, deletions)."""
+    fs = [SimpleNamespace(filename=p, status=s, additions=a, deletions=d) for (p, s, a, d) in files]
+    return SimpleNamespace(total_commits=total_commits, files=fs)
+
 
 class FakeGithub:
     def __init__(self, repo):
@@ -134,9 +142,7 @@ def make_client(repo: FakeRepo) -> tuple[Client, FakeGithub]:
 
 def test_list_commits_since() -> None:
     when = datetime(2026, 6, 19, 10, 0, 0, tzinfo=UTC)
-    repo = FakeRepo(
-        commits=[_commit("abc", "fix bug", "Jane", when, "https://gh/abc")]
-    )
+    repo = FakeRepo(commits=[_commit("abc", "fix bug", "Jane", when, "https://gh/abc")])
     c, gh = make_client(repo)
 
     commits = c.list_commits_since("o", "r", datetime.fromtimestamp(0, tz=UTC))
@@ -352,3 +358,16 @@ def test_parse_check_run_event_missing_fields() -> None:
 def test_parse_check_run_event_invalid_json() -> None:
     with pytest.raises(ValueError):
         parse_check_run_event(b"not json")
+
+
+def test_compare_projects_commits_and_files() -> None:
+    cmp = _comparison(2, [("a.py", "modified", 3, 1), ("b.py", "added", 10, 0)])
+    repo = FakeRepo(comparison=cmp)
+    c, gh = make_client(repo)
+    out = c.compare("acme", "api", "main", "agent/branch")
+    assert gh.repo_full_name == "acme/api"
+    assert repo._kw["compare_args"] == ("main", "agent/branch")
+    assert out.total_commits == 2
+    assert [f.path for f in out.files] == ["a.py", "b.py"]
+    assert out.files[0].status == "modified" and out.files[0].additions == 3
+    assert out.files[1].status == "added" and out.files[1].deletions == 0

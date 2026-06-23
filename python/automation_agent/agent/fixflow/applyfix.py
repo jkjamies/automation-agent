@@ -14,18 +14,20 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from automation_agent.agent.fixflow.files import safe_join
-from automation_agent.githubapi import PR, PRInput
+from automation_agent.githubapi import PR, Comparison, PRInput
 from automation_agent.gitrepo import Author, Repo
 
 
 class GitHub(Protocol):
-    """The slice of githubapi the apply step needs (consumer-defined, fakeable)."""
+    """The slice of githubapi the apply + summary steps need (consumer-defined, fakeable)."""
 
     def find_agent_prs(self, owner: str, repo: str, label: str) -> list[PR]: ...
 
     def create_pr(self, owner: str, repo: str, in_: PRInput) -> PR: ...
 
     def add_labels(self, owner: str, repo: str, number: int, *labels: str) -> None: ...
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> Comparison: ...
 
 
 @dataclass

@@ -34,7 +34,13 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, LongRunningFunctionTool
 
 from automation_agent.agent import setup
+from automation_agent.agent.fixflow.summary import (
+    SummaryInput,
+    TerminalOutcome,
+    build_summary_text,
+)
 from automation_agent.agent.setup import MemoryParkStore, ParkRecord
+from automation_agent.githubapi import Comparison
 
 if TYPE_CHECKING:
     from automation_agent.agent.fixflow.engine import Engine, FileWork, ResumeInput
@@ -218,17 +224,19 @@ class Driver:
             self._log(logging.INFO, "resume: no parked run", pr=key, conclusion=in_.conclusion)
             return
         self._stop_timer(key)
-        link = _pull_url(in_.full_repo, in_.pr_number)
 
         # Notify before clear so the message is sent while the record is intact, then clear
         # unconditionally. A duplicate webhook cannot double-notify: resolve_by_pr_key above
         # already claimed the run.
         if in_.conclusion == "success":
             self._log(logging.INFO, "fix succeeded", repo=in_.full_repo, pr=in_.pr_number)
-            self.engine.notify(
+            self._terminal_notify(
+                TerminalOutcome.SUCCESS,
                 self.engine.spec.success_title,
-                f"{in_.full_repo}: {self.engine.spec.name} passed CI.",
-                link,
+                run,
+                in_.full_repo,
+                in_.pr_number,
+                "",
             )
             await self._clear(run.session_id)
             return
@@ -242,11 +250,13 @@ class Driver:
                 pr=in_.pr_number,
                 attempts=run.attempts,
             )
-            self.engine.notify(
+            self._terminal_notify(
+                TerminalOutcome.EXHAUSTED,
                 self.engine.spec.review_title,
-                f"{in_.full_repo}: after {run.attempts} attempts the "
-                f"{self.engine.spec.name} fix still fails CI. Please review.",
-                link,
+                run,
+                in_.full_repo,
+                in_.pr_number,
+                in_.output_text,
             )
             await self._clear(run.session_id)
             return
@@ -286,11 +296,8 @@ class Driver:
             pr=pr,
             timeout=self.timeout,
         )
-        self.engine.notify(
-            self.engine.spec.review_title,
-            f"{full_repo}: the {self.engine.spec.name} fix timed out after "
-            f"{self.timeout} waiting for CI. Please review.",
-            _pull_url(full_repo, pr),
+        self._terminal_notify(
+            TerminalOutcome.TIMEOUT, self.engine.spec.review_title, run, full_repo, pr, ""
         )
         await self._clear(run.session_id)
 
@@ -310,13 +317,69 @@ class Driver:
                 pr=pr,
                 timeout=self.timeout,
             )
-            self.engine.notify(
+            self._terminal_notify(
+                TerminalOutcome.TIMEOUT,
                 self.engine.spec.review_title,
-                f"{full_repo}: the {self.engine.spec.name} fix timed out after "
-                f"{self.timeout} waiting for CI. Please review.",
-                _pull_url(full_repo, pr),
+                run,
+                full_repo,
+                pr,
+                "",
             )
             await self._clear(run.session_id)
+
+    # --- terminal summary --------------------------------------------------
+
+    def _terminal_notify(
+        self,
+        outcome: TerminalOutcome,
+        title: str,
+        run: ParkRecord,
+        full_repo: str,
+        pr_number: int,
+        last_output: str,
+    ) -> None:
+        """Build and send the status-aware summary for a finished run: the outcome framing,
+        the original targeted findings, and what actually changed on the PR."""
+        in_ = SummaryInput(
+            outcome=outcome,
+            workflow=self.engine.spec.name,
+            full_repo=full_repo,
+            pr_number=pr_number,
+            attempts=run.attempts,
+            last_output=last_output,
+            timeout=str(self.timeout),
+            check_name=self.engine.spec.check_name,
+        )
+        try:
+            rp = RunParams.from_json(run.params)
+            in_.report = rp.report
+            in_.changed = self._gather_changes(rp)
+        except Exception as exc:  # noqa: BLE001
+            self._log(
+                logging.WARNING,
+                "decode run params for summary failed; sending without findings/diff",
+                session=run.session_id,
+                err=str(exc),
+            )
+        self.engine.notify(title, build_summary_text(in_), _pull_url(full_repo, pr_number))
+
+    def _gather_changes(self, rp: RunParams) -> Comparison:
+        """Best-effort fetch the PR branch's base...head diff for a terminal summary. On error
+        returns an empty comparison so the summary still reports the attempt count and
+        findings."""
+        gh = self.engine.d.gh
+        if gh is None:
+            return Comparison()
+        try:
+            return gh.compare(rp.owner, rp.repo, rp.base, self.engine.spec.branch)
+        except Exception as exc:  # noqa: BLE001
+            self._log(
+                logging.WARNING,
+                "compare for summary failed",
+                repo=rp.full_repo,
+                err=str(exc),
+            )
+            return Comparison()
 
     # --- internals ---------------------------------------------------------
 

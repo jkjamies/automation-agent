@@ -69,6 +69,14 @@ def test_code_model_override() -> None:
     assert c.ollama_model == "gemma4:12b"
 
 
+def test_github_token_env_chain() -> None:
+    # GH_TOKEN is honoured when GITHUB_TOKEN is unset, so a local gh-style env works.
+    assert load_from(map_lookup({"GH_TOKEN": "gh_abc"})).github_token == "gh_abc"
+    # GITHUB_TOKEN takes precedence over GH_TOKEN.
+    c = load_from(map_lookup({"GITHUB_TOKEN": "primary", "GH_TOKEN": "fallback"}))
+    assert c.github_token == "primary"
+
+
 def test_invalid_provider() -> None:
     with pytest.raises(ValueError):
         load_from(map_lookup({"LLM_PROVIDER": "openai"}))

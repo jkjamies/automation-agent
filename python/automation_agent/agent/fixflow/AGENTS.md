@@ -43,11 +43,11 @@ flowchart TD
     R --> RES["ParkStore.resolve_by_pr_key(pr_key) (atomic claim)"]
     RES -->|"late/dup/unknown"| NO2["no-op"]
     RES --> C{conclusion}
-    C -->|success| OK["notify success_title + clear (park + session)"]
-    C -->|failure & attempts >= max_iter| HRV["notify review_title + clear"]
+    C -->|success| OK["status-aware summary (success_title) + clear (park + session)"]
+    C -->|failure & attempts >= max_iter| HRV["status-aware summary (review_title) + clear"]
     C -->|failure & attempts < max_iter| RT["resume run -> apply_fix again -> re-park (attempts+1)"]
     RT --> SUS
-    TO["ci_timeout timer fires"] -.-> TON["on_timeout: claim + notify review_title + clear"]
+    TO["ci_timeout timer fires"] -.-> TON["on_timeout: claim + status-aware summary + clear"]
     SW["/internal/sweep -> sweep_timeouts (durable catch-all)"] -.-> TON
 ```
 
@@ -61,6 +61,9 @@ flowchart TD
   (the in-memory `RunRegistry` it replaced is gone). Terminal `_clear` deletes the park
   record **and** the ADK session. The triage `work` cache is an in-process optimization
   (not serialized), so a warm process skips re-triage while a restart simply re-triages.
+  Terminal paths build a status-aware summary via `summary.build_summary_text` + `gh.compare`.
+- `summary.py` — `build_summary_text`: the status-aware terminal summary (success / max-iter
+  / timeout framings) enriched with `gh.compare` (base...head diff) + the park record. Pure.
 - `applyfix.py` — clone -> branch (new/existing) -> commit -> push -> ensure labeled PR.
 - `analyze.py` — `parallel_analyze`: one ADK parallel agent per `FileWork`, distinct
   state keys so they never collide.

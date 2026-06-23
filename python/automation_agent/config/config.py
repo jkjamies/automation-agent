@@ -131,7 +131,38 @@ class Config:
 
 def load() -> Config:
     """Read configuration from the process environment, applying defaults."""
-    return load_from(os.environ.get)
+    cfg = load_from(os.environ.get)
+    # When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
+    # CLI login so a local run authenticates to GitHub without a hand-set token.
+    if not cfg.github_token:
+        cfg.github_token = _gh_cli_token()
+    return cfg
+
+
+def _gh_cli_token() -> str:
+    """Return the token from ``gh auth token``, or "" if the gh CLI is missing,
+    unauthenticated, or errors.
+
+    This is the one place config shells out rather than reading the environment; it
+    exists so local runs reuse an existing gh login. The short timeout guards against
+    a hung subprocess stalling startup.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("gh") is None:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip()
 
 
 def load_from(get: Lookup) -> Config:
@@ -162,7 +193,7 @@ def load_from(get: Lookup) -> Config:
         firestore_project=_get_or(get, "FIRESTORE_PROJECT", ""),
         firestore_collection=_get_or(get, "FIRESTORE_COLLECTION", "automation_agent"),
         repos=_split_list(_get_or(get, "REPOS", "")),
-        github_token=_get_or(get, "GITHUB_TOKEN", ""),
+        github_token=_get_or(get, "GITHUB_TOKEN", _get_or(get, "GH_TOKEN", "")),
         notify_provider=NotifyProvider(
             _get_or(get, "NOTIFY_PROVIDER", NotifyProvider.SLACK.value)
         ),

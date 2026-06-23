@@ -20,8 +20,9 @@ from automation_agent.agent.fixflow import (
     Spec,
     new_engine,
 )
+from automation_agent.agent.fixflow.driver import RunParams
 from automation_agent.agent.setup import ParkRecord
-from automation_agent.githubapi import PR, PRInput
+from automation_agent.githubapi import PR, ChangedFile, Comparison, PRInput
 from automation_agent.notify import Message
 
 
@@ -34,13 +35,20 @@ async def _prepark(
     parked_at: datetime | None = None,
 ) -> None:
     """Seed a parked run directly in the store (bypassing kickoff) so the exhausted /
-    timeout / sweep terminal paths can be exercised in isolation."""
+    timeout / sweep terminal paths can be exercised in isolation. Stores valid run params so
+    the terminal summary can decode the findings."""
+    repo, _, _num = key.partition("#")
+    owner, _, name = repo.partition("/")
+    params = RunParams(
+        owner=owner, repo=name, full_repo=repo, base="main", report="lint findings"
+    ).to_json()
     await e.driver.store.put(
         ParkRecord(
             session_id=session_id,
             pr_key=key,
             call_id="c",
             attempts=attempts,
+            params=params,
             parked_at=parked_at or datetime.now(UTC),
         )
     )
@@ -64,6 +72,12 @@ class FakeGH:
 
     def add_labels(self, owner: str, repo: str, number: int, *labels: str) -> None:
         self.labeled.extend(labels)
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> Comparison:
+        return Comparison(
+            total_commits=1,
+            files=[ChangedFile(path="a.go", status="modified", additions=3, deletions=1)],
+        )
 
 
 class FakeNotifier:
@@ -189,6 +203,9 @@ async def test_engine_resume_success(tmp_path) -> None:
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
     await e.resume(_check_body("success", 42))
     assert len(n.msgs) == 1 and "succeeded" in n.msgs[0].title
+    # The status-aware summary reports the outcome + what changed on the PR (from compare).
+    body = n.msgs[0].text
+    assert "passed CI" in body and "a.go" in body
     assert await e.driver.parked_count() == 0
 
 

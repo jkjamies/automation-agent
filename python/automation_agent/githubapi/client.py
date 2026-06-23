@@ -52,6 +52,24 @@ class PRInput:
 
 
 @dataclass
+class ChangedFile:
+    """One file changed in a comparison (base...head diff)."""
+
+    path: str
+    status: str = ""  # added | modified | removed | renamed
+    additions: int = 0
+    deletions: int = 0
+
+
+@dataclass
+class Comparison:
+    """A base...head comparison: the commits and files a PR branch added."""
+
+    total_commits: int = 0
+    files: list[ChangedFile] = field(default_factory=list)
+
+
+@dataclass
 class CheckResult:
     """The agent verify check's state for a ref."""
 
@@ -147,6 +165,25 @@ class Client:
             return pr.get_commits().totalCount
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"list PR commits {owner}/{repo}#{number}: {exc}") from exc
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> Comparison:
+        """Return the base...head comparison (commit count + changed files). Used to
+        enrich a terminal summary with what the agent actually changed on the PR."""
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            cmp = r.compare(base, head)
+            files = [
+                ChangedFile(
+                    path=f.filename or "",
+                    status=f.status or "",
+                    additions=f.additions or 0,
+                    deletions=f.deletions or 0,
+                )
+                for f in (cmp.files or [])
+            ]
+            return Comparison(total_commits=cmp.total_commits or 0, files=files)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"compare {owner}/{repo} {base}...{head}: {exc}") from exc
 
     def agent_check(self, owner: str, repo: str, ref: str, check_name: str) -> CheckResult:
         """Return the named check's state for ref, or ``CheckResult(found=False)``
