@@ -3,8 +3,8 @@
 It owns the event-driven loop — kickoff -> suspend ->
 CI resume -> loop or finish — plus the apply mechanics and attempt counting. Each
 concrete agent supplies a :class:`Spec` (triage fn, analyze fn, branch/label/check
-names). State lives on GitHub; there is no local store. The CI-wait suspend/resume
-itself is owned by the :class:`Driver` (ADK long-running + the in-memory registry).
+names). The durable artifacts live on GitHub; the CI-wait suspend/resume itself is owned
+by the :class:`Driver` (ADK long-running + an injected setup.ParkStore backend).
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from google.adk.models import BaseLlm
+from google.adk.sessions import BaseSessionService
 
 from automation_agent.agent.fixflow.applyfix import (
     ApplyConfig,
@@ -25,6 +26,7 @@ from automation_agent.agent.fixflow.applyfix import (
     open_repo,
 )
 from automation_agent.agent.fixflow.envelope import parse_kickoff
+from automation_agent.agent.setup import ParkStore
 from automation_agent.githubapi import parse_check_run_event
 from automation_agent.gitrepo import Author
 from automation_agent.notify import Message, Notifier
@@ -109,6 +111,14 @@ class Deps:
     )
     log: logging.Logger | None = None
     clone_url: Callable[[str, str], str] = _default_clone_url
+    # session_service stores the durable suspend/resume history for the parked fix loop.
+    # None falls back to in-memory (a restart strands parked runs); a durable backend
+    # (sqlite/firestore) lets a parked run resume after a restart. Built once at startup.
+    session_service: BaseSessionService | None = None
+    # park_store persists the park record (pr_key -> session, attempts, run params) so a
+    # resume — and, with a durable backend, a restart — can reconstruct it. None falls back
+    # to the in-memory store. Built once at startup, alongside session_service.
+    park_store: ParkStore | None = None
 
 
 @dataclass
@@ -142,6 +152,11 @@ class Engine:
         """The agent verify check this engine resumes on."""
         return self.spec.check_name
 
+    async def sweep_timeouts(self) -> None:
+        """Resolve this engine's parked runs whose CI never reported — the durable timeout
+        catch-all driven by Cloud Scheduler via ``/internal/sweep``."""
+        await self.driver.sweep_timeouts()
+
     async def kickoff(self, raw: bytes) -> None:
         """Handle a kickoff envelope: start a suspended fix run (apply -> await CI)."""
         k = parse_kickoff(raw)
@@ -153,9 +168,7 @@ class Engine:
                 )
             raise ValueError(f"kickoff: repo {k.repo!r} not in the configured allowlist")
         if self.d.log is not None:
-            self.d.log.info(
-                "fix kickoff", extra={"workflow": self.spec.name, "repo": k.repo}
-            )
+            self.d.log.info("fix kickoff", extra={"workflow": self.spec.name, "repo": k.repo})
         await self.driver.kickoff(k)
 
     def _repo_allowed(self, repo: str) -> bool:

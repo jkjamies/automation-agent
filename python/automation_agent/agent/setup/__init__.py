@@ -20,6 +20,12 @@ from automation_agent.agent.setup.longrun import (
     Sequencer,
 )
 from automation_agent.agent.setup.names import safe_name
+from automation_agent.agent.setup.parkstore import (
+    MemoryParkStore,
+    ParkRecord,
+    ParkStore,
+    new_park_store,
+)
 from automation_agent.agent.setup.prompt import Prompts
 from automation_agent.agent.setup.runner import (
     drive,
@@ -27,10 +33,14 @@ from automation_agent.agent.setup.runner import (
     drive_text,
     new_runner,
 )
+from automation_agent.agent.setup.session import new_session_service
 
 __all__ = [
     "DriveResult",
     "LongRunDriver",
+    "MemoryParkStore",
+    "ParkRecord",
+    "ParkStore",
     "Prompts",
     "Sequencer",
     "assistant_text",
@@ -42,7 +52,9 @@ __all__ = [
     "drive_text",
     "generate_text",
     "last_text",
+    "new_park_store",
     "new_runner",
+    "new_session_service",
     "safe_name",
     "state_string",
     "text_event",

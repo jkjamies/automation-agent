@@ -115,7 +115,7 @@ def test_sequencer_decide() -> None:
 
 async def test_late_webhook_after_timeout() -> None:
     """A late/duplicate resume on a concluded run must not re-park (defense in depth
-    behind the registry's atomic claim)."""
+    behind the park store's atomic claim)."""
     tools = _Tools()
     d = _new_driver(tools)
     start = await d.start("s1", "go")

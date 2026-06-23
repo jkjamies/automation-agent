@@ -104,6 +104,12 @@ async def run() -> None:
     gh = Client(cfg.github_token)
     notifier = build_notifier(cfg)
 
+    # One session service + park store, shared by both fix engines (namespaced by app name).
+    # memory (default) keeps today's behavior; durable backends persist parked runs across
+    # restarts.
+    session_service = agent_setup.new_session_service(cfg)
+    park_store = agent_setup.new_park_store(cfg)
+
     # Daily and weekly are distinct agents so the weekly cron posts a real 7-day digest,
     # not a copy of the daily one.
     summary_daily = build_summary_agent(
@@ -124,6 +130,8 @@ async def run() -> None:
         ci_timeout=cfg.ci_timeout,
         repos=cfg.repos,
         log=log,
+        session_service=session_service,
+        park_store=park_store,
     )
     lint_engine = lintfixer.new_engine(fix_deps)
     cov_engine = covfixer.new_engine(fix_deps)
@@ -201,9 +209,7 @@ async def run() -> None:
         if pending:
             log.info("draining %d in-flight dispatch(es)", len(pending))
             try:
-                await asyncio.wait_for(
-                    asyncio.gather(*pending, return_exceptions=True), timeout=30
-                )
+                await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=30)
             except TimeoutError:
                 log.warning("drain timed out; %d dispatch(es) abandoned", len(pending))
 

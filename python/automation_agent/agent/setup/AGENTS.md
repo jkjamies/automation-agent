@@ -29,10 +29,19 @@ flowchart TD
 - `runner.py` — in-memory runner helpers (`Runner`, `drive`, `drive_text`,
   `drive_collect_state`).
 - `longrun.py` — generic ADK **IsLongRunning** suspend/resume plumbing: `LongRunDriver`
-  (`start`/`resume` returning a plain `DriveResult`) and the `Sequencer` class, a
+  (`start`/`resume` returning a plain `DriveResult`, plus `delete_session` for terminal
+  cleanup, over an injectable `BaseSessionService`) and the `Sequencer` class, a
   deterministic Action->Wait `BaseLlm` for two-phase wait loops. Lives here because it
   touches `genai`; callers (e.g. `fixflow`) stay genai-free. Verified end-to-end in
   `tests/test_suspend_resume.py` + `tests/test_longrun.py`.
+- `session.py` — `new_session_service(cfg)`: the `SESSION_BACKEND` switch returning an ADK
+  `BaseSessionService` (the durable suspend/resume history of the parked fix loop). `memory`
+  is in-process; `sqlite`/`firestore` (adk's native `FirestoreSessionService`) land in later
+  phases. Infra backends are confined here by `arch/`.
+- `parkstore.py` — `ParkStore` (async ABC) + `ParkRecord` + `MemoryParkStore` +
+  `new_park_store(cfg)`: the durable park-record store (pr_key -> session, attempts, opaque
+  run params) that replaced the in-memory `RunRegistry`. `resolve_by_pr_key`/`sweep` are
+  atomic single-winner claims. sqlite/firestore backends land in later phases.
 - `generate.py` — text-generation helpers over the configured `BaseLlm`.
 
 Tests stub the Ollama HTTP endpoint (`respx`) and use in-memory resources for prompts —
