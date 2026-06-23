@@ -179,12 +179,23 @@ async def run() -> None:
         pending.add(task)
         task.add_done_callback(pending.discard)
 
+    # The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
+    # parked runs whose CI never reported (Cloud Scheduler drives it on a schedule).
+    async def _sweep() -> None:
+        for eng in engines:
+            await eng.sweep_timeouts()
+
     if not cfg.github_webhook_secret:
         log.warning(
             "GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; "
             "the /webhooks/github route accepts unauthenticated requests (dev only)"
         )
-    srv = Server(_ingest, secret=cfg.github_webhook_secret)
+    srv = Server(
+        _ingest,
+        secret=cfg.github_webhook_secret,
+        internal_token=cfg.internal_token,
+        sweep=_sweep,
+    )
 
     server = uvicorn.Server(
         uvicorn.Config(srv.app, host="0.0.0.0", port=int(cfg.port), log_level="info")
