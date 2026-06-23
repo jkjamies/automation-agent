@@ -15,6 +15,7 @@ import (
 	"google.golang.org/adk/tool/functiontool"
 
 	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"github.com/jkjamies/automation-agent/internal/githubapi"
 )
 
 const (
@@ -235,20 +236,23 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 		return nil
 	}
 	dr.stopTimer(key)
-	link := pullURL(in.FullRepo, in.PRNumber)
 
+	// Notify before clear so the summary is sent while the record is intact, then clear
+	// unconditionally (a notify error is returned/logged, not a reason to leak the run). A
+	// duplicate webhook cannot double-notify: ResolveByPRKey above already claimed the run.
 	if in.Conclusion == "success" {
-		dr.clear(ctx, run.SessionID)
 		dr.engine.d.Log.Info("fix succeeded", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber)
-		return dr.engine.notify(ctx, dr.engine.spec.SuccessTitle, fmt.Sprintf("%s: %s passed CI.", in.FullRepo, dr.engine.spec.Name), link)
+		err := dr.terminalNotify(ctx, outcomeSuccess, dr.engine.spec.SuccessTitle, run, in.FullRepo, in.PRNumber, "")
+		dr.clear(ctx, run.SessionID)
+		return err
 	}
 
 	// failure
 	if run.Attempts >= dr.engine.d.MaxIter {
-		dr.clear(ctx, run.SessionID)
 		dr.engine.d.Log.Warn("fix exhausted attempts", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber, "attempts", run.Attempts)
-		return dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
-			fmt.Sprintf("%s: after %d attempts the %s fix still fails CI. Please review.", in.FullRepo, run.Attempts, dr.engine.spec.Name), link)
+		err := dr.terminalNotify(ctx, outcomeExhausted, dr.engine.spec.ReviewTitle, run, in.FullRepo, in.PRNumber, in.OutputText)
+		dr.clear(ctx, run.SessionID)
+		return err
 	}
 
 	if err := dr.updateForRetry(ctx, run.SessionID, in.OutputText); err != nil {
@@ -279,12 +283,59 @@ func (dr *Driver) onTimeout(key string) {
 		return // already resolved by a webhook
 	}
 	dr.stopTimer(key)
-	dr.clear(ctx, run.SessionID)
 	fullRepo, pr := splitPRKey(key)
-	link := pullURL(fullRepo, pr)
 	dr.engine.d.Log.Warn("fix timed out waiting for CI", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "timeout", dr.timeout)
-	_ = dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
-		fmt.Sprintf("%s: the %s fix timed out after %s waiting for CI. Please review.", fullRepo, dr.engine.spec.Name, dr.timeout), link)
+	_ = dr.terminalNotify(ctx, outcomeTimeout, dr.engine.spec.ReviewTitle, run, fullRepo, pr, "")
+	dr.clear(ctx, run.SessionID)
+}
+
+// SweepTimeouts resolves every parked run whose CI never reported within CITimeout — the
+// durable catch-all behind the soft in-memory timer (which a restart loses). Driven by
+// Cloud Scheduler via /internal/sweep. The store's Sweep claims each run atomically, so a
+// webhook racing the sweep still resolves it at most once.
+func (dr *Driver) SweepTimeouts(ctx context.Context) error {
+	swept, err := dr.store.Sweep(ctx, time.Now().Add(-dr.timeout))
+	if err != nil {
+		return err
+	}
+	for _, run := range swept {
+		dr.stopTimer(run.PRKey)
+		fullRepo, pr := splitPRKey(run.PRKey)
+		dr.engine.d.Log.Warn("fix swept after timeout", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "timeout", dr.timeout)
+		_ = dr.terminalNotify(ctx, outcomeTimeout, dr.engine.spec.ReviewTitle, run, fullRepo, pr, "")
+		dr.clear(ctx, run.SessionID)
+	}
+	return nil
+}
+
+// gatherChanges best-effort fetches the PR branch's base...head diff for a terminal
+// summary. On error it returns an empty comparison so the summary still reports the attempt
+// count and findings.
+func (dr *Driver) gatherChanges(ctx context.Context, rp *runParams) githubapi.Comparison {
+	cmp, err := dr.engine.d.GH.Compare(ctx, rp.owner, rp.repo, rp.base, dr.engine.spec.Branch)
+	if err != nil {
+		dr.engine.d.Log.Warn("compare for summary failed", "workflow", dr.engine.spec.Name, "repo", rp.fullRepo, "err", err)
+		return githubapi.Comparison{}
+	}
+	return cmp
+}
+
+// terminalNotify builds and sends the status-aware summary for a finished run: the outcome
+// framing, the original targeted findings, and what actually changed on the PR.
+func (dr *Driver) terminalNotify(ctx context.Context, outcome terminalOutcome, title string, run setup.ParkRecord, fullRepo string, prNumber int, lastOutput string) error {
+	in := summaryInput{
+		outcome: outcome, workflow: dr.engine.spec.Name, fullRepo: fullRepo,
+		prNumber: prNumber, attempts: run.Attempts, lastOutput: lastOutput,
+		timeout: dr.timeout.String(), checkName: dr.engine.spec.CheckName,
+	}
+	if rp, err := unmarshalRunParams(run.Params); err == nil {
+		in.report = rp.report
+		in.changed = dr.gatherChanges(ctx, rp)
+	} else {
+		dr.engine.d.Log.Warn("decode run params for summary failed; sending without findings/diff",
+			"workflow", dr.engine.spec.Name, "session", run.SessionID, "err", err)
+	}
+	return dr.engine.notify(ctx, title, buildSummaryText(in), pullURL(fullRepo, prNumber))
 }
 
 // afterDrive inspects a drive's outcome and either surfaces an apply error or parks the

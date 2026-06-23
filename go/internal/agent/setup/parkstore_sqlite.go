@@ -122,6 +122,7 @@ func (s *sqliteParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]ParkRe
 			return out, err
 		}
 		if ok {
+			rec.PRKey = row.PRKey // restore for the caller (timeout sweep needs the PR)
 			out = append(out, rec)
 		}
 	}

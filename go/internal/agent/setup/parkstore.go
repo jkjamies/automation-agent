@@ -128,7 +128,9 @@ func (m *memoryParkStore) Sweep(_ context.Context, cutoff time.Time) ([]ParkReco
 	var out []ParkRecord
 	for prKey, sid := range m.index {
 		if r := m.bySession[sid]; !r.ParkedAt.IsZero() && r.ParkedAt.Before(cutoff) {
-			out = append(out, m.claimLocked(prKey, sid))
+			claimed := m.claimLocked(prKey, sid)
+			claimed.PRKey = prKey // the timeout sweep needs to know which PR this was
+			out = append(out, claimed)
 		}
 	}
 	return out, nil

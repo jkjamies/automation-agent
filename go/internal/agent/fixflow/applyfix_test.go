@@ -26,6 +26,12 @@ type fakeGH struct {
 	findErr      error
 	createErr    error
 	fileContents map[string]string
+	comparison   githubapi.Comparison
+	compareErr   error
+}
+
+func (f *fakeGH) Compare(_ context.Context, _, _, _, _ string) (githubapi.Comparison, error) {
+	return f.comparison, f.compareErr
 }
 
 func (f *fakeGH) FindAgentPRs(context.Context, string, string, string) ([]githubapi.PR, error) {

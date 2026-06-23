@@ -124,8 +124,9 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Webhooks enqueue asynchronously and return fast. Dispatches run on a bounded pool
-	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (Parked
-	// runs are still in-memory, so a restart strands them — an accepted trade.)
+	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (With a
+	// durable SESSION_BACKEND parked runs survive a restart; the default memory backend
+	// does not.)
 	var dispatchWG sync.WaitGroup
 	dispatchSem := make(chan struct{}, maxConcurrentDispatch)
 	if cfg.GitHubWebhookSecret == "" {
@@ -142,7 +143,16 @@ func run(logger *slog.Logger) error {
 			}
 		}()
 		return nil
-	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret))
+	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
+		webhook.WithInternalToken(cfg.InternalToken),
+		webhook.WithSweep(func(ctx context.Context) error {
+			for _, e := range engines {
+				if err := e.SweepTimeouts(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}))
 
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,

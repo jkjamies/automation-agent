@@ -38,8 +38,8 @@ const (
 	// SessionSQLite persists sessions to a local file via the adk session/database
 	// backend, so a parked run survives a restart. For real local runs.
 	SessionSQLite SessionBackend = "sqlite"
-	// SessionFirestore is the cloud backend (scales to zero). Its custom session.Service
-	// lands in Phase B; selecting it before then returns a not-implemented error.
+	// SessionFirestore is the cloud backend (serverless, scales to zero): a custom
+	// Firestore session.Service + ParkStore, both built under internal/agent/setup.
 	SessionFirestore SessionBackend = "firestore"
 )
 
@@ -85,6 +85,9 @@ type Config struct {
 	// it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
 	CITimeout           time.Duration
 	GitHubWebhookSecret string
+	// InternalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
+	// cron + sweep). Empty disables those endpoints (404).
+	InternalToken string
 }
 
 // Load reads configuration from the process environment, applying defaults.
@@ -115,6 +118,7 @@ func loadFrom(get lookup) (Config, error) {
 		CronDaily:           getOr(get, "CRON_DAILY", "0 9 * * *"),
 		CronWeekly:          getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
+		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
 	}
 
 	var err error

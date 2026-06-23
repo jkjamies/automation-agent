@@ -105,7 +105,7 @@ type Deps struct {
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is
-// owned by the Driver (ADK IsLongRunning + an in-memory parked-run registry).
+// owned by the Driver (ADK IsLongRunning + an injected setup.ParkStore backend).
 type Engine struct {
 	spec   Spec
 	d      Deps
@@ -142,6 +142,10 @@ func NewEngine(spec Spec, d Deps) *Engine {
 
 // CheckName is the agent verify check this engine resumes on.
 func (e *Engine) CheckName() string { return e.spec.CheckName }
+
+// SweepTimeouts resolves this engine's parked runs whose CI never reported — the durable
+// timeout catch-all driven by Cloud Scheduler via /internal/sweep.
+func (e *Engine) SweepTimeouts(ctx context.Context) error { return e.driver.SweepTimeouts(ctx) }
 
 // Kickoff handles a kickoff envelope: it starts a suspended fix run (apply → await CI).
 func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {

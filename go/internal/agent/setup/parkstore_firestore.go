@@ -113,7 +113,8 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 	// transaction so a concurrent resolve cannot double-claim.
 	it := s.col().Where("pr_key", "!=", "").Documents(ctx)
 	defer it.Stop()
-	var stale []string
+	type stale struct{ sessionID, prKey string }
+	var candidates []stale
 	for {
 		snap, err := it.Next()
 		if err == iterator.Done {
@@ -127,17 +128,18 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 			return nil, err
 		}
 		if !d.ParkedAt.IsZero() && d.ParkedAt.Before(cutoff) {
-			stale = append(stale, d.SessionID)
+			candidates = append(candidates, stale{d.SessionID, d.PRKey})
 		}
 	}
 
-	out := make([]ParkRecord, 0, len(stale))
-	for _, sid := range stale {
-		rec, ok, err := s.claimBySession(ctx, sid)
+	out := make([]ParkRecord, 0, len(candidates))
+	for _, c := range candidates {
+		rec, ok, err := s.claimBySession(ctx, c.sessionID)
 		if err != nil {
 			return out, err
 		}
 		if ok {
+			rec.PRKey = c.prKey // restore for the caller (timeout sweep needs the PR)
 			out = append(out, rec)
 		}
 	}

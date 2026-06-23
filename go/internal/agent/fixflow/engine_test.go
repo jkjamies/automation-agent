@@ -206,6 +206,42 @@ func TestEngineTimeoutFreesRun(t *testing.T) {
 	}
 }
 
+// A run parked longer ago than CITimeout is resolved by the durable sweep (notify + free),
+// the catch-all behind the soft in-memory timer.
+func TestEngineSweepTimesOutStaleRun(t *testing.T) {
+	n := &fakeNotifier{}
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
+		SessionID: "run-x", PRKey: "acme/api#42", CallID: "c", Attempts: 1,
+		ParkedAt: time.Now().Add(-2 * time.Hour), // older than the 1h CITimeout
+	})
+	if err := e.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("SweepTimeouts: %v", err)
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("expected a timeout review notification, got %+v", n.msgs)
+	}
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("swept run should be freed, got %d", e.driver.parkedCount())
+	}
+}
+
+// A freshly parked run is left alone by the sweep.
+func TestEngineSweepSkipsFreshRun(t *testing.T) {
+	n := &fakeNotifier{}
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	seedParked(e, "acme/api#42", "run-x", "c", 1) // ParkedAt = now
+	if err := e.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("SweepTimeouts: %v", err)
+	}
+	if len(n.msgs) != 0 {
+		t.Errorf("a fresh run must not be swept, got %+v", n.msgs)
+	}
+	if e.driver.parkedCount() != 1 {
+		t.Errorf("fresh run should remain parked, got %d", e.driver.parkedCount())
+	}
+}
+
 // A conclusion for an unknown/already-resolved PR is a no-op.
 func TestEngineResumeUnknownPR(t *testing.T) {
 	n := &fakeNotifier{}
