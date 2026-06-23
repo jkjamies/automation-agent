@@ -212,6 +212,8 @@ async def run() -> None:
                 await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=30)
             except TimeoutError:
                 log.warning("drain timed out; %d dispatch(es) abandoned", len(pending))
+        # Release a durable park store's backing connection (no-op for the memory backend).
+        await park_store.close()
 
 
 def main() -> None:

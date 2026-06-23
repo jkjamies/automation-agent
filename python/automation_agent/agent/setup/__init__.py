@@ -24,6 +24,7 @@ from automation_agent.agent.setup.parkstore import (
     MemoryParkStore,
     ParkRecord,
     ParkStore,
+    SqliteParkStore,
     new_park_store,
 )
 from automation_agent.agent.setup.prompt import Prompts
@@ -43,6 +44,7 @@ __all__ = [
     "ParkStore",
     "Prompts",
     "Sequencer",
+    "SqliteParkStore",
     "assistant_text",
     "build_code_llm",
     "build_llm",

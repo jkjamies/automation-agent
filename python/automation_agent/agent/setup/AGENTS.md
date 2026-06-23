@@ -36,12 +36,15 @@ flowchart TD
   `tests/test_suspend_resume.py` + `tests/test_longrun.py`.
 - `session.py` — `new_session_service(cfg)`: the `SESSION_BACKEND` switch returning an ADK
   `BaseSessionService` (the durable suspend/resume history of the parked fix loop). `memory`
-  is in-process; `sqlite`/`firestore` (adk's native `FirestoreSessionService`) land in later
-  phases. Infra backends are confined here by `arch/`.
+  is in-process; `sqlite` uses adk's `SqliteSessionService`; `firestore` (adk's native
+  `FirestoreSessionService`) lands in a later phase. Infra backends are confined here by
+  `arch/`.
 - `parkstore.py` — `ParkStore` (async ABC) + `ParkRecord` + `MemoryParkStore` +
-  `new_park_store(cfg)`: the durable park-record store (pr_key -> session, attempts, opaque
-  run params) that replaced the in-memory `RunRegistry`. `resolve_by_pr_key`/`sweep` are
-  atomic single-winner claims. sqlite/firestore backends land in later phases.
+  `SqliteParkStore` (aiosqlite, atomic CAS claim, WAL + busy_timeout, single shared
+  connection) + `new_park_store(cfg)`: the durable park-record store (pr_key -> session,
+  attempts, opaque run params) that replaced the in-memory `RunRegistry`.
+  `resolve_by_pr_key`/`sweep` are atomic single-winner claims. The firestore backend lands
+  in a later phase.
 - `generate.py` — text-generation helpers over the configured `BaseLlm`.
 
 Tests stub the Ollama HTTP endpoint (`respx`) and use in-memory resources for prompts —

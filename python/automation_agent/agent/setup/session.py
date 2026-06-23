@@ -5,7 +5,7 @@ continue after a process restart. Only the long-running fix loop needs durabilit
 ephemeral one-shot runners (explore/analyze/triage) keep using an in-memory session.
 
     memory    -> in-process; tests and ephemeral local runs (today's behavior, default)
-    sqlite    -> file-backed via adk SqliteSessionService; durable local runs (later phase)
+    sqlite    -> file-backed via adk SqliteSessionService; durable local runs
     firestore -> cloud, adk's native google.adk.integrations.firestore service (later phase)
 
 Keeping the backend imports here respects the ARCH boundary (infrastructure SDKs live
@@ -30,7 +30,13 @@ def new_session_service(cfg: Config) -> BaseSessionService:
 
     if cfg.session_backend == SessionBackend.MEMORY:
         return InMemorySessionService()
+    if cfg.session_backend == SessionBackend.SQLITE:
+        # Imported lazily (and from the submodule — it is not re-exported from
+        # google.adk.sessions) so the memory/firestore paths don't pull the sqlite backend.
+        from google.adk.sessions.sqlite_session_service import SqliteSessionService
+
+        return SqliteSessionService(db_path=cfg.sqlite_dsn)
     raise NotImplementedError(
         f"session backend {cfg.session_backend!r} not yet implemented "
-        "(sqlite/firestore land in a later phase); use SESSION_BACKEND=memory"
+        "(firestore lands in a later phase); use SESSION_BACKEND=memory or sqlite"
     )
