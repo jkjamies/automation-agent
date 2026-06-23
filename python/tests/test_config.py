@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from automation_agent.config import NotifyProvider, Provider, load_from
+from automation_agent.config import (
+    NotifyProvider,
+    Provider,
+    SessionBackend,
+    load_from,
+)
 
 
 def map_lookup(m: dict[str, str]):
@@ -21,6 +26,36 @@ def test_load_defaults() -> None:
     assert c.ci_timeout.total_seconds() == 90 * 60
     assert c.agent_pr_label == "automation-agent"
     assert c.agent_check_name == "agent-lint-verify"
+    # Sessions default to in-process (memory); a restart strands parked runs.
+    assert c.session_backend == SessionBackend.MEMORY
+    assert c.sqlite_dsn == "automation-agent.db"
+    assert c.firestore_project == ""
+    assert c.firestore_collection == "automation_agent"
+    assert c.internal_token == ""
+
+
+def test_session_backend_override() -> None:
+    c = load_from(
+        map_lookup(
+            {
+                "SESSION_BACKEND": "sqlite",
+                "SQLITE_DSN": "/tmp/runs.db",
+                "FIRESTORE_PROJECT": "my-proj",
+                "FIRESTORE_COLLECTION": "agent_runs",
+                "INTERNAL_TOKEN": "s3cret",
+            }
+        )
+    )
+    assert c.session_backend == SessionBackend.SQLITE
+    assert c.sqlite_dsn == "/tmp/runs.db"
+    assert c.firestore_project == "my-proj"
+    assert c.firestore_collection == "agent_runs"
+    assert c.internal_token == "s3cret"
+
+
+def test_invalid_session_backend() -> None:
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"SESSION_BACKEND": "redis"}))
 
 
 def test_repos_parsing() -> None:
