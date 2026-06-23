@@ -4,9 +4,9 @@ How to run the service on your machine — prerequisites, configuration, every r
 and how the local stack differs from prod. Source of truth; read it and you can run the
 agent locally without asking anyone.
 
-> **Scope:** the **Go** reference (`go/`) is fully documented and current. The Python /
-> TS / Kotlin ports are **pending parity** (see [Other ports](#other-ports-pending-parity)
-> and `specs/parity-status.md`).
+> **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same run
+> modes and env vars apply to every port — run them from that port's directory (see
+> [Other ports](#other-ports)). Per-port drift: `specs/parity-status.md`.
 >
 > Related: [`testing.md`](testing.md) (running tests) · [`deployment.md`](deployment.md)
 > (cloud/GCP) · [`ci-integration.md`](ci-integration.md) (driving the lint/coverage fixers).
@@ -152,10 +152,31 @@ The image builds **only** `cmd/agent` (the playground is never containerized). P
 
 ---
 
-## Other ports (pending parity)
+## Other ports
 
-Running the Python (`python/`), TypeScript (`javascript/`), and Kotlin (`kotlin/`) ports
-locally is **not yet documented here** — the ports mirror the Go topology but their
-local-run walkthroughs are pending parity. Track the gap in `specs/parity-status.md`.
-When filling these in, mirror the Go section: prerequisites → run modes → stack switches
-→ env reference → local container.
+Every port has the same run modes and `make` targets as Go, run from its own directory.
+
+### Python (`python/`)
+
+Prerequisites: Python 3.13 + [uv](https://github.com/astral-sh/uv), an Ollama with a Gemma
+model (or `LLM_PROVIDER=gemini`), and a `.env` (copy `python/.env.example`).
+
+```bash
+cd python
+make build                        # uv sync
+make run                          # webhooks + in-process cron (cmd/agent), SESSION_BACKEND=memory
+SESSION_BACKEND=sqlite make run   # durable local: parked runs survive a restart
+make playground                   # local ADK web UI
+```
+
+`SESSION_BACKEND` selects the same `memory | sqlite | firestore` backends as Go. Python's
+`SQLITE_DSN` is a **plain file path** (default `automation-agent.db`) — adk's
+`SqliteSessionService` takes a path, not Go's `file:…?_pragma=` DSN — and `firestore` uses
+adk's native `FirestoreSessionService` plus a custom park store on `google-cloud-firestore`.
+The `/internal/*` ingress + `INTERNAL_TOKEN` behave identically.
+
+### TypeScript (`javascript/`) and Kotlin (`kotlin/`)
+
+The same `make run` / `make playground` / `make ci` targets, run from `javascript/` and
+`kotlin/`. Where a port's run flags or backend SDKs differ, `specs/parity-status.md` is the
+record.

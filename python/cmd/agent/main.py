@@ -180,10 +180,20 @@ async def run() -> None:
         task.add_done_callback(pending.discard)
 
     # The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
-    # parked runs whose CI never reported (Cloud Scheduler drives it on a schedule).
+    # parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
+    # engine's failure must not stop the others — a stuck run on another engine still needs
+    # freeing — so collect-and-continue (like _ci_resume_handler), then surface so the
+    # handler 500s and Cloud Scheduler retries.
     async def _sweep() -> None:
+        errors: list[Exception] = []
         for eng in engines:
-            await eng.sweep_timeouts()
+            try:
+                await eng.sweep_timeouts()
+            except Exception as exc:  # noqa: BLE001 - collect & continue
+                log.error("sweep failed for an engine: %s", exc)
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("sweep failed", errors)
 
     if not cfg.github_webhook_secret:
         log.warning(
