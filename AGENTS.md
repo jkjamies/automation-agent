@@ -72,7 +72,10 @@ plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 no longer strands in-flight runs; `memory` keeps the old ephemeral behavior. **(Go
 only so far — the other ports remain in-memory; see [`specs/parity-status.md`](specs/parity-status.md).)**
 Deterministic, agent-free tooling lives under `internal/` and is called by
-agents but never imports them. Ops, env vars, and the `/internal/*` hooks: [`DEPLOYMENT.md`](DEPLOYMENT.md).
+agents but never imports them. Env vars + local run modes:
+[`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,
+the `/internal/*` hooks, and GCP setup:
+[`.agents/standards/deployment.md`](.agents/standards/deployment.md).
 
 ## Conventions (enforced by `ARCH/` + `make ci`)
 

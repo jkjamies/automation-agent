@@ -52,9 +52,12 @@ make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
 
-See also [`DEPLOYMENT.md`](DEPLOYMENT.md) (env vars, the HTTP hooks, GCP setup, and TODOs),
-[`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md) (how CI sends lint
-problems) and [`.agents/standards/deployment.md`](.agents/standards/deployment.md) (local + cloud).
+How-to guides (Go reference; other ports pending parity):
+[`local-development.md`](.agents/standards/local-development.md) (run modes, env vars,
+container), [`testing.md`](.agents/standards/testing.md) (every test kind + the Firestore
+emulator), [`deployment.md`](.agents/standards/deployment.md) (cloud architecture + GCP
+setup — source of truth), and [`ci-integration.md`](.agents/standards/ci-integration.md)
+(how CI drives the fixers). [`DEPLOYMENT.md`](DEPLOYMENT.md) is the short status/checklist.
 
 ### Durable sessions (Go)
 
