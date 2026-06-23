@@ -1,13 +1,16 @@
 """Tests for the ParkStore: the durable replacement for the old in-memory registry.
 
-The conformance tests run against BOTH backends (memory + sqlite) via the ``store``
-fixture, covering the atomic single-winner claim (resolve_by_pr_key / sweep), the re-park
-index hygiene, the empty-key guard, and terminal delete. A separate test exercises sqlite
-durability across a simulated restart.
+The conformance tests run against EVERY backend (memory, sqlite, and — when the Firestore
+emulator is available — firestore) via the ``store`` fixture, covering the atomic
+single-winner claim (resolve_by_pr_key / sweep), the re-park index hygiene, the empty-key
+guard, and terminal delete. A separate test exercises sqlite durability across a simulated
+restart. The firestore parameter is skipped unless ``FIRESTORE_EMULATOR_HOST`` is set.
 """
 
 from __future__ import annotations
 
+import os
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -21,22 +24,43 @@ from automation_agent.agent.setup import (
 )
 from automation_agent.config import SessionBackend, load_from
 
+_HAS_EMULATOR = bool(os.environ.get("FIRESTORE_EMULATOR_HOST"))
+_needs_emulator = pytest.mark.skipif(
+    not _HAS_EMULATOR, reason="needs the Firestore emulator (FIRESTORE_EMULATOR_HOST)"
+)
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(
+    params=[
+        "memory",
+        "sqlite",
+        pytest.param("firestore", marks=_needs_emulator),
+    ]
+)
 async def store(request, tmp_path) -> AsyncIterator:
-    """A ParkStore of each backend, so the conformance tests run against both."""
+    """A ParkStore of each backend, so the conformance tests run against all of them."""
     if request.param == "memory":
         yield MemoryParkStore()
         return
-    s = SqliteParkStore(str(tmp_path / "park.db"))
+    if request.param == "sqlite":
+        s = SqliteParkStore(str(tmp_path / "park.db"))
+        try:
+            yield s
+        finally:
+            await s.close()
+        return
+    # firestore (emulator): a unique collection per test isolates concurrent runs.
+    from automation_agent.agent.setup.parkstore_firestore import FirestoreParkStore
+
+    fs = FirestoreParkStore("test-project", "park_" + uuid.uuid4().hex)
     try:
-        yield s
+        yield fs
     finally:
-        await s.close()
+        await fs.close()
 
 
 async def test_put_get_roundtrip(store) -> None:
@@ -152,15 +176,16 @@ def test_new_park_store_memory() -> None:
 def test_new_park_store_sqlite(tmp_path) -> None:
     # The store opens its connection lazily (on first use), so this only checks wiring; a
     # tmp_path DSN keeps it hermetic in case that ever changes.
-    cfg = load_from(
-        {"SESSION_BACKEND": "sqlite", "SQLITE_DSN": str(tmp_path / "park.db")}.get
-    )
+    cfg = load_from({"SESSION_BACKEND": "sqlite", "SQLITE_DSN": str(tmp_path / "park.db")}.get)
     store = new_park_store(cfg)
     assert isinstance(store, SqliteParkStore)
 
 
-def test_new_park_store_unimplemented() -> None:
-    cfg = load_from({"SESSION_BACKEND": "firestore"}.get)
+@_needs_emulator
+def test_new_park_store_firestore() -> None:
+    from automation_agent.agent.setup.parkstore_firestore import FirestoreParkStore
+
+    cfg = load_from({"SESSION_BACKEND": "firestore", "FIRESTORE_PROJECT": "test-project"}.get)
     assert cfg.session_backend == SessionBackend.FIRESTORE
-    with pytest.raises(NotImplementedError):
-        new_park_store(cfg)
+    store = new_park_store(cfg)
+    assert isinstance(store, FirestoreParkStore)

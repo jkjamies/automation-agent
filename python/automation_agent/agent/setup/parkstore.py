@@ -9,9 +9,9 @@ session id, indexed by PR key), while the soft per-run timeout timer now lives o
 :meth:`ParkStore.sweep` as the durable catch-all.
 
 The store interface is async so the same shape backs the in-memory, sqlite, and firestore
-implementations (firestore lands in a later phase). ``params`` is an opaque,
-caller-serialized blob the store never interprets, which keeps it free of caller-specific
-(fixflow) types.
+implementations (the firestore one lives in ``parkstore_firestore.py``). ``params`` is an
+opaque, caller-serialized blob the store never interprets, which keeps it free of
+caller-specific (fixflow) types.
 
 Implementations MUST make :meth:`resolve_by_pr_key` (and :meth:`sweep`) an atomic claim:
 for one PR key exactly one concurrent caller gets the record and all others get ``None``.
@@ -338,7 +338,9 @@ def new_park_store(cfg: Config) -> ParkStore:
         return MemoryParkStore()
     if cfg.session_backend == SessionBackend.SQLITE:
         return SqliteParkStore(cfg.sqlite_dsn)
-    raise NotImplementedError(
-        f"park store backend {cfg.session_backend!r} not yet implemented "
-        "(firestore lands in a later phase); use SESSION_BACKEND=memory or sqlite"
-    )
+    if cfg.session_backend == SessionBackend.FIRESTORE:  # pragma: no cover - emulator-only
+        # Imported lazily so the memory/sqlite paths don't pull the firestore SDK.
+        from automation_agent.agent.setup.parkstore_firestore import FirestoreParkStore
+
+        return FirestoreParkStore(cfg.firestore_project, cfg.firestore_collection + "_parked_runs")
+    raise NotImplementedError(f"unknown park store backend {cfg.session_backend!r}")

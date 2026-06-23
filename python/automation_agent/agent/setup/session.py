@@ -36,7 +36,14 @@ def new_session_service(cfg: Config) -> BaseSessionService:
         from google.adk.sessions.sqlite_session_service import SqliteSessionService
 
         return SqliteSessionService(db_path=cfg.sqlite_dsn)
-    raise NotImplementedError(
-        f"session backend {cfg.session_backend!r} not yet implemented "
-        "(firestore lands in a later phase); use SESSION_BACKEND=memory or sqlite"
-    )
+    if cfg.session_backend == SessionBackend.FIRESTORE:  # pragma: no cover - emulator-only
+        # adk ships a NATIVE Firestore session service (no hand-roll); only the park store
+        # is custom. Lazily import it (and the firestore client) so other paths stay light.
+        from google.adk.integrations.firestore.firestore_session_service import (
+            FirestoreSessionService,
+        )
+        from google.cloud import firestore
+
+        client = firestore.AsyncClient(project=cfg.firestore_project or None)
+        return FirestoreSessionService(client=client, root_collection=cfg.firestore_collection)
+    raise NotImplementedError(f"unknown session backend {cfg.session_backend!r}")
