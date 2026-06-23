@@ -33,3 +33,8 @@ flowchart TD
 
 Note: the Monday lint trigger is expected to come from an external CI job posting to
 `/webhooks/lint`, not from a cron here — see `.agents/standards/architecture-design.md` §8.
+
+This **in-process** scheduler is one of two ways to drive the digests. The other is
+**Cloud Scheduler** → `POST /internal/cron/{daily,weekly}` (see `internal/webhook` +
+`DEPLOYMENT.md`), which lets Cloud Run scale to zero. Use **one** of them — running both
+double-fires the digests (caution noted in `DEPLOYMENT.md`).

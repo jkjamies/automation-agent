@@ -12,15 +12,16 @@ flowchart TD
     Cfg -->|err| Fatal["return err -> os.Exit(1)"]
     Cfg --> LLM["setup.BuildLLM(ctx, cfg)<br/>setup.BuildCodeLLM(ctx, cfg)"]
     LLM --> GH["githubapi.New(cfg.GitHubToken)"]
-    GH --> Notif["buildNotifier(cfg) -> notify.New (or nil)"]
+    GH --> Sess["setup.NewSessionService(ctx, cfg)<br/>setup.NewParkStore(ctx, cfg)<br/>(SESSION_BACKEND: memory|sqlite|firestore)"]
+    Sess --> Notif["buildNotifier(cfg) -> notify.New (or nil)"]
     Notif --> SumA["buildSummaryAgent (nil if no repos/notifier)"]
-    SumA --> Eng["lintfixer.NewEngine(fixflow.Deps{LLM, CodeLLM,<br/>GH, Notify, Token, MaxIter, CITimeout})<br/>covfixer.NewEngine(same Deps)<br/>engines = [lint, cov]"]
+    SumA --> Eng["lintfixer.NewEngine(fixflow.Deps{LLM, CodeLLM,<br/>GH, Notify, Token, MaxIter, CITimeout,<br/>SessionService, ParkStore})<br/>covfixer.NewEngine(same Deps)<br/>engines = [lint, cov]"]
     Eng --> Disp["root.BuildRootDispatcher(Deps{<br/>SummaryAgent,<br/>LintKickoff=lintEngine.Kickoff,<br/>CoverageKickoff=covEngine.Kickoff,<br/>CIResume=resume to every engine})"]
     Disp -->|err| Fatal
 
     Disp --> Sched["scheduler.New(emit -> dispatcher.Dispatch)"]
     Sched --> AddCron["Add(CronDaily, KindCronDaily)<br/>Add(CronWeekly, KindCronWeekly)"]
-    AddCron --> Web["webhook.New(ingest -> go Dispatch,<br/>WithGitHubSecret)"]
+    AddCron --> Web["webhook.New(ingest -> go Dispatch,<br/>WithGitHubSecret, WithInternalToken,<br/>WithSweep -> engines.SweepTimeouts)"]
     Web --> HTTP["http.Server{Addr ':'+Port, ReadHeaderTimeout 10s}"]
 
     HTTP --> Start["sched.Start()"]
@@ -30,17 +31,22 @@ flowchart TD
 ```
 
 1. Load `config`.
-2. Build the LLM + code LLM (`internal/agent/setup`), the `githubapi` client and
-   notifier, the summary agent, and the lint-fixer and coverage-fixer `fixflow`
-   engines (sharing one `fixflow.Deps`, incl. `CITimeout`).
+2. Build the LLM + code LLM (`internal/agent/setup`), the `githubapi` client, the
+   `SESSION_BACKEND`-selected `session.Service` + `setup.ParkStore` (both built once
+   here via `setup.NewSessionService`/`setup.NewParkStore`), the notifier, the summary
+   agent, and the lint-fixer and coverage-fixer `fixflow` engines (sharing one
+   `fixflow.Deps`, incl. `CITimeout`, `SessionService`, `ParkStore`).
 3. Build the root dispatcher (summary / lint kickoff / coverage kickoff / CI resume),
-   then start the scheduler (daily + weekly cron) and the webhook HTTP server.
+   then start the scheduler (daily + weekly cron) and the webhook HTTP server
+   (`WithInternalToken` + `WithSweep` enabling the `/internal/*` cron + sweep hooks).
 4. Block until shutdown (SIGINT/SIGTERM), then stop the scheduler and shut the server.
 
-The fix loop is **in-memory and non-durable**: suspend/resume runs on an ADK
-long-running `await_ci` tool + `fixflow`'s in-memory parked-run registry, with a per-run
-`CI_TIMEOUT` bounding each wait. There is no reconcile loop, so a process restart
-strands parked runs.
+The fix loop's durability follows `SESSION_BACKEND`: suspend/resume runs on an ADK
+long-running `await_ci` tool + the injected `setup.ParkStore`, with a per-run
+`CI_TIMEOUT` bounding each wait. With a durable backend (`sqlite`/`firestore`) parked
+runs survive a restart and the durable `/internal/sweep` is the timeout catch-all; the
+default `memory` backend is ephemeral (a restart strands parked runs). See
+`../../../DEPLOYMENT.md` for the backends, the `/internal/*` hooks, and ops.
 
 Keep this file thin — it is composition only. Anything testable belongs in
 `internal/`.

@@ -1,10 +1,11 @@
 # internal/webhook
 
-The HTTP ingress. Three POST endpoints reduce requests to an `ingest.Envelope` and hand
-them to an `IngestFunc` (which should enqueue and return fast). Every POST endpoint is
-HMAC-authenticated with `X-Hub-Signature-256` when a secret is configured — the
-`/webhooks/lint` and `/webhooks/coverage` kickoffs as well as `/webhooks/github`,
-because a kickoff selects a caller-supplied target repo.
+The HTTP ingress. The `/webhooks/*` POST endpoints reduce requests to an `ingest.Envelope`
+and hand them to an `IngestFunc` (which should enqueue and return fast); the `/internal/*`
+endpoints are the **Cloud Scheduler** ingress (cron digests + the durable timeout sweep).
+Every `/webhooks/*` POST is HMAC-authenticated with `X-Hub-Signature-256` when a secret is
+configured — the `/webhooks/lint` and `/webhooks/coverage` kickoffs as well as
+`/webhooks/github`, because a kickoff selects a caller-supplied target repo.
 
 ## Flow
 
@@ -65,9 +66,15 @@ sequenceDiagram
 - `POST /webhooks/coverage` — coverage-fixer **kickoff** (agnostic coverage report) → `KindCoverage`.
 - `POST /webhooks/github` — lint/coverage-fixer **resume** (GitHub `check_run`) → `KindCI`.
 - `GET /healthz` — liveness.
+- `POST /internal/cron/{daily,weekly}` — Cloud Scheduler triggers for the summary digests
+  (`KindCronDaily`/`KindCronWeekly`); lets the cron live GCP-side so Cloud Run scales to zero.
+- `POST /internal/sweep` — Cloud Scheduler trigger for the durable timeout sweep
+  (`SweepFunc` → `Engine.SweepTimeouts`), the restart-proof catch-all behind the soft timer.
 
-All three POST endpoints are HMAC-verified via `X-Hub-Signature-256` when a secret is
+The `/webhooks/*` POSTs are HMAC-verified via `X-Hub-Signature-256` when a secret is
 configured (skipped only when unset, for local dev) — the kickoffs included, since they
-pick the target repo. Go 1.22 method-pattern routing gives 405s for free. Bodies are
-size-capped at 5 MiB (over-cap → `413`, not truncated). Deterministic tooling — no agent
-imports. Fully tested with `httptest`.
+pick the target repo. The `/internal/*` endpoints use a **Bearer token** (`INTERNAL_TOKEN`)
+and are **disabled (404)** unless that token is set (`internalAuthenticated`); see
+`DEPLOYMENT.md` for the bearer-vs-OIDC rationale. Go 1.22 method-pattern routing gives 405s
+for free. Bodies are size-capped at 5 MiB (over-cap → `413`, not truncated). Deterministic
+tooling — no agent imports. Fully tested with `httptest`.
