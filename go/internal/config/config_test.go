@@ -32,6 +32,25 @@ func TestLoadDefaults(t *testing.T) {
 	if c.CITimeout.Minutes() != 90 {
 		t.Errorf("CITimeout = %v, want 90m", c.CITimeout)
 	}
+	if c.SessionBackend != SessionMemory {
+		t.Errorf("SessionBackend = %q, want memory", c.SessionBackend)
+	}
+}
+
+func TestInvalidSessionBackend(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"SESSION_BACKEND": "redis"})); err == nil {
+		t.Fatal("expected error for invalid SESSION_BACKEND")
+	}
+}
+
+func TestSessionBackendOverride(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{"SESSION_BACKEND": "sqlite"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.SessionBackend != SessionSQLite {
+		t.Errorf("SessionBackend = %q, want sqlite", c.SessionBackend)
+	}
 }
 
 func TestReposParsing(t *testing.T) {

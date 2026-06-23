@@ -60,7 +60,7 @@ func newLRDriver(t *testing.T, apply, await tool.Tool) *LongRunDriver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewLongRunDriver("lr-app", "u", ag)
+	d, err := NewLongRunDriver("lr-app", "u", ag, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

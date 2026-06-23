@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
 
 	"github.com/jkjamies/automation-agent/internal/githubapi"
 	"github.com/jkjamies/automation-agent/internal/gitrepo"
@@ -88,10 +89,14 @@ type Deps struct {
 	CITimeout time.Duration
 	// Repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
 	// listed is rejected; empty imposes no restriction (restriction is opt-in).
-	Repos    []string
-	Author   gitrepo.Author
-	Log      *slog.Logger
-	CloneURL func(owner, repo string) string // overridable in tests
+	Repos  []string
+	Author gitrepo.Author
+	Log    *slog.Logger
+	// SessionService stores the durable suspend/resume history for the parked fix loop.
+	// Nil falls back to in-memory (a restart strands parked runs); a durable backend
+	// (sqlite/firestore) lets a parked run resume after a restart. Built once at startup.
+	SessionService session.Service
+	CloneURL       func(owner, repo string) string // overridable in tests
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is

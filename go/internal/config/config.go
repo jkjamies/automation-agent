@@ -27,6 +27,22 @@ const (
 	NotifyTeams NotifyProvider = "teams"
 )
 
+// SessionBackend selects where the ADK session (the durable suspend/resume history of
+// the parked fix loop) is stored.
+type SessionBackend string
+
+const (
+	// SessionMemory keeps sessions in-process: tests and ephemeral local runs. A restart
+	// strands parked runs. This is the default — selecting it changes nothing.
+	SessionMemory SessionBackend = "memory"
+	// SessionSQLite persists sessions to a local file via the adk session/database
+	// backend, so a parked run survives a restart. For real local runs.
+	SessionSQLite SessionBackend = "sqlite"
+	// SessionFirestore is the cloud backend (scales to zero). Its custom session.Service
+	// lands in Phase B; selecting it before then returns a not-implemented error.
+	SessionFirestore SessionBackend = "firestore"
+)
+
 // Config holds all runtime settings.
 type Config struct {
 	// LLM
@@ -38,6 +54,12 @@ type Config struct {
 	// (lint rewrite, coverage test generation). Falls back to the default model.
 	OllamaCodeModel string
 	GeminiCodeModel string
+
+	// Sessions
+	SessionBackend SessionBackend
+	// SQLiteDSN is the data source for SESSION_BACKEND=sqlite (ignored otherwise). A
+	// glebarez/modernc DSN: a file path, optionally with ?_pragma=… options.
+	SQLiteDSN string
 
 	// GitHub / repos
 	Repos       []string
@@ -76,6 +98,8 @@ func loadFrom(get lookup) (Config, error) {
 		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
 		GeminiModel:         getOr(get, "GEMINI_MODEL", ""),
 		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
+		SessionBackend:      SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
+		SQLiteDSN:           getOr(get, "SQLITE_DSN", "file:automation-agent.db?_pragma=busy_timeout(5000)"),
 		Repos:               splitList(getOr(get, "REPOS", "")),
 		GitHubToken:         getOr(get, "GITHUB_TOKEN", ""),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
@@ -120,6 +144,11 @@ func (c Config) Validate() error {
 	case NotifySlack, NotifyTeams:
 	default:
 		return fmt.Errorf("invalid NOTIFY_PROVIDER %q (want slack|teams)", c.NotifyProvider)
+	}
+	switch c.SessionBackend {
+	case SessionMemory, SessionSQLite, SessionFirestore:
+	default:
+		return fmt.Errorf("invalid SESSION_BACKEND %q (want memory|sqlite|firestore)", c.SessionBackend)
 	}
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)

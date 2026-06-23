@@ -66,6 +66,13 @@ func run(logger *slog.Logger) error {
 	gh := githubapi.New(cfg.GitHubToken)
 	notifier := buildNotifier(logger, cfg)
 
+	// One session service, shared by both fix engines (namespaced by app name). memory
+	// (default) keeps today's behavior; sqlite persists parked runs across restarts.
+	sessions, err := setup.NewSessionService(cfg)
+	if err != nil {
+		return fmt.Errorf("build session service: %w", err)
+	}
+
 	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents
 	// so the weekly cron posts a real 7-day digest, not a copy of the daily one.
 	summaryDaily := buildSummaryAgent(logger, cfg, llm, gh, notifier, 24*time.Hour, "Daily commit digest")
@@ -75,6 +82,7 @@ func run(logger *slog.Logger) error {
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
+		SessionService: sessions,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)

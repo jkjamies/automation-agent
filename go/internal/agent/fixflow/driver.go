@@ -79,7 +79,7 @@ func newDriver(e *Engine) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	lr, err := setup.NewLongRunDriver("fixflow-"+e.spec.Name, "fixer", fixer)
+	lr, err := setup.NewLongRunDriver("fixflow-"+e.spec.Name, "fixer", fixer, e.d.SessionService)
 	if err != nil {
 		return nil, err
 	}

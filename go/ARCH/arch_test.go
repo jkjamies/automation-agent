@@ -119,11 +119,12 @@ func TestToolingDoesNotImportAgents(t *testing.T) {
 	}
 }
 
-// Provider SDKs (Ollama, Gemini, genai) may only be imported from agent/setup.
+// Provider / infrastructure SDKs (Ollama, Gemini, genai, and the SQLite session-store
+// backend) may only be imported from agent/setup.
 func TestProviderSDKsOnlyInSetup(t *testing.T) {
 	root := repoRoot(t)
 	setupDir := filepath.Join(root, "internal", "agent", "setup")
-	providerPat := regexp.MustCompile(`(ollama/ollama|adk/model/gemini|google\.golang\.org/genai)`)
+	providerPat := regexp.MustCompile(`(ollama/ollama|adk/model/gemini|google\.golang\.org/genai|adk/session/database|glebarez/sqlite|gorm\.io/gorm)`)
 	for _, fi := range goFiles(t, filepath.Join(root, "internal")) {
 		dir := filepath.Dir(fi.path)
 		if dir == setupDir || strings.HasPrefix(dir, setupDir+string(filepath.Separator)) {

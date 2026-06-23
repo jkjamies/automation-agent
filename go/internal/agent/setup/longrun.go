@@ -9,6 +9,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
+	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
 
@@ -41,10 +42,15 @@ type LongRunDriver struct {
 	userID string
 }
 
-// NewLongRunDriver builds a driver over root, sharing one in-memory session service so a
-// resume lands on the same suspended run a Start parked.
-func NewLongRunDriver(appName, userID string, root agent.Agent) (*LongRunDriver, error) {
-	r, err := NewRunner(appName, root)
+// NewLongRunDriver builds a driver over root, using sess as the session service so a
+// resume lands on the same suspended run a Start parked. A nil sess falls back to an
+// in-memory service (today's behavior); a durable sess (sqlite/firestore) makes the
+// parked run survive a process restart.
+func NewLongRunDriver(appName, userID string, root agent.Agent, sess session.Service) (*LongRunDriver, error) {
+	if sess == nil {
+		sess = session.InMemoryService()
+	}
+	r, err := newRunner(appName, root, sess)
 	if err != nil {
 		return nil, err
 	}
