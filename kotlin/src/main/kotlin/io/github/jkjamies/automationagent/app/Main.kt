@@ -31,6 +31,7 @@ import io.github.jkjamies.automationagent.notify.newNotifier
 import io.github.jkjamies.automationagent.scheduler.Scheduler
 import io.github.jkjamies.automationagent.webhook.SweepFunc
 import io.github.jkjamies.automationagent.webhook.webhookServer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +90,7 @@ private fun run() {
         Deps(
             gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier, token = cfg.githubToken,
             maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout, repos = cfg.repos,
+            prLabel = cfg.agentPrLabel,
             sessionService = sessionService, parkStore = parkStore,
         )
     val lintEngine = newLintEngine(fixDeps)
@@ -97,17 +99,26 @@ private fun run() {
 
     // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's parked runs
     // whose CI never reported (Cloud Scheduler drives it). One engine's failure must not stop the
-    // others, so collect-and-continue, then surface so the handler 500s and Cloud Scheduler retries.
+    // others, so collect-and-continue across ALL engines, then surface every failure (the first with
+    // the rest attached as suppressed — the JVM equivalent of Go's errors.Join / JS's AggregateError)
+    // so the handler 500s and Cloud Scheduler retries. Cancellation is rethrown, never collected.
     val sweep =
         SweepFunc {
-            var first: Throwable? = null
+            val errors = mutableListOf<Exception>()
             for (engine in engines) {
-                runCatching { engine.sweepTimeouts() }.onFailure {
-                    log.log(Level.WARNING, "sweep failed for an engine", it)
-                    if (first == null) first = it
+                try {
+                    engine.sweepTimeouts()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.log(Level.WARNING, "sweep failed for an engine", e)
+                    errors += e
                 }
             }
-            first?.let { throw it }
+            errors.firstOrNull()?.let { primary ->
+                errors.drop(1).forEach { primary.addSuppressed(it) }
+                throw primary
+            }
         }
 
     // Background scope for async dispatch from cron fires and webhook deliveries. Parallelism is
@@ -216,7 +227,7 @@ private fun buildSummary(cfg: Config, llm: Model, gh: CommitLister, notifier: No
 /** Adapts the GitHub client to the fix engines' narrow [GitHub] interface. */
 private fun githubAdapter(client: Client): GitHub =
     object : GitHub {
-        override suspend fun findAgentPrs(owner: String, repo: String, label: String) = client.findAgentPrs(owner, repo, label)
+        override suspend fun findOpenPrByBranch(owner: String, repo: String, branch: String) = client.findOpenPrByBranch(owner, repo, branch)
         override suspend fun createPr(owner: String, repo: String, input: PrInput) = client.createPr(owner, repo, input)
         override suspend fun addLabels(owner: String, repo: String, number: Int, labels: List<String>) = client.addLabels(owner, repo, number, labels)
         override suspend fun compare(owner: String, repo: String, base: String, head: String) = client.compare(owner, repo, base, head)
@@ -225,12 +236,25 @@ private fun githubAdapter(client: Client): GitHub =
 /** Adapts a raw-payload kickoff/resume function to a dispatcher [Handler]. */
 private fun payloadHandler(f: suspend (ByteArray) -> Unit): Handler = Handler { envelope -> f(envelope.payload) }
 
-/** Hands a check_run event to every engine; each no-ops unless its check name matches. */
+/**
+ * Hands a check_run event to every engine; each no-ops unless its check name matches. Collects
+ * every engine's failure (the first with the rest attached as suppressed, mirroring Go's
+ * errors.Join) and rethrows cancellation rather than collecting it.
+ */
 private fun ciResumeHandler(engines: List<Engine>): Handler =
     Handler { envelope ->
-        var first: Throwable? = null
+        val errors = mutableListOf<Exception>()
         for (engine in engines) {
-            runCatching { engine.resume(envelope.payload) }.onFailure { if (first == null) first = it }
+            try {
+                engine.resume(envelope.payload)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errors += e
+            }
         }
-        first?.let { throw it }
+        errors.firstOrNull()?.let { primary ->
+            errors.drop(1).forEach { primary.addSuppressed(it) }
+            throw primary
+        }
     }

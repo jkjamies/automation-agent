@@ -184,9 +184,10 @@ jobs:
 
 After the agent opens its PR (branch `automation-agent/lint-fix`, label
 `automation-agent`), it **suspends** until a CI check reports back. Add **one**
-workflow to each target repo that runs your lint as a dedicated, label-triggered
+workflow to each target repo that runs your lint as a dedicated, branch-gated
 check and writes the findings into the check output (which the agent re-triages from
-on a retry):
+on a retry). Gate on the **branch**, not the label: every agent PR shares the single
+`automation-agent` label, so the branch is what distinguishes lint from coverage runs.
 
 ```yaml
 name: agent-lint-verify
@@ -195,7 +196,7 @@ on:
     types: [labeled, synchronize]   # labeled = first run; synchronize = each retry push
 jobs:
   agent-lint-verify:
-    if: contains(github.event.pull_request.labels.*.name, 'automation-agent')
+    if: github.event.pull_request.head.ref == 'automation-agent/lint-fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -239,7 +240,7 @@ label, and check:
 |---|---|---|
 | Kickoff endpoint | `POST /webhooks/lint` | `POST /webhooks/coverage` |
 | Report | any linter output | any **coverage** report (JaCoCo XML, lcov, Cobertura, `go cover`, llvm-cov, SimpleCov…) |
-| Branch / label | `automation-agent/lint-fix` / `automation-agent` | `automation-agent/test-coverage` / `automation-agent-coverage` |
+| Branch / label | `automation-agent/lint-fix` / `automation-agent` | `automation-agent/test-coverage` / `automation-agent` |
 | Verify check | `agent-lint-verify` | `agent-coverage-verify` |
 
 **The coverage report does not need to be JSON.** Most coverage tools emit XML or
@@ -279,8 +280,8 @@ any text format.)
 
 ### The `agent-coverage-verify` check
 
-Identical to `agent-lint-verify` but triggered by the `automation-agent-coverage`
-label, and it should **run the tests and assert coverage rose** (or meets your
+Identical to `agent-lint-verify` but gated on the `automation-agent/test-coverage`
+branch, and it should **run the tests and assert coverage rose** (or meets your
 threshold), failing otherwise:
 
 ```yaml
@@ -290,7 +291,7 @@ on:
     types: [labeled, synchronize]
 jobs:
   agent-coverage-verify:
-    if: contains(github.event.pull_request.labels.*.name, 'automation-agent-coverage')
+    if: github.event.pull_request.head.ref == 'automation-agent/test-coverage'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

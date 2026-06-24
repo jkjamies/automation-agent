@@ -78,18 +78,22 @@ class GitHubApiTest : BehaviorSpec({
         }
     }
 
-    Given("open PRs with mixed labels") {
-        When("finding agent PRs") {
-            Then("only the labeled PR is returned") {
+    Given("an open PR for a branch") {
+        When("finding the open PR by branch") {
+            Then("it returns the matching PR") {
                 val c = client(
                     mapOf(
                         "GET /repos/o/r/pulls" to
-                            """[{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]},{"number":6,"head":{"ref":"feature","sha":"s6"},"labels":[{"name":"enhancement"}]}]""",
+                            """[{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]}]""",
                     ),
                 )
-                val prs = c.findAgentPrs("o", "r", "automation-agent")
-                prs.size shouldBe 1
-                prs[0].number shouldBe 5
+                c.findOpenPrByBranch("o", "r", "agent/fix")?.number shouldBe 5
+            }
+        }
+        When("no open PR exists for the branch") {
+            Then("it returns null") {
+                val c = client(mapOf("GET /repos/o/r/pulls" to "[]"))
+                c.findOpenPrByBranch("o", "r", "nope") shouldBe null
             }
         }
     }

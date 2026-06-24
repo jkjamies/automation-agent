@@ -9,6 +9,7 @@ import io.github.jkjamies.automationagent.agent.fixflow.FileWork
 import io.github.jkjamies.automationagent.agent.fixflow.GitHub
 import io.github.jkjamies.automationagent.agent.setup.assistantText
 import io.github.jkjamies.automationagent.agent.setup.contentText
+import io.github.jkjamies.automationagent.githubapi.Comparison
 import io.github.jkjamies.automationagent.githubapi.Pr
 import io.github.jkjamies.automationagent.githubapi.PrInput
 import io.kotest.assertions.throwables.shouldThrow
@@ -37,9 +38,10 @@ private class ScriptedModel(val triage: String = "", val plan: String = "", val 
 }
 
 private val noopGitHub = object : GitHub {
-    override suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr> = emptyList()
+    override suspend fun findOpenPrByBranch(owner: String, repo: String, branch: String): Pr? = null
     override suspend fun createPr(owner: String, repo: String, input: PrInput): Pr = throw NotImplementedError()
     override suspend fun addLabels(owner: String, repo: String, number: Int, labels: List<String>) {}
+    override suspend fun compare(owner: String, repo: String, base: String, head: String): Comparison = Comparison()
 }
 
 class CoverageTest : BehaviorSpec({
@@ -106,10 +108,10 @@ class CoverageTest : BehaviorSpec({
 
     Given("the coverage engine") {
         When("inspecting its identity") {
-            Then("it carries the coverage check name and label") {
+            Then("it carries the coverage check name and the common agent label") {
                 val e = newEngine(Deps(gh = noopGitHub))
                 e.checkName() shouldBe "agent-coverage-verify"
-                e.label() shouldBe "automation-agent-coverage"
+                e.label() shouldBe "automation-agent"
             }
         }
     }

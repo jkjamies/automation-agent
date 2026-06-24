@@ -19,7 +19,6 @@ class ConfigTest : BehaviorSpec({
                 c.maxIterations shouldBe 3
                 c.ciTimeout.inWholeMinutes shouldBe 90L
                 c.agentPrLabel shouldBe "automation-agent"
-                c.agentCheckName shouldBe "agent-lint-verify"
                 c.sessionBackend shouldBe SessionBackend.MEMORY
                 c.sqliteDsn shouldBe "automation-agent.db"
                 c.firestoreProject shouldBe ""

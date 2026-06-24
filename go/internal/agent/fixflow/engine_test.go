@@ -26,7 +26,7 @@ func seedParked(e *Engine, prKey, sid, callID string, attempts int) {
 // loop can be tested in isolation.
 func testSpec() Spec {
 	return Spec{
-		Name: "test", Branch: "agent/fix", Label: "automation-agent", CheckName: "agent-test-verify",
+		Name: "test", Branch: "agent/fix", CheckName: "agent-test-verify",
 		CommitMessage: "fix", PRTitle: "Fix",
 		SuccessTitle: "Fix succeeded", ReviewTitle: "Needs human review",
 		Triage: func(_ context.Context, _ model.LLM, _ string) ([]FileWork, error) {
@@ -40,7 +40,7 @@ func testSpec() Spec {
 
 func newEngine(remote string, gh *fakeGH, n *fakeNotifier) *Engine {
 	return NewEngine(testSpec(), Deps{
-		GH: gh, Notify: n, MaxIter: 3, CITimeout: time.Hour,
+		GH: gh, Notify: n, MaxIter: 3, CITimeout: time.Hour, PRLabel: "automation-agent",
 		CloneURL: func(_, _ string) string { return remote },
 	})
 }

@@ -88,6 +88,10 @@ export interface Config {
   // internalToken is the Bearer token guarding the /internal/* cron + sweep routes;
   // '' leaves those routes disabled (404).
   internalToken: string;
+
+  // agentPrLabel is the single human-facing label applied to every agent PR on creation
+  // (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
+  agentPrLabel: string;
 }
 
 /** Read configuration from the process environment, applying defaults. */
@@ -155,6 +159,7 @@ export function loadFrom(get: Lookup): Config {
     firestoreProject: getOr(get, 'FIRESTORE_PROJECT', ''),
     firestoreCollection: getOr(get, 'FIRESTORE_COLLECTION', 'automation_agent'),
     internalToken: getOr(get, 'INTERNAL_TOKEN', ''),
+    agentPrLabel: getOr(get, 'AGENT_PR_LABEL', 'automation-agent'),
   };
 
   // Code models default to the base models when unset.

@@ -90,6 +90,9 @@ type Config struct {
 	// InternalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
 	// cron + sweep). Empty disables those endpoints (404).
 	InternalToken string
+	// AgentPRLabel is the single human-facing label applied to every agent PR on creation
+	// (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
+	AgentPRLabel string
 }
 
 // Load reads configuration from the process environment, applying defaults.
@@ -145,6 +148,7 @@ func loadFrom(get lookup) (Config, error) {
 		CronWeekly:          getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
 		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
+		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),
 	}
 
 	var err error

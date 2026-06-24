@@ -17,7 +17,7 @@ import { safeJoin } from './files';
 
 /** The slice of githubapi the apply step + terminal summary need (consumer-defined, fakeable). */
 export interface GitHub {
-  findAgentPrs(owner: string, repo: string, label: string): Promise<PR[]>;
+  findOpenPrByBranch(owner: string, repo: string, branch: string): Promise<PR | null>;
   createPr(owner: string, repo: string, input: PRInput): Promise<PR>;
   addLabels(owner: string, repo: string, num: number, ...labels: string[]): Promise<void>;
   compare(owner: string, repo: string, base: string, head: string): Promise<Comparison>;
@@ -123,11 +123,10 @@ function writeEdits(repo: Repo, edits: FileEdit[]): void {
 }
 
 async function ensurePr(gh: GitHub, cfg: ApplyConfig): Promise<PR> {
-  const existing = await gh.findAgentPrs(cfg.owner, cfg.repo, cfg.label);
-  for (const pr of existing) {
-    if (pr.branch === cfg.branch) {
-      return pr;
-    }
+  // Look up by head branch (not the agent label, which is write-only and never read back).
+  const existing = await gh.findOpenPrByBranch(cfg.owner, cfg.repo, cfg.branch);
+  if (existing) {
+    return existing;
   }
   const pr = await gh.createPr(cfg.owner, cfg.repo, {
     title: cfg.prTitle,

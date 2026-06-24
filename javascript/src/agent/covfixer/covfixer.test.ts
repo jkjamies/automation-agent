@@ -83,6 +83,7 @@ describe('covfixer engine', () => {
   it('exposes the coverage identity', () => {
     const e = newCoverageEngine({ llm: new FakeLlm(), gh: {} as Deps['gh'] });
     expect(e.checkName()).toBe('agent-coverage-verify');
-    expect(e.label()).toBe('automation-agent-coverage');
+    // The PR label is a single config value (AGENT_PR_LABEL), not per-workflow.
+    expect(e.label()).toBe('automation-agent');
   });
 });

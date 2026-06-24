@@ -150,19 +150,16 @@ class Client(
         }.orThrow()
     }
 
-    /** Lists open PRs carrying the given label. */
-    suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr> {
-        var url: String? = url("repos/$owner/$repo/pulls", "state" to "open", "per_page" to "100")
-        val out = mutableListOf<Pr>()
-        while (url != null) {
-            val resp = http.get(url).orThrow()
-            resp.body<List<PrDto>>()
-                .map { it.toPr() }
-                .filter { it.labels.contains(label) }
-                .forEach { out += it }
-            url = resp.nextLink()
-        }
-        return out
+    /**
+     * Returns the open PR whose head is the given branch, or null. Lookup is by branch (the GitHub
+     * `head=owner:branch` filter), not the agent label — the label is write-only, applied on
+     * creation for humans to filter on.
+     */
+    suspend fun findOpenPrByBranch(owner: String, repo: String, branch: String): Pr? {
+        val resp = http.get(
+            url("repos/$owner/$repo/pulls", "state" to "open", "head" to "$owner:$branch", "per_page" to "1"),
+        ).orThrow()
+        return resp.body<List<PrDto>>().firstOrNull()?.toPr()
     }
 
     /** Returns the named check's state for ref, or found=false if absent. */

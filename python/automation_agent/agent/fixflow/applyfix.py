@@ -21,7 +21,7 @@ from automation_agent.gitrepo import Author, Repo
 class GitHub(Protocol):
     """The slice of githubapi the apply + summary steps need (consumer-defined, fakeable)."""
 
-    def find_agent_prs(self, owner: str, repo: str, label: str) -> list[PR]: ...
+    def find_open_pr_by_branch(self, owner: str, repo: str, branch: str) -> PR | None: ...
 
     def create_pr(self, owner: str, repo: str, in_: PRInput) -> PR: ...
 
@@ -118,11 +118,11 @@ def _write_edits(repo: Repo, edits: list[FileEdit]) -> None:
 
 
 def _ensure_pr(gh: GitHub, cfg: ApplyConfig) -> PR:
-    """Return the existing agent PR for the branch, or create and label one."""
-    existing = gh.find_agent_prs(cfg.owner, cfg.repo, cfg.label)
-    for pr in existing:
-        if pr.branch == cfg.branch:
-            return pr
+    """Return the existing open PR for the branch, or create and label one. Lookup is by
+    head branch (not the agent label, which is write-only and never read back)."""
+    existing = gh.find_open_pr_by_branch(cfg.owner, cfg.repo, cfg.branch)
+    if existing is not None:
+        return existing
     pr = gh.create_pr(
         cfg.owner,
         cfg.repo,

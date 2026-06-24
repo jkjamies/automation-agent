@@ -23,6 +23,7 @@ interface Seen {
   createParams?: Record<string, unknown>;
   labeled?: { number: number; labels: string[] };
   pullsState?: string;
+  pullsHead?: string;
   checkNameSeen?: string;
   checkFilterSeen?: string;
   contentsRef?: string | undefined;
@@ -51,8 +52,9 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       seen.createParams = params;
       return { data: opts.newPull };
     },
-    list: tag('pulls', async (params: { state: string }) => {
+    list: tag('pulls', async (params: { state: string; head?: string }) => {
       seen.pullsState = params.state;
+      seen.pullsHead = params.head;
       return { data: opts.pulls ?? [] };
     }),
   };
@@ -189,21 +191,23 @@ describe('createPr and addLabels', () => {
   });
 });
 
-// --- findAgentPrs ------------------------------------------------------------
+// --- findOpenPrByBranch ------------------------------------------------------
 
-describe('findAgentPrs', () => {
-  it('returns only PRs carrying the label', async () => {
+describe('findOpenPrByBranch', () => {
+  it('queries open PRs by head branch and returns the first', async () => {
     const { client, seen } = makeClient({
-      pulls: [
-        pull(5, '', 'agent/fix', 's5', '', ['automation-agent']),
-        pull(6, '', 'feature', 's6', '', ['enhancement']),
-      ],
+      pulls: [pull(5, '', 'agent/fix', 's5', '', ['automation-agent'])],
     });
 
-    const prs = await client.findAgentPrs('o', 'r', 'automation-agent');
+    const pr = await client.findOpenPrByBranch('o', 'r', 'agent/fix');
     expect(seen.pullsState).toBe('open');
-    expect(prs).toHaveLength(1);
-    expect(prs[0]!.number).toBe(5);
+    expect(seen.pullsHead).toBe('o:agent/fix');
+    expect(pr?.number).toBe(5);
+  });
+
+  it('returns null when no open PR exists for the branch', async () => {
+    const { client } = makeClient({ pulls: [] });
+    expect(await client.findOpenPrByBranch('o', 'r', 'nope')).toBeNull();
   });
 });
 

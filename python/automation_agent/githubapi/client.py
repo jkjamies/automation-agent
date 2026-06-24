@@ -1,6 +1,6 @@
 """Thin wrapper over PyGithub exposing the narrow operations this service needs:
-reading recent commits, opening/labeling/finding agent PRs, counting attempts, and
-reading the agent verify check.
+reading recent commits, opening/labeling PRs, finding the open PR for a branch,
+counting attempts, and reading the agent verify check.
 
 Deterministic tooling — no agent imports (an arch test enforces this).
 
@@ -138,19 +138,18 @@ class Client:
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"add labels to {owner}/{repo}#{number}: {exc}") from exc
 
-    def find_agent_prs(self, owner: str, repo: str, label: str) -> list[PR]:
-        """List open PRs carrying the given label."""
+    def find_open_pr_by_branch(self, owner: str, repo: str, branch: str) -> PR | None:
+        """Return the open PR whose head is the given branch, or ``None``. Lookup is by
+        branch (the GitHub ``head=owner:branch`` filter), not the agent label — the label
+        is write-only, applied on creation for humans to filter on."""
         try:
             r = self._gh.get_repo(f"{owner}/{repo}")
-            prs = r.get_pulls(state="open")
-            out: list[PR] = []
+            prs = r.get_pulls(state="open", head=f"{owner}:{branch}")
             for pr in prs:
-                p = _to_pr(pr)
-                if label in p.labels:
-                    out.append(p)
-            return out
+                return _to_pr(pr)
+            return None
         except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"list PRs {owner}/{repo}: {exc}") from exc
+            raise ValueError(f"list PRs {owner}/{repo} head {branch}: {exc}") from exc
 
     def attempt_count(self, owner: str, repo: str, number: int) -> int:
         """Return the number of commits on a PR.

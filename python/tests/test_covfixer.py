@@ -117,4 +117,3 @@ def test_build_execute_input() -> None:
 def test_new_engine() -> None:
     e = new_engine(Deps())
     assert e.check_name() == "agent-coverage-verify"
-    assert e.label() == "automation-agent-coverage"

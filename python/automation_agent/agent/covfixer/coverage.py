@@ -19,7 +19,6 @@ def new_coverage_engine(d: Deps) -> Engine:
         Spec(
             name="coverage",
             branch="automation-agent/test-coverage",
-            label="automation-agent-coverage",
             check_name="agent-coverage-verify",
             commit_message="automation-agent: add test coverage",
             pr_title="automation-agent: add test coverage",

@@ -16,8 +16,8 @@ class FakeGH implements GitHub {
     private readonly existing: PR[] = [],
     private readonly createErr?: Error,
   ) {}
-  async findAgentPrs(): Promise<PR[]> {
-    return this.existing;
+  async findOpenPrByBranch(_o: string, _r: string, branch: string): Promise<PR | null> {
+    return this.existing.find((pr) => pr.branch === branch) ?? null;
   }
   async createPr(_o: string, _r: string, input: PRInput): Promise<PR> {
     if (this.createErr) throw this.createErr;

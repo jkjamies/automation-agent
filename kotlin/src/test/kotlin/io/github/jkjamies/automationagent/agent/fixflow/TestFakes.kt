@@ -25,9 +25,9 @@ internal class FakeGitHub(
 
     override suspend fun compare(owner: String, repo: String, base: String, head: String): Comparison = comparison
 
-    override suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr> {
+    override suspend fun findOpenPrByBranch(owner: String, repo: String, branch: String): Pr? {
         findErr?.let { throw it }
-        return existing
+        return existing.firstOrNull { it.branch == branch }
     }
 
     override suspend fun createPr(owner: String, repo: String, input: PrInput): Pr {

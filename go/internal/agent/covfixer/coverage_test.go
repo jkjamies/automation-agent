@@ -109,8 +109,8 @@ func TestBuildExecuteInput(t *testing.T) {
 
 func TestNewEngine(t *testing.T) {
 	e := NewEngine(fixflow.Deps{})
-	if e.CheckName() != "agent-coverage-verify" || e.Label() != "automation-agent-coverage" {
-		t.Errorf("check=%q label=%q", e.CheckName(), e.Label())
+	if e.CheckName() != "agent-coverage-verify" {
+		t.Errorf("check=%q", e.CheckName())
 	}
 }
 

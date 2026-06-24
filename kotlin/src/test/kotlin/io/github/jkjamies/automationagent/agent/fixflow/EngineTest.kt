@@ -27,7 +27,7 @@ private fun seedParked(prKey: String, sessionId: String, callId: String, attempt
 // every attempt is a real commit; [calls] counts attempts.
 private fun fixSpec(calls: AtomicInteger, triageThrows: Boolean = false): Spec =
     Spec(
-        name = "test", branch = "agent/fix", label = "automation-agent", checkName = "agent-test-verify",
+        name = "test", branch = "agent/fix", checkName = "agent-test-verify",
         commitMessage = "fix", prTitle = "Fix", successTitle = "Fix succeeded", reviewTitle = "Needs human review",
         triage = TriageFunc { _, _ -> if (triageThrows) throw RuntimeException("triage boom") else listOf(FileWork("a.go", listOf("x"))) },
         analyze = AnalyzeFunc { listOf(FileEdit("a.go", "package a\n// v${calls.incrementAndGet()}\n")) },

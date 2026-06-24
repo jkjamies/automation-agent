@@ -137,6 +137,7 @@ async function run(): Promise<void> {
     maxIter: cfg.maxIterations,
     ciTimeoutMs: cfg.ciTimeoutMs,
     log,
+    prLabel: cfg.agentPrLabel,
     sessionService,
     parkStore,
   };

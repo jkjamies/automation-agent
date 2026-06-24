@@ -65,7 +65,6 @@ export type AnalyzeFunc = (input: AnalyzeInput) => Promise<FileEdit[]>;
 export interface Spec {
   name: string; // "lint" | "coverage"
   branch: string; // e.g. automation-agent/lint-fix
-  label: string; // e.g. automation-agent
   checkName: string; // e.g. agent-lint-verify
   commitMessage: string;
   prTitle: string;
@@ -111,6 +110,12 @@ export interface Deps {
   log?: Logger | null;
   cloneUrl?: (owner: string, repo: string) => string;
   /**
+   * The single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL).
+   * Write-only — PR lookup is by branch, so it never gates behavior. Defaults to
+   * `automation-agent`.
+   */
+  prLabel?: string;
+  /**
    * Durable suspend/resume session backend. When null the Driver falls back to an
    * in-memory session service (today's behavior). Built once at startup and shared by
    * every engine so a parked run resumes against the same store after a restart.
@@ -136,6 +141,7 @@ export interface ResolvedDeps {
   author: Author;
   log: Logger | null;
   cloneUrl: (owner: string, repo: string) => string;
+  prLabel: string;
   sessionService: BaseSessionService | null;
   parkStore: ParkStore | null;
 }
@@ -164,9 +170,12 @@ export class Engine {
     this.driver = new Driver(this);
   }
 
-  /** The PR label this engine's workflow uses. */
+  /**
+   * The human-facing label applied to this engine's PRs (AGENT_PR_LABEL). Same for every
+   * workflow and write-only — PR lookup is by branch, not label.
+   */
   label(): string {
-    return this.spec.label;
+    return this.d.prLabel;
   }
 
   /** The agent verify check this engine resumes on. */
@@ -228,7 +237,7 @@ export class Engine {
       base: rp.base,
       branch: this.spec.branch,
       newBranch: rp.newBranch,
-      label: this.spec.label,
+      label: this.d.prLabel,
       commitMessage: this.spec.commitMessage,
       prTitle: this.spec.prTitle,
       prBody: prBody(this.spec, work),
@@ -284,6 +293,7 @@ export function newEngine(spec: Spec, d: Deps): Engine {
     author: d.author && d.author.name !== '' ? d.author : DEFAULT_AUTHOR,
     log: d.log ?? null,
     cloneUrl: d.cloneUrl ?? defaultCloneUrl,
+    prLabel: d.prLabel ?? 'automation-agent',
     sessionService: d.sessionService ?? null,
     parkStore: d.parkStore ?? null,
   };

@@ -20,6 +20,12 @@ describe('config', () => {
     expect(c.firestoreProject).toBe('');
     expect(c.firestoreCollection).toBe('automation_agent');
     expect(c.internalToken).toBe('');
+    expect(c.agentPrLabel).toBe('automation-agent'); // default
+  });
+
+  it('reads a custom agent PR label', () => {
+    const c = loadFrom(mapLookup({ AGENT_PR_LABEL: 'my-bot' }));
+    expect(c.agentPrLabel).toBe('my-bot');
   });
 
   it('reads the session backend and its settings', () => {

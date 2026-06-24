@@ -89,8 +89,9 @@ data class Config(
     // resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
     val ciTimeout: Duration,
     val githubWebhookSecret: String,
+    // Single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL).
+    // Write-only: PR lookup is by branch, so the label never gates behavior.
     val agentPrLabel: String,
-    val agentCheckName: String,
     // Sessions: where the durable suspend/resume session + park record live.
     val sessionBackend: SessionBackend,
     // sqliteDsn is the database path for SESSION_BACKEND=sqlite (ignored otherwise).
@@ -180,7 +181,6 @@ data class Config(
                 ciTimeout = ciTimeout,
                 githubWebhookSecret = getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
                 agentPrLabel = getOr(get, "AGENT_PR_LABEL", "automation-agent"),
-                agentCheckName = getOr(get, "AGENT_CHECK_NAME", "agent-lint-verify"),
                 sessionBackend = sessionBackend,
                 sqliteDsn = getOr(get, "SQLITE_DSN", "automation-agent.db"),
                 firestoreProject = getOr(get, "FIRESTORE_PROJECT", ""),

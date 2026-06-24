@@ -81,8 +81,9 @@ class FakeRepo:
 
         return _Issue()
 
-    def get_pulls(self, state=None):
+    def get_pulls(self, state=None, head=None):
         self._kw["pulls_state"] = state
+        self._kw["pulls_head"] = head
         return FakePaginated(self._kw.get("pulls", []))
 
     def get_pull(self, number):
@@ -177,22 +178,25 @@ def test_create_pr_and_labels() -> None:
     assert repo.labeled == (5, ["automation-agent"])
 
 
-# --- find_agent_prs ----------------------------------------------------------
+# --- find_open_pr_by_branch --------------------------------------------------
 
 
-def test_find_agent_prs() -> None:
-    repo = FakeRepo(
-        pulls=[
-            _pull(5, "", "agent/fix", "s5", "", ["automation-agent"]),
-            _pull(6, "", "feature", "s6", "", ["enhancement"]),
-        ]
-    )
+def test_find_open_pr_by_branch() -> None:
+    repo = FakeRepo(pulls=[_pull(5, "", "agent/fix", "s5", "", ["automation-agent"])])
     c, _ = make_client(repo)
 
-    prs = c.find_agent_prs("o", "r", "automation-agent")
+    pr = c.find_open_pr_by_branch("o", "r", "agent/fix")
     assert repo._kw["pulls_state"] == "open"
-    assert len(prs) == 1
-    assert prs[0].number == 5
+    assert repo._kw["pulls_head"] == "o:agent/fix"
+    assert pr is not None
+    assert pr.number == 5
+
+
+def test_find_open_pr_by_branch_none() -> None:
+    repo = FakeRepo(pulls=[])
+    c, _ = make_client(repo)
+
+    assert c.find_open_pr_by_branch("o", "r", "nope") is None
 
 
 # --- attempt_count -----------------------------------------------------------

@@ -1,6 +1,7 @@
 // Package githubapi wraps go-github with the narrow operations this service needs:
-// reading recent commits, opening/labeling/finding agent PRs, counting attempts,
-// and reading the agent verify check. Deterministic tooling — no agent imports.
+// reading recent commits, opening/labeling PRs, finding the open PR for a branch,
+// counting attempts, and reading the agent verify check. Deterministic tooling — no
+// agent imports.
 package githubapi
 
 import (
@@ -8,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/google/go-github/v78/github"
@@ -146,27 +146,20 @@ func (c *Client) AddLabels(ctx context.Context, owner, repo string, number int, 
 	return nil
 }
 
-// FindAgentPRs lists open PRs carrying the given label.
-func (c *Client) FindAgentPRs(ctx context.Context, owner, repo, label string) ([]PR, error) {
-	opts := &github.PullRequestListOptions{State: "open", ListOptions: github.ListOptions{PerPage: 100}}
-	var out []PR
-	for {
-		prs, resp, err := c.gh.PullRequests.List(ctx, owner, repo, opts)
-		if err != nil {
-			return nil, fmt.Errorf("list PRs %s/%s: %w", owner, repo, err)
-		}
-		for _, pr := range prs {
-			p := toPR(pr)
-			if slices.Contains(p.Labels, label) {
-				out = append(out, p)
-			}
-		}
-		if resp == nil || resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
+// FindOpenPRByBranch returns the open PR whose head is the given branch, if one exists.
+// Lookup is by branch (the GitHub `head=owner:branch` filter), not the agent label — the
+// label is write-only, applied on creation for humans to filter on.
+func (c *Client) FindOpenPRByBranch(ctx context.Context, owner, repo, branch string) (PR, bool, error) {
+	prs, _, err := c.gh.PullRequests.List(ctx, owner, repo, &github.PullRequestListOptions{
+		State: "open", Head: owner + ":" + branch, ListOptions: github.ListOptions{PerPage: 1},
+	})
+	if err != nil {
+		return PR{}, false, fmt.Errorf("list PRs %s/%s head %s: %w", owner, repo, branch, err)
 	}
-	return out, nil
+	if len(prs) == 0 {
+		return PR{}, false, nil
+	}
+	return toPR(prs[0]), true, nil
 }
 
 // AgentCheck returns the named check's state for ref, or {Found:false} if absent.

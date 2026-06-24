@@ -21,7 +21,6 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 	return fixflow.NewEngine(fixflow.Spec{
 		Name:          "coverage",
 		Branch:        "automation-agent/test-coverage",
-		Label:         "automation-agent-coverage",
 		CheckName:     "agent-coverage-verify",
 		CommitMessage: "automation-agent: add test coverage",
 		PRTitle:       "automation-agent: add test coverage",

@@ -47,7 +47,6 @@ fun interface AnalyzeFunc {
 data class Spec(
     val name: String, // "lint" | "coverage"
     val branch: String, // e.g. automation-agent/lint-fix
-    val label: String, // e.g. automation-agent
     val checkName: String, // e.g. agent-lint-verify
     val commitMessage: String,
     val prTitle: String,
@@ -70,6 +69,11 @@ data class Deps(
     val codeLlm: Model? = null,
     val notifier: Notifier? = null,
     val token: String = "",
+    /**
+     * Single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL). Write-only
+     * — PR lookup is by branch, so it never gates behavior. Same for every workflow.
+     */
+    val prLabel: String = "automation-agent",
     /** Kickoff allowlist (REPOS); when non-empty a kickoff whose repo is not listed is rejected. */
     val repos: List<String> = emptyList(),
     val maxIter: Int = 3,
@@ -100,8 +104,8 @@ class Engine(val spec: Spec, val deps: Deps) {
     /** Frees this engine's parked runs whose CI never reported (the durable timeout backstop). */
     suspend fun sweepTimeouts() = driver.sweepTimeouts()
 
-    /** The PR label this engine's workflow uses. */
-    fun label(): String = spec.label
+    /** The human-facing label applied to this engine's PRs (AGENT_PR_LABEL); same for every workflow. */
+    fun label(): String = deps.prLabel
 
     /** The agent verify check this engine resumes on. */
     fun checkName(): String = spec.checkName
@@ -143,7 +147,7 @@ class Engine(val spec: Spec, val deps: Deps) {
         val cfg =
             ApplyConfig(
                 owner = rp.owner, repo = rp.repo, cloneUrl = cloneUrl(rp.owner, rp.repo), token = deps.token,
-                base = rp.base, branch = spec.branch, newBranch = rp.newBranch, label = spec.label,
+                base = rp.base, branch = spec.branch, newBranch = rp.newBranch, label = deps.prLabel,
                 commitMessage = spec.commitMessage, prTitle = spec.prTitle, prBody = prBody(spec, work), author = author,
             )
         val repo = open(cfg)
