@@ -180,23 +180,29 @@ class SqliteSessionService(dsn: String) : SessionService {
 
     override suspend fun appendEvent(session: Session, event: Event): Event {
         val key = session.key
-        // Apply the event's state delta to the live session (the runner reads it back), then persist
-        // the event and the updated, durable (non-temp) state under one lock.
-        session.state.applyDelta(event.actions.stateDelta)
-        val persistable = session.state.filterKeys { !it.startsWith(TEMP_PREFIX) }
+        // Derive the next durable state WITHOUT mutating the live session yet: a failed write must
+        // not leave the in-memory session ahead of durable state. We apply the delta to a detached
+        // State (its merged view reflects the delta) so `session.state` is only advanced after the
+        // transaction commits below.
+        val derived = State(session.state.toMutableMap(), mutableMapOf()).apply { applyDelta(event.actions.stateDelta) }
+        val persistable = derived.filterKeys { !it.startsWith(TEMP_PREFIX) }
         val now = System.currentTimeMillis()
         txn { c ->
+            // Persist the derived state first and assert the parent row still exists, so a deleted
+            // session can never commit an orphaned session_events row.
+            c.prepareStatement("UPDATE sessions SET state = ?, last_update = ? WHERE app_name = ? AND user_id = ? AND id = ?").use { ps ->
+                ps.setString(1, encodeState(persistable)); ps.setLong(2, now)
+                ps.setString(3, key.appName); ps.setString(4, key.userId); ps.setString(5, key.id)
+                check(ps.executeUpdate() == 1) { "session ${key.id} does not exist" }
+            }
             c.prepareStatement("INSERT INTO session_events (app_name, user_id, session_id, timestamp, data) VALUES (?, ?, ?, ?, ?)").use { ps ->
                 ps.setString(1, key.appName); ps.setString(2, key.userId); ps.setString(3, key.id)
                 ps.setLong(4, event.timestamp); ps.setString(5, adkEventJson.encodeToString(Event.serializer(), event))
                 ps.executeUpdate()
             }
-            c.prepareStatement("UPDATE sessions SET state = ?, last_update = ? WHERE app_name = ? AND user_id = ? AND id = ?").use { ps ->
-                ps.setString(1, encodeState(persistable)); ps.setLong(2, now)
-                ps.setString(3, key.appName); ps.setString(4, key.userId); ps.setString(5, key.id)
-                ps.executeUpdate()
-            }
         }
+        // Durable write committed: only now advance the live session's state.
+        session.state.applyDelta(event.actions.stateDelta)
         // Mirror InMemorySessionService: reflect the event into the live session's history.
         @Suppress("UNCHECKED_CAST")
         (session.events as? MutableList<Event>)?.add(event)

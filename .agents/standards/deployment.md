@@ -179,7 +179,7 @@ over mTLS to the private service, so `/internal/*` authenticates by OIDC (`INTER
 rather than a shared bearer. The app continues to verify **HMAC** and the **`REPOS`** allowlist
 itself, so those defenses hold end-to-end regardless of the edge.
 
-```
+```text
             operator network (enterprise VPC / personal net)
   ┌───────────────────────────────────────────────────────────────────────┐
   │   GitHub Enterprise (self-hosted) ─webhook(HMAC)─┐                      │

@@ -106,6 +106,16 @@ class MemoryParkStore : ParkStore {
             ) {
                 index.remove(prev.prKey)
             }
+            // One active record per PR key: if a different session currently owns this key, un-park
+            // it so the index has a single winner (mirrors the durable backends' duplicate clear).
+            // Otherwise resolve/sweep could return either session, and a later delete of the
+            // displaced session would strand this one.
+            if (record.prKey.isNotEmpty()) {
+                val owner = index[record.prKey]
+                if (owner != null && owner != record.sessionId) {
+                    bySession[owner]?.let { bySession[owner] = it.copy(prKey = "") }
+                }
+            }
             bySession[record.sessionId] = record
             if (record.prKey.isNotEmpty()) index[record.prKey] = record.sessionId
         }
