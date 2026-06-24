@@ -87,6 +87,7 @@ export class Server {
     return this.expressApp;
   }
 
+  /** Construct the Express app: health check, webhook routes, and the token-guarded internal routes. */
   private buildApp(): Express {
     const app = express();
 
@@ -229,6 +230,7 @@ export class Server {
     await next(body);
   }
 
+  /** Hand an envelope to the ingest handler and translate the outcome into an HTTP status. */
   private async dispatch(res: Response, env: Envelope): Promise<void> {
     try {
       await this.ingest(env);

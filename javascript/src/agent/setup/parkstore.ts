@@ -93,6 +93,7 @@ export class MemoryParkStore implements ParkStore {
   private readonly bySession = new Map<string, ParkRecord>();
   private readonly index = new Map<string, string>(); // prKey -> sessionId
 
+  /** Store (or overwrite) a session's record and keep the prKey→session index single-holder. */
   put(record: ParkRecord): Promise<void> {
     const stored = cloneRecord(record);
     // Stale-index hygiene: if this session was indexed under a different key, drop the
@@ -110,11 +111,13 @@ export class MemoryParkStore implements ParkStore {
     return Promise.resolve();
   }
 
+  /** Fetch a copy of a session's record by id, or null if it is not stored. */
   get(sessionId: string): Promise<ParkRecord | null> {
     const rec = this.bySession.get(sessionId);
     return Promise.resolve(rec ? cloneRecord(rec) : null);
   }
 
+  /** Atomically claim the run parked under a PR key (single winner); the record is retained, unparked. */
   resolveByPrKey(prKey: string): Promise<ParkRecord | null> {
     if (prKey === '') {
       return Promise.resolve(null);
@@ -134,6 +137,7 @@ export class MemoryParkStore implements ParkStore {
     return Promise.resolve(out);
   }
 
+  /** Remove a session's record and any index entry it still holds. */
   delete(sessionId: string): Promise<void> {
     const rec = this.bySession.get(sessionId);
     if (rec && rec.prKey !== '' && this.index.get(rec.prKey) === sessionId) {
@@ -143,6 +147,7 @@ export class MemoryParkStore implements ParkStore {
     return Promise.resolve();
   }
 
+  /** Claim every run parked before the cutoff (each exactly once), for the timeout backstop. */
   sweep(cutoff: Date): Promise<ParkRecord[]> {
     const claimed: ParkRecord[] = [];
     for (const [key, sid] of [...this.index.entries()]) {
@@ -159,10 +164,12 @@ export class MemoryParkStore implements ParkStore {
     return Promise.resolve(claimed);
   }
 
+  /** Number of currently parked runs (those still holding a PR key). */
   parkedCount(): Promise<number> {
     return Promise.resolve(this.index.size);
   }
 
+  /** No-op for the in-memory store; present to satisfy the {@link ParkStore} contract. */
   close(): Promise<void> {
     return Promise.resolve();
   }

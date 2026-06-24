@@ -712,6 +712,17 @@ the firestore emulator for local tests, and the pending-work list — lives in
 - Model in prod → likely `LLM_PROVIDER=gemini` (Vertex) unless we provision a GPU VM for
   Ollama. Config flag, no code change.
 
+**Private ingress.** For a deployment that must stay off the public internet, the service runs
+**private** (`ingress=internal-and-cloud-load-balancing`) behind an Internal Application Load
+Balancer, with a **self-hosted API gateway** on the operator's own network as the single front
+door. The gateway is the IAM-authenticated caller — it enforces the webhook edge policies (HMAC,
+GitHub IP allowlist, replay window, rate-limit) and presents a Google OIDC token to `/internal/*`
+(`INTERNAL_AUTH=oidc`), so a private Cloud Run still receives webhook-originated traffic and the
+shared bearer goes away. The HTTP contract is identical across ports, so the gateway config is
+port-agnostic. Architecture detail in
+[`deployment.md` § Private ingress](deployment.md#private-ingress); rollout intent in
+[`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+
 ---
 
 ## 14. Phased roadmap
@@ -819,3 +830,15 @@ Notes:
   `session.Service`, plus the `setup.ParkStore` for the run record, is the suspend/resume
   mechanism. adk-go ships inmemory/database/vertexai session services; the **firestore**
   `session.Service` is a custom impl in `internal/agent/setup`.
+
+### ADK Sessions — concept references
+
+The `session.Service` / state / events model above is ADK's own Sessions abstraction; our
+backend tiers (`memory` → `sqlite` → `firestore`) mirror its InMemory → Database → Vertex
+tiers. Canonical docs (verify against current sources — surfaces move):
+
+- ADK **Sessions** concept (`Session`/`State`/`Events`/`SessionService`): <https://adk.dev/sessions/>
+- ADK **agent-memory** codelab (sessions/state vs. long-term Memory; `DatabaseSessionService`
+  with `sqlite:///`; Vertex AI Memory Bank): <https://codelabs.developers.google.com/codelabs/agent-memory/instructions>.
+  We persist **sessions**; the codelab's searchable cross-session **Memory Bank /
+  `MemoryService`** tier is not part of this architecture.

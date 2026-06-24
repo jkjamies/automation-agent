@@ -68,6 +68,12 @@ cleanest upgrade is *app-validated OIDC* (verify the Google ID token in the hand
 audience-checked), keeping a single service and dropping the shared secret. Tracked under
 [TODO](#todo--not-yet-implemented).
 
+> For a deployment that must stay off the public internet, the [Private
+> ingress](#private-ingress) architecture fronts a **private** Cloud Run with a **self-hosted
+> API gateway** on the operator's own network: the gateway is the IAM-authenticated caller and
+> presents a Google OIDC token to `/internal/*`, so a private service receives webhook-originated
+> traffic without a shared bearer.
+
 ### Configuration
 
 The full env-var reference lives in
@@ -151,6 +157,117 @@ GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is a
 - [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
       current per-port drift is tracked in `specs/parity-status.md`.
 - [ ] **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
+
+---
+
+## Private ingress
+
+The private-ingress architecture serves an operator who needs the agent reachable **only on
+their own network**. Each operator runs their **own** instance (`REPOS` scopes one instance to
+one operator's repos — there is no shared multi-tenant service), and it works against **GitHub
+Enterprise (self-hosted)**, **GitHub Enterprise Cloud**, and **GitHub public**. Cloud Run and
+GCP-native cron are retained. Selecting this posture is config + infra only; the rollout work and
+its status live in [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+
+### Shape
+
+A **self-hosted API gateway** on the operator's own network (GKE or a VM) is the single front
+door, and Cloud Run is **private** — `ingress=internal-and-cloud-load-balancing`, fronted by an
+**Internal Application Load Balancer** + serverless NEG. The gateway is a GCP-IAM caller: it
+holds `roles/run.invoker` and presents a **Google OIDC ID token** (`aud` = the Cloud Run URL)
+over mTLS to the private service, so `/internal/*` authenticates by OIDC (`INTERNAL_AUTH=oidc`)
+rather than a shared bearer. The app continues to verify **HMAC** and the **`REPOS`** allowlist
+itself, so those defenses hold end-to-end regardless of the edge.
+
+```text
+            operator network (enterprise VPC / personal net)
+  ┌───────────────────────────────────────────────────────────────────────┐
+  │   GitHub Enterprise (self-hosted) ─webhook(HMAC)─┐                      │
+  │   CI runners (lint/coverage POST) ─HMAC──────────►│                     │
+  │                                                   ▼                     │
+  │                                            ┌─────────────┐  policies:   │
+  │                                            │  self-hosted│  • HMAC verify (edge)
+  │                                            │ API gateway │  • GitHub IP allowlist
+  │                                            │ (operator   │  • rate-limit / replay
+  │                                            │   network)  │  • size cap
+  │                                            └──────┬──────┘              │
+  │                                                   │  OIDC ID token (aud = Cloud Run URL) + mTLS
+  │                                                   ▼                     │
+  │                                   ┌────────────────────────────┐        │
+  │                                   │ Internal Application LB     │        │
+  │                                   │ (serverless NEG → Cloud Run)│        │
+  └──────────────────────────────────┴──────────────┬─────────────┴────────┘
+                                                     ▼  (Google-internal)
+                                  ┌────────────────────────────────────────┐
+                                  │ Cloud Run  ingress = internal-and-      │
+                                  │            cloud-load-balancing         │
+                                  │  IAM: roles/run.invoker = GW + Sched SA │
+                                  │  app verifies HMAC + REPOS              │
+                                  │  SESSION_BACKEND=firestore (scale-to-0) │
+                                  └────────────────────────────────────────┘
+                                                     ▲
+   Cloud Scheduler ─OIDC(aud=Cloud Run)─► Internal ALB ─┘   /internal/cron/* , /internal/sweep
+```
+
+`ingress=internal-and-cloud-load-balancing` admits the Internal ALB in the same VPC and nothing
+from the public internet; the gateway is the only principal Cloud Run's IAM trusts. Cron and the
+timeout sweep run through the same private path with a Cloud Scheduler OIDC token — GCP-native,
+no public exposure, no shared secret.
+
+### What each layer owns
+
+| Layer | Responsibility |
+|---|---|
+| Self-hosted API gateway | edge TLS, **HMAC verify**, **GitHub IP allowlist**, **rate-limit + replay window**, request-size cap, **mint OIDC** + **mTLS** to backend, audit log |
+| Internal ALB + serverless NEG | private L7 path gateway → Cloud Run |
+| Cloud Run (private) | the agent; verifies HMAC + `REPOS` (defense in depth) |
+| IAM | `roles/run.invoker` for the gateway SA + Scheduler SA; OIDC audience check |
+| Cloud Scheduler | cron + sweep via OIDC through the Internal ALB |
+| Secret Manager / gateway vault | HMAC secret, GitHub token, notifier URL |
+
+### Edge policy at the gateway
+
+The gateway is where the operator-owned edge policy lives: TLS termination, **HMAC
+verification**, a **GitHub source-IP allowlist**, a **replay/timestamp window** (dedupe on
+`X-GitHub-Delivery`), **rate-limiting**, and a request-size cap mirroring the app's 5 MiB body
+limit. It mints the OIDC ID token, opens **mTLS** to the backend, and audit-logs every decision.
+A self-hosted gateway on the operator network — rather than a managed public endpoint — is what
+makes these webhook-shaped policies enforceable at the edge while the agent stays private; the
+concrete product selection is recorded in [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+
+### Serving each GitHub flavor
+
+| Trigger | GHE self-hosted (operator net) | GHE Cloud / GitHub public |
+|---|---|---|
+| `check_run` resume (`/webhooks/github`) | gateway on operator net | gateway public listener, IP-allowlisted → private Cloud Run |
+| lint/coverage kickoff (`/webhooks/{lint,coverage}`) | CI runners on operator net → gateway | CI → gateway (same listener) |
+| daily/weekly digest (`/internal/cron/*`) | Cloud Scheduler → OIDC → Internal ALB | same |
+| timeout sweep (`/internal/sweep`) | Cloud Scheduler → OIDC → Internal ALB | same |
+
+- **GHE self-hosted** — GitHub and the gateway both sit on the operator network, so ingress
+  never leaves it.
+- **GHE Cloud / GitHub public** — these deliver webhooks from the public internet, so the
+  **gateway** terminates a single hardened public listener (GitHub IP allowlist + HMAC + replay
+  window + rate-limit, optionally behind the operator's WAF/Cloud Armor or existing
+  reverse-proxy/VPN edge) and forwards to the private Cloud Run.
+
+Cron and the sweep are **always** GCP-internal regardless of GitHub flavor; only the
+`check_run`/kickoff webhooks vary.
+
+### Config
+
+| Var | Meaning | Default |
+|---|---|---|
+| `INTERNAL_AUTH` | `bearer` \| `oidc` \| `both` for `/internal/*` | `bearer` |
+| `OIDC_AUDIENCE` | expected `aud` (the Cloud Run service URL) | empty |
+| `OIDC_ALLOWED_SA` | comma-list of allowed caller SA emails (gateway SA, Scheduler SA) | empty |
+| `SCHEDULER` | `internal` \| `external` (disable in-process cron when Cloud Scheduler owns it) | `internal` |
+
+The defaults reproduce the public-URL behavior, so this posture is selected entirely through
+config + infra. The agent logic (`fixflow`, sessions, park store, `REPOS`) is unchanged; the
+architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`) and the
+`SCHEDULER=external` flag, which land Go-first and mirror per the parity contract. Per-port
+drift: `specs/parity-status.md`.
 
 ---
 

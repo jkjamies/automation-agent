@@ -39,6 +39,28 @@ enum class NotifyProvider(val value: String) {
     }
 }
 
+/**
+ * SessionBackend selects where the ADK session (the durable suspend/resume history of a parked
+ * fix run) and its park record live.
+ */
+enum class SessionBackend(val value: String) {
+    /** In-process: tests and ephemeral local runs. A restart strands parked runs. */
+    MEMORY("memory"),
+
+    /** Local file via a hand-rolled sqlite session service, so a parked run survives a restart. */
+    SQLITE("sqlite"),
+
+    /** Cloud backend (serverless, scales to zero): a hand-rolled Firestore session service + park store. */
+    FIRESTORE("firestore"),
+    ;
+
+    override fun toString(): String = value
+
+    companion object {
+        fun from(s: String): SessionBackend? = entries.firstOrNull { it.value == s }
+    }
+}
+
 /** Config holds all runtime settings. */
 data class Config(
     // LLM
@@ -69,6 +91,17 @@ data class Config(
     val githubWebhookSecret: String,
     val agentPrLabel: String,
     val agentCheckName: String,
+    // Sessions: where the durable suspend/resume session + park record live.
+    val sessionBackend: SessionBackend,
+    // sqliteDsn is the database path for SESSION_BACKEND=sqlite (ignored otherwise).
+    val sqliteDsn: String,
+    // firestoreProject is the GCP project for SESSION_BACKEND=firestore; empty detects it from
+    // ADC / GOOGLE_CLOUD_PROJECT. firestoreCollection is the collection-name prefix.
+    val firestoreProject: String,
+    val firestoreCollection: String,
+    // internalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
+    // cron + sweep). Empty disables those routes (they 404).
+    val internalToken: String,
 ) {
     /**
      * Checks invariants that the type system alone cannot guarantee. Provider and notify
@@ -124,6 +157,10 @@ data class Config(
             val ollamaCodeModel = getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b")
             val geminiCodeModel = getOr(get, "GEMINI_CODE_MODEL", "").ifEmpty { geminiModel }
 
+            val sessionBackendRaw = getOr(get, "SESSION_BACKEND", SessionBackend.MEMORY.value)
+            val sessionBackend = SessionBackend.from(sessionBackendRaw)
+                ?: throw IllegalArgumentException("invalid SESSION_BACKEND \"$sessionBackendRaw\" (want memory|sqlite|firestore)")
+
             val c = Config(
                 llmProvider = llmProvider,
                 ollamaHost = getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
@@ -144,6 +181,11 @@ data class Config(
                 githubWebhookSecret = getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
                 agentPrLabel = getOr(get, "AGENT_PR_LABEL", "automation-agent"),
                 agentCheckName = getOr(get, "AGENT_CHECK_NAME", "agent-lint-verify"),
+                sessionBackend = sessionBackend,
+                sqliteDsn = getOr(get, "SQLITE_DSN", "automation-agent.db"),
+                firestoreProject = getOr(get, "FIRESTORE_PROJECT", ""),
+                firestoreCollection = getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
+                internalToken = getOr(get, "INTERNAL_TOKEN", ""),
             )
             c.validate()
             return c

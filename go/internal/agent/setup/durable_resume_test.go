@@ -70,8 +70,7 @@ func newDurableCIWaiter(t *testing.T, appName string, svc session.Service) *runn
 	return r
 }
 
-// TestDurableCrossProcessResume is the spike that gates the durable-sessions work
-// (specs/20260621-durable-sessions-vs-agent-runtime.md — open question #2): it proves
+// TestDurableCrossProcessResume is the spike that gates the durable-sessions work: it proves
 // adk-go's session/database backend round-trips a *long-running park* across what is
 // effectively a process restart.
 //

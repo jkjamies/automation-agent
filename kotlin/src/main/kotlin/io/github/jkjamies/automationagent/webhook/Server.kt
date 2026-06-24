@@ -32,12 +32,20 @@ private const val MAX_BODY_BYTES = 5 * 1024 * 1024
 /** Idle connections are closed after this many seconds, blunting slow-client (Slowloris) holds. */
 private const val CONNECTION_IDLE_TIMEOUT_SECONDS = 30
 
+/** An empty request body, used for the parameterless internal cron/sweep triggers. */
+private val EMPTY_BODY = ByteArray(0)
+
 /**
  * Consumes a normalized envelope. It should enqueue work and return quickly; a thrown
  * exception becomes a 500 to the caller.
  */
 fun interface IngestFunc {
     suspend operator fun invoke(envelope: Envelope)
+}
+
+/** Resolves every engine's parked runs whose CI never reported (the periodic timeout backstop). */
+fun interface SweepFunc {
+    suspend operator fun invoke()
 }
 
 /**
@@ -49,6 +57,8 @@ fun Application.webhookRoutes(
     ingest: IngestFunc,
     secret: String = "",
     now: () -> Instant = Instant::now,
+    internalToken: String = "",
+    sweep: SweepFunc? = null,
 ) {
     routing {
         get("/healthz") { call.respondText("ok") }
@@ -70,6 +80,29 @@ fun Application.webhookRoutes(
             if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
             dispatch(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
         }
+
+        // Internal Cloud Scheduler ingress: cron digests + the durable timeout sweep. Guarded by a
+        // Bearer INTERNAL_TOKEN; an unset token disables the routes entirely (404).
+        post("/internal/cron/daily") {
+            if (!call.internalAuthorized(internalToken)) return@post
+            dispatch(ingest, Envelope.new(Kind.CRON_DAILY, "internal:/cron/daily", EMPTY_BODY, now()))
+        }
+
+        post("/internal/cron/weekly") {
+            if (!call.internalAuthorized(internalToken)) return@post
+            dispatch(ingest, Envelope.new(Kind.CRON_WEEKLY, "internal:/cron/weekly", EMPTY_BODY, now()))
+        }
+
+        post("/internal/sweep") {
+            if (!call.internalAuthorized(internalToken)) return@post
+            if (sweep == null) return@post call.respond(HttpStatusCode.NotImplemented, "sweep not configured")
+            try {
+                sweep()
+                call.respond(HttpStatusCode.OK, "ok")
+            } catch (_: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, "sweep failed")
+            }
+        }
     }
 }
 
@@ -89,6 +122,27 @@ private fun ApplicationCall.authenticated(secret: String, body: ByteArray): Bool
     val sig = request.header("X-Hub-Signature-256") ?: ""
     return verifySignature(secret, sig, body)
 }
+
+/**
+ * Authorizes an internal request: an unset [token] disables these routes (responds 404); otherwise
+ * the request must carry a matching `Bearer <token>` (constant-time compared, 401 on mismatch).
+ * Returns false (after responding) when the request must not proceed.
+ */
+private suspend fun ApplicationCall.internalAuthorized(token: String): Boolean {
+    if (token.isEmpty()) {
+        respond(HttpStatusCode.NotFound, "not found")
+        return false
+    }
+    val provided = request.header("Authorization") ?: ""
+    if (!constantTimeEquals(provided, "Bearer $token")) {
+        respond(HttpStatusCode.Unauthorized, "unauthorized")
+        return false
+    }
+    return true
+}
+
+private fun constantTimeEquals(a: String, b: String): Boolean =
+    java.security.MessageDigest.isEqual(a.toByteArray(Charsets.UTF_8), b.toByteArray(Charsets.UTF_8))
 
 private suspend fun ApplicationCall.receiveCapped(): ByteArray? {
     val bytes = receiveChannel().readRemaining((MAX_BODY_BYTES + 1).toLong()).readByteArray()
@@ -113,6 +167,8 @@ fun webhookServer(
     ingest: IngestFunc,
     secret: String = "",
     now: () -> Instant = Instant::now,
+    internalToken: String = "",
+    sweep: SweepFunc? = null,
 ): EmbeddedServer<*, *> {
     val bindPort = port
     return embeddedServer(
@@ -121,6 +177,6 @@ fun webhookServer(
             connectors.add(EngineConnectorBuilder().apply { this.port = bindPort })
             connectionIdleTimeoutSeconds = CONNECTION_IDLE_TIMEOUT_SECONDS
         },
-        module = { webhookRoutes(ingest, secret, now) },
+        module = { webhookRoutes(ingest, secret, now, internalToken, sweep) },
     )
 }

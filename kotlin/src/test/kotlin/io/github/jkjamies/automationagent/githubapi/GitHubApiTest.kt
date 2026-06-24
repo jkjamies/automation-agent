@@ -94,6 +94,26 @@ class GitHubApiTest : BehaviorSpec({
         }
     }
 
+    Given("a base...head comparison") {
+        When("comparing two refs") {
+            Then("it projects the commit count and changed files") {
+                val c = client(
+                    mapOf(
+                        "GET /repos/o/r/compare/main...agent-fix" to
+                            """{"total_commits":2,"files":[{"filename":"a.kt","status":"modified","additions":3,"deletions":1},{"filename":"b.kt","status":"added","additions":10,"deletions":0}]}""",
+                    ),
+                )
+                val cmp = c.compare("o", "r", "main", "agent-fix")
+                cmp.totalCommits shouldBe 2
+                cmp.files.size shouldBe 2
+                cmp.files[0].path shouldBe "a.kt"
+                cmp.files[0].status shouldBe "modified"
+                cmp.files[0].additions shouldBe 3
+                cmp.files[1].path shouldBe "b.kt"
+            }
+        }
+    }
+
     Given("a base64-encoded file") {
         When("getting its content") {
             Then("it decodes to the original text") {

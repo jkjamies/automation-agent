@@ -17,6 +17,8 @@ import io.github.jkjamies.automationagent.agent.root.RootDeps
 import io.github.jkjamies.automationagent.agent.root.buildRootDispatcher
 import io.github.jkjamies.automationagent.agent.setup.buildCodeLLM
 import io.github.jkjamies.automationagent.agent.setup.buildLLM
+import io.github.jkjamies.automationagent.agent.setup.newParkStore
+import io.github.jkjamies.automationagent.agent.setup.newSessionService
 import io.github.jkjamies.automationagent.agent.summary.CommitLister
 import io.github.jkjamies.automationagent.agent.summary.SummaryDeps
 import io.github.jkjamies.automationagent.agent.summary.buildSummaryAgent
@@ -27,6 +29,7 @@ import io.github.jkjamies.automationagent.ingest.Kind
 import io.github.jkjamies.automationagent.notify.Notifier
 import io.github.jkjamies.automationagent.notify.newNotifier
 import io.github.jkjamies.automationagent.scheduler.Scheduler
+import io.github.jkjamies.automationagent.webhook.SweepFunc
 import io.github.jkjamies.automationagent.webhook.webhookServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,15 +79,36 @@ private fun run() {
     val summaryDaily = buildSummary(cfg, llm, commitLister, notifier, Duration.ofHours(24), "Daily commit digest")
     val summaryWeekly = buildSummary(cfg, llm, commitLister, notifier, Duration.ofDays(7), "Weekly commit digest")
 
+    // One session service + park store, shared by both fix engines. memory (the default) keeps
+    // today's behavior; the durable backends persist parked runs across restarts.
+    val sessionService = newSessionService(cfg)
+    val parkStore = newParkStore(cfg)
+
     // Fix engines are event-driven and work without a notifier — they just won't post results.
     val fixDeps =
         Deps(
             gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier, token = cfg.githubToken,
             maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout, repos = cfg.repos,
+            sessionService = sessionService, parkStore = parkStore,
         )
     val lintEngine = newLintEngine(fixDeps)
     val coverageEngine = newCoverageEngine(fixDeps)
     val engines = listOf(lintEngine, coverageEngine)
+
+    // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's parked runs
+    // whose CI never reported (Cloud Scheduler drives it). One engine's failure must not stop the
+    // others, so collect-and-continue, then surface so the handler 500s and Cloud Scheduler retries.
+    val sweep =
+        SweepFunc {
+            var first: Throwable? = null
+            for (engine in engines) {
+                runCatching { engine.sweepTimeouts() }.onFailure {
+                    log.log(Level.WARNING, "sweep failed for an engine", it)
+                    if (first == null) first = it
+                }
+            }
+            first?.let { throw it }
+        }
 
     // Background scope for async dispatch from cron fires and webhook deliveries. Parallelism is
     // bounded so a burst of deliveries can't spawn unbounded coroutines.
@@ -132,6 +156,8 @@ private fun run() {
                 }
             },
             secret = cfg.githubWebhookSecret,
+            internalToken = cfg.internalToken,
+            sweep = sweep,
         )
 
     // Graceful shutdown: stop firing crons, stop accepting requests, then drain in-flight
@@ -146,6 +172,9 @@ private fun run() {
                 withTimeoutOrNull(DRAIN_TIMEOUT_MS) { scope.coroutineContext.job.children.toList().joinAll() }
             }
             scope.cancel()
+            // Release a durable park store's backing connection (a no-op for the memory backend).
+            // close() is a plain blocking call, so no coroutine bridge is needed here.
+            runCatching { parkStore.close() }
         },
     )
 
@@ -190,6 +219,7 @@ private fun githubAdapter(client: Client): GitHub =
         override suspend fun findAgentPrs(owner: String, repo: String, label: String) = client.findAgentPrs(owner, repo, label)
         override suspend fun createPr(owner: String, repo: String, input: PrInput) = client.createPr(owner, repo, input)
         override suspend fun addLabels(owner: String, repo: String, number: Int, labels: List<String>) = client.addLabels(owner, repo, number, labels)
+        override suspend fun compare(owner: String, repo: String, base: String, head: String) = client.compare(owner, repo, base, head)
     }
 
 /** Adapts a raw-payload kickoff/resume function to a dispatcher [Handler]. */

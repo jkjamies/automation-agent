@@ -77,6 +77,7 @@ export class SqliteParkStore implements ParkStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_parked_runs_pr_key ON parked_runs(pr_key);');
   }
 
+  /** Upsert a session's row, enforcing at most one active pr_key across sessions (see below). */
   put(record: ParkRecord): Promise<void> {
     // A pr_key is active on at most one session — mirrors the memory store, whose prKey->sessionId
     // index can only hold one holder. If another session is already parked under this key, unpark
@@ -111,6 +112,7 @@ export class SqliteParkStore implements ParkStore {
     return Promise.resolve();
   }
 
+  /** Read a session's record by id, or null if no row exists. */
   get(sessionId: string): Promise<ParkRecord | null> {
     const row = this.db
       .prepare('SELECT * FROM parked_runs WHERE session_id = ?;')
@@ -118,6 +120,7 @@ export class SqliteParkStore implements ParkStore {
     return Promise.resolve(row ? rowToRecord(row) : null);
   }
 
+  /** Claim the run parked under a PR key via a compare-and-set, so only one caller wins. */
   resolveByPrKey(prKey: string): Promise<ParkRecord | null> {
     if (prKey === '') {
       return Promise.resolve(null);
@@ -140,11 +143,13 @@ export class SqliteParkStore implements ParkStore {
     return Promise.resolve(rec);
   }
 
+  /** Delete a session's row outright. */
   delete(sessionId: string): Promise<void> {
     this.db.prepare('DELETE FROM parked_runs WHERE session_id = ?;').run(sessionId);
     return Promise.resolve();
   }
 
+  /** Claim every row parked before the cutoff (each via its own CAS) for the timeout backstop. */
   sweep(cutoff: Date): Promise<ParkRecord[]> {
     const rows = this.db
       .prepare("SELECT * FROM parked_runs WHERE pr_key <> '' AND parked_at IS NOT NULL AND parked_at < ?;")
@@ -163,6 +168,7 @@ export class SqliteParkStore implements ParkStore {
     return Promise.resolve(claimed);
   }
 
+  /** Count rows that still hold a PR key (i.e. currently parked runs). */
   parkedCount(): Promise<number> {
     const row = this.db
       .prepare("SELECT COUNT(*) AS n FROM parked_runs WHERE pr_key <> '';")
@@ -170,6 +176,7 @@ export class SqliteParkStore implements ParkStore {
     return Promise.resolve(Number(row.n));
   }
 
+  /** Close the sqlite connection; idempotent so overlapping shutdown paths are safe. */
   close(): Promise<void> {
     // Idempotent: node:sqlite throws on a second close, but shutdown paths may call it more
     // than once (e.g. a test that closes explicitly plus a teardown).

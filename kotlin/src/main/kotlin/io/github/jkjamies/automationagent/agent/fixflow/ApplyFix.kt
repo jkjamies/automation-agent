@@ -1,5 +1,6 @@
 package io.github.jkjamies.automationagent.agent.fixflow
 
+import io.github.jkjamies.automationagent.githubapi.Comparison
 import io.github.jkjamies.automationagent.githubapi.Pr
 import io.github.jkjamies.automationagent.githubapi.PrInput
 import io.github.jkjamies.automationagent.gitrepo.Author
@@ -14,6 +15,9 @@ interface GitHub {
     suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr>
     suspend fun createPr(owner: String, repo: String, input: PrInput): Pr
     suspend fun addLabels(owner: String, repo: String, number: Int, labels: List<String>)
+
+    /** The base...head comparison for a terminal summary (what the agent changed on the PR). */
+    suspend fun compare(owner: String, repo: String, base: String, head: String): Comparison
 }
 
 /** A whole-file write an analyze step produces (a rewritten source file, a generated test, …). */

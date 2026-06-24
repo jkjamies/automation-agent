@@ -113,6 +113,7 @@ export class LongRunDriver {
     });
   }
 
+  /** Create the backing session on first use; a no-op when it already exists (idempotent resume). */
   private async ensureSession(sessionId: string): Promise<void> {
     const existing = await this.sessionService.getSession({
       appName: this.appName,
@@ -128,6 +129,7 @@ export class LongRunDriver {
     }
   }
 
+  /** Run the agent once over a message, collecting the final text, tool responses, and any long-running (parked) call id. */
   private async driveOnce(sessionId: string, msg: Content): Promise<DriveResult> {
     const res: DriveResult = { parkedCallId: '', toolResponses: {}, final: '' };
     const parts: string[] = [];
@@ -216,6 +218,7 @@ export class Sequencer extends BaseLlm {
     return sequencerText('done');
   }
 
+  /** Emit a function-call response with a per-call unique id so each park correlates independently. */
   private call(name: string, args: Record<string, unknown>, contents: Content[]): LlmResponse {
     // Unique id per call so the flow correlates each long-running park independently
     // across retries within one session.

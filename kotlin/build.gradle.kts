@@ -34,12 +34,21 @@ dependencies {
     // JGit for the working-tree operations the fixers need (the go-git analogue).
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.0.202606012155-r")
 
+    // SQLite JDBC driver for the durable SESSION_BACKEND=sqlite park store + session service.
+    // adk-kotlin ships no database session service (unlike adk-go/adk-js), so both are hand-rolled
+    // on raw JDBC here. Loaded only when the sqlite backend is selected.
+    implementation("org.xerial:sqlite-jdbc:3.53.2.0")
+
+    // Cloud Firestore client for the serverless SESSION_BACKEND=firestore park store + session
+    // service (both hand-rolled, like Go's). Used only when the firestore backend is selected.
+    implementation("com.google.cloud:google-cloud-firestore:3.43.1")
+
     // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`
     // layer needs core only — it implements the `Model` interface for the Ollama adapter and
     // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:
     // KSP is only needed once a @Tool-annotated agent (root/summary) lands, and the webserver
     // backs the cmd/playground web runner. (Gradle resolves the -jvm variant of this KMP lib.)
-    implementation("com.google.adk:google-adk-kotlin-core:0.2.0")
+    implementation("com.google.adk:google-adk-kotlin-core:0.4.0")
 
     // Ktor — HTTP client (githubapi, the Ollama adapter) + server (webhook).
     implementation("io.ktor:ktor-client-core:$ktorVersion")
@@ -57,8 +66,8 @@ dependencies {
 
     // --- Deferred: ADK KSP processor + webserver (mirrors adk-go's tool generation + web UI) ---
     // Activated together with the KSP plugin above when an @Tool-annotated agent lands:
-    //   implementation("com.google.adk:google-adk-kotlin-webserver:0.2.0")
-    //   ksp("com.google.adk:google-adk-kotlin-processor:0.2.0")
+    //   implementation("com.google.adk:google-adk-kotlin-webserver:0.4.0")
+    //   ksp("com.google.adk:google-adk-kotlin-processor:0.4.0")
 }
 
 kotlin {
@@ -86,6 +95,17 @@ tasks.test {
 // Enforce an 80% line-coverage floor (see .agents/standards/testing.md).
 kover {
     reports {
+        // The Firestore backends are emulator-gated (validated under a real Firestore emulator, not
+        // in the default run) and excluded from the coverage floor — mirrors the JS port.
+        filters {
+            excludes {
+                classes(
+                    "io.github.jkjamies.automationagent.agent.setup.FirestoreParkStore",
+                    "io.github.jkjamies.automationagent.agent.setup.FirestoreSessionService",
+                    "io.github.jkjamies.automationagent.agent.setup.SessionFirestoreKt",
+                )
+            }
+        }
         verify {
             rule {
                 minBound(80)
