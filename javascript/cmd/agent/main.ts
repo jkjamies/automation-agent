@@ -13,6 +13,8 @@ import { type Deps as FixDeps, type Engine } from '../../src/agent/fixflow/index
 import { newLintEngine } from '../../src/agent/lintfixer/index';
 import { buildRootDispatcher } from '../../src/agent/root/agentsSetup';
 import { buildLLM, buildCodeLLM } from '../../src/agent/setup/llm';
+import { newParkStore } from '../../src/agent/setup/parkstore';
+import { newSessionService } from '../../src/agent/setup/session';
 import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
 import { type Config, load } from '../../src/config/config';
@@ -113,6 +115,12 @@ async function run(): Promise<void> {
   const gh = new Client(cfg.githubToken);
   const notifier = buildNotifier(cfg);
 
+  // One session service + park store, shared by both fix engines (namespaced by app name).
+  // memory (the default) keeps today's behavior; the durable backends persist parked runs
+  // across restarts.
+  const sessionService = newSessionService(cfg);
+  const parkStore = newParkStore(cfg);
+
   // Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents so
   // the weekly cron posts a real 7-day digest, not a copy of the daily one.
   const summaryDaily = buildSummary(cfg, llm, gh, notifier, DAY_MS, 'Daily commit digest');
@@ -129,6 +137,8 @@ async function run(): Promise<void> {
     maxIter: cfg.maxIterations,
     ciTimeoutMs: cfg.ciTimeoutMs,
     log,
+    sessionService,
+    parkStore,
   };
   const lintEngine = newLintEngine(fixDeps);
   const covEngine = newCoverageEngine(fixDeps);
@@ -185,6 +195,26 @@ async function run(): Promise<void> {
   sched.add(cfg.cronDaily, Kind.CronDaily);
   sched.add(cfg.cronWeekly, Kind.CronWeekly);
 
+  // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
+  // parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
+  // engine's failure must not stop the others — a stuck run on another engine still needs
+  // freeing — so collect-and-continue (like ciResumeHandler), then surface so the handler
+  // 500s and Cloud Scheduler retries.
+  const sweep = async (): Promise<void> => {
+    const errors: unknown[] = [];
+    for (const eng of engines) {
+      try {
+        await eng.sweepTimeouts();
+      } catch (err) {
+        log.error(`sweep failed for an engine: ${(err as Error).message}`);
+        errors.push(err);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'sweep failed');
+    }
+  };
+
   if (!cfg.githubWebhookSecret) {
     emit(
       'WARN',
@@ -197,7 +227,7 @@ async function run(): Promise<void> {
       await acquire();
       track(safeDispatch(e).finally(release));
     },
-    { secret: cfg.githubWebhookSecret },
+    { secret: cfg.githubWebhookSecret, internalToken: cfg.internalToken, sweep },
   );
 
   sched.start();
@@ -244,6 +274,8 @@ async function run(): Promise<void> {
     sched.stop();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     await drain();
+    // Release a durable park store's backing connection (a no-op for the memory backend).
+    await parkStore.close();
   };
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());

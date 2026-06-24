@@ -14,6 +14,7 @@
 import {
   BaseAgent,
   BaseLlm,
+  type BaseSessionService,
   InMemorySessionService,
   type LlmRequest,
   type LlmResponse,
@@ -45,22 +46,28 @@ export interface DriveResult {
  * All domain policy (what to apply, whether to retry, how long to wait) lives in
  * the caller; this type only knows how to run-to-park and resume-with-a-result.
  *
- * Concurrency: one driver (one {@link Runner} + one {@link InMemorySessionService}) is
+ * Concurrency: one driver (one {@link Runner} + one {@link BaseSessionService}) is
  * driven concurrently for distinct session ids (concurrent kickoffs and resumes). This
- * relies on `runAsync` and the in-memory session service being safe under concurrent
- * invocations on different sessions in the pinned adk-js — each invocation touches only
- * its own session, and JS's single-threaded event loop serializes the map mutations the
- * session service performs.
+ * relies on `runAsync` and the session service being safe under concurrent invocations
+ * on different sessions in the pinned adk-js — each invocation touches only its own
+ * session, and JS's single-threaded event loop serializes the map mutations the
+ * in-memory session service performs.
+ *
+ * The session service is injected so the fix loop can choose a durable backend (sqlite /
+ * firestore) and have parked sessions survive a restart; it defaults to an in-memory
+ * service, preserving today's behavior.
  */
 export class LongRunDriver {
-  private readonly sessionService = new InMemorySessionService();
+  private readonly sessionService: BaseSessionService;
   private readonly runner: Runner;
 
   constructor(
     private readonly appName: string,
     private readonly userId: string,
     root: BaseAgent,
+    sessionService?: BaseSessionService,
   ) {
+    this.sessionService = sessionService ?? new InMemorySessionService();
     this.runner = new Runner({
       appName,
       agent: root,
@@ -92,6 +99,18 @@ export class LongRunDriver {
       parts: [{ functionResponse: { id: callId, name: toolName, response } }],
     };
     return this.driveOnce(sessionId, msg);
+  }
+
+  /**
+   * Remove a session's stored history. Terminal cleanup so a completed (or abandoned) run
+   * does not accumulate in a durable backend; a no-op for an already-absent session.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.sessionService.deleteSession({
+      appName: this.appName,
+      userId: this.userId,
+      sessionId,
+    });
   }
 
   private async ensureSession(sessionId: string): Promise<void> {

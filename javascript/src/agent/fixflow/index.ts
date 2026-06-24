@@ -2,7 +2,8 @@
  * fixflow — the reusable event-driven PR-fix engine (kickoff -> suspend -> CI resume).
  *
  * Concrete agents (lintfixer, covfixer) supply a {@link Spec}; the engine owns the loop,
- * the apply mechanics, attempt counting, and the in-memory parked-run registry.
+ * the apply mechanics, and attempt counting. Suspended-run state lives in a ParkStore
+ * (see agent/setup/parkstore), memory by default or a durable backend.
  */
 export { type EditFunc, parallelAnalyze } from './analyze';
 export {
@@ -31,8 +32,8 @@ export {
 } from './engine';
 export { type RunParams, Driver } from './driver';
 export { Kickoff, parseKickoff } from './envelope';
+export { type SummaryInput, TerminalOutcome, buildSummaryText } from './summary';
 export { explore } from './explore';
 export { readFile, safeJoin } from './files';
-export { type ParkedRun, RunRegistry } from './registry';
 export { listDirEntries, repoTools } from './tools';
 export { extractJsonArray, extractJsonObject, stripFences } from './util';

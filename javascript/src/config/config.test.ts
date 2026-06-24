@@ -1,6 +1,6 @@
 // Tests for the config loader.
 import { describe, expect, it } from 'vitest';
-import { loadFrom, NotifyProvider, Provider } from './config';
+import { loadFrom, NotifyProvider, Provider, SessionBackend } from './config';
 
 function mapLookup(m: Record<string, string>) {
   return (key: string): string | undefined => m[key];
@@ -15,6 +15,32 @@ describe('config', () => {
     expect(c.notifyProvider).toBe(NotifyProvider.Slack);
     expect(c.maxIterations).toBe(3);
     expect(c.ciTimeoutMs).toBe(90 * 60 * 1000);
+    expect(c.sessionBackend).toBe(SessionBackend.Memory);
+    expect(c.sqliteDsn).toBe('automation-agent.db');
+    expect(c.firestoreProject).toBe('');
+    expect(c.firestoreCollection).toBe('automation_agent');
+    expect(c.internalToken).toBe('');
+  });
+
+  it('reads the session backend and its settings', () => {
+    const c = loadFrom(
+      mapLookup({
+        SESSION_BACKEND: 'firestore',
+        SQLITE_DSN: 'runs.db',
+        FIRESTORE_PROJECT: 'my-proj',
+        FIRESTORE_COLLECTION: 'agent_runs',
+        INTERNAL_TOKEN: 'secret',
+      }),
+    );
+    expect(c.sessionBackend).toBe(SessionBackend.Firestore);
+    expect(c.sqliteDsn).toBe('runs.db');
+    expect(c.firestoreProject).toBe('my-proj');
+    expect(c.firestoreCollection).toBe('agent_runs');
+    expect(c.internalToken).toBe('secret');
+  });
+
+  it('rejects an invalid session backend', () => {
+    expect(() => loadFrom(mapLookup({ SESSION_BACKEND: 'redis' }))).toThrow();
   });
 
   it('parses the repos list', () => {

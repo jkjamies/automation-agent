@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PR, PRInput } from '../../githubapi/client';
+import type { Comparison, PR, PRInput } from '../../githubapi/client';
 import { type ApplyConfig, applyFix, type FileEdit, type GitHub } from './applyfix';
 
 class FakeGH implements GitHub {
@@ -26,6 +26,9 @@ class FakeGH implements GitHub {
   }
   async addLabels(_o: string, _r: string, _n: number, ...labels: string[]): Promise<void> {
     this.labeled.push(...labels);
+  }
+  async compare(): Promise<Comparison> {
+    return { totalCommits: 0, files: [] };
   }
 }
 
