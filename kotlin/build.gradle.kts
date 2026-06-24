@@ -34,6 +34,11 @@ dependencies {
     // JGit for the working-tree operations the fixers need (the go-git analogue).
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.0.202606012155-r")
 
+    // SQLite JDBC driver for the durable SESSION_BACKEND=sqlite park store + session service.
+    // adk-kotlin ships no database session service (unlike adk-go/adk-js), so both are hand-rolled
+    // on raw JDBC here. Loaded only when the sqlite backend is selected.
+    implementation("org.xerial:sqlite-jdbc:3.53.2.0")
+
     // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`
     // layer needs core only — it implements the `Model` interface for the Ollama adapter and
     // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:

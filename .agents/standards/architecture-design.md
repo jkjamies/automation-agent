@@ -819,3 +819,15 @@ Notes:
   `session.Service`, plus the `setup.ParkStore` for the run record, is the suspend/resume
   mechanism. adk-go ships inmemory/database/vertexai session services; the **firestore**
   `session.Service` is a custom impl in `internal/agent/setup`.
+
+### ADK Sessions — concept references
+
+The `session.Service` / state / events model above is ADK's own Sessions abstraction; our
+backend tiers (`memory` → `sqlite` → `firestore`) mirror its InMemory → Database → Vertex
+tiers. Canonical docs (verify against current sources — surfaces move):
+
+- ADK **Sessions** concept (`Session`/`State`/`Events`/`SessionService`): <https://adk.dev/sessions/>
+- ADK **agent-memory** codelab (sessions/state vs. long-term Memory; `DatabaseSessionService`
+  with `sqlite:///`; Vertex AI Memory Bank): <https://codelabs.developers.google.com/codelabs/agent-memory/instructions>.
+  We persist **sessions**; the codelab's searchable cross-session **Memory Bank /
+  `MemoryService`** tier is not part of this architecture.

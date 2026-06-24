@@ -10,6 +10,9 @@ import com.google.adk.kt.models.LlmResponse
 import com.google.adk.kt.models.Model
 import com.google.adk.kt.runners.InMemoryRunner
 import com.google.adk.kt.runners.Runner
+import com.google.adk.kt.sessions.InMemorySessionService
+import com.google.adk.kt.sessions.SessionKey
+import com.google.adk.kt.sessions.SessionService
 import com.google.adk.kt.types.Content
 import com.google.adk.kt.types.FinishReason
 import com.google.adk.kt.types.FunctionCall
@@ -75,6 +78,14 @@ class LongRunDriver(private val runner: Runner, private val userId: String) {
         return drive(sessionId, content)
     }
 
+    /**
+     * Deletes the backing session for [sessionId] (terminal cleanup). Best-effort at the call site:
+     * a durable session service frees the persisted history; the in-memory one drops its entry.
+     */
+    suspend fun deleteSession(sessionId: String) {
+        runner.sessionService.deleteSession(SessionKey(runner.appName, userId, sessionId))
+    }
+
     private suspend fun drive(sessionId: String, input: Content): DriveResult {
         var parkedCallId: String? = null
         val toolResponses = mutableMapOf<String, Map<String, Any?>>()
@@ -91,14 +102,21 @@ class LongRunDriver(private val runner: Runner, private val userId: String) {
 
     companion object {
         /**
-         * Builds a driver over [root], sharing one resumable in-memory session service so a resume
-         * lands on the same suspended run a start parked.
+         * Builds a driver over [root] on a resumable runner so a resume lands on the same suspended
+         * run a start parked. [sessionService] selects where that session history lives: the default
+         * in-memory service (a restart strands parked runs) or an injected durable backend.
          */
-        fun create(appName: String, userId: String, root: BaseAgent): LongRunDriver {
+        fun create(
+            appName: String,
+            userId: String,
+            root: BaseAgent,
+            sessionService: SessionService = InMemorySessionService(),
+        ): LongRunDriver {
             val runner =
                 InMemoryRunner(
                     agent = root,
                     appName = appName,
+                    sessionService = sessionService,
                     resumabilityConfig = ResumabilityConfig(isResumable = true),
                 )
             return LongRunDriver(runner, userId)

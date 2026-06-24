@@ -5,9 +5,23 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.github.jkjamies.automationagent.agent.setup.ParkRecord
 import io.kotest.matchers.string.shouldContain
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.hours
+
+// A parked record seeded directly into the store (the test analogue of the old reg.park), with
+// valid run params so any params-decoding path stays happy.
+private fun seedParked(prKey: String, sessionId: String, callId: String, attempts: Int): ParkRecord =
+    ParkRecord(
+        sessionId = sessionId,
+        prKey = prKey,
+        callId = callId,
+        attempts = attempts,
+        params = runParamsToJson(RunParams(owner = "acme", repo = "api", fullRepo = "acme/api", base = "master", report = "r")),
+        parkedAt = Instant.now(),
+    )
 
 // A Spec with deterministic fake triage/analyze (no LLM). The analyze varies content per call so
 // every attempt is a real commit; [calls] counts attempts.
@@ -36,7 +50,7 @@ class EngineTest : BehaviorSpec({
                 e.kickoff(kickoffRaw)
                 gh.created?.head shouldBe "agent/fix"
                 gh.labeled shouldHaveSize 1
-                e.driver.reg.size() shouldBe 1
+                e.driver.parkedCount() shouldBe 1
             }
         }
     }
@@ -51,7 +65,7 @@ class EngineTest : BehaviorSpec({
                 )
                 shouldThrow<IllegalArgumentException> { e.kickoff(kickoffRaw) }
                 gh.created shouldBe null
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
             }
         }
     }
@@ -67,7 +81,7 @@ class EngineTest : BehaviorSpec({
                 )
                 e.kickoff(kickoffRaw)
                 gh.created?.head shouldBe "agent/fix"
-                e.driver.reg.size() shouldBe 1
+                e.driver.parkedCount() shouldBe 1
             }
         }
     }
@@ -81,7 +95,7 @@ class EngineTest : BehaviorSpec({
                 e.resume(checkBody("success", 42))
                 n.msgs shouldHaveSize 1
                 n.msgs[0].title shouldContain "succeeded"
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
             }
         }
 
@@ -89,11 +103,11 @@ class EngineTest : BehaviorSpec({
             Then("it asks for human review and frees the run") {
                 val n = FakeNotifier()
                 val e = engine(seedRemote(), FakeGitHub(), n)
-                e.driver.reg.park("acme/api#42", ParkedRun("run-x", "c", attempts = 3), 1.hours, e.driver::onTimeout)
+                e.driver.store.put(seedParked("acme/api#42", "run-x", "c", attempts = 3))
                 e.resume(checkBody("failure", 42, "still broken"))
                 n.msgs shouldHaveSize 1
                 n.msgs[0].title shouldContain "review"
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
             }
         }
 
@@ -108,7 +122,7 @@ class EngineTest : BehaviorSpec({
                 e.resume(checkBody("failure", 42, "still failing"))
                 gh.created shouldBe null
                 n.msgs shouldHaveSize 0
-                e.driver.reg.size() shouldBe 1
+                e.driver.parkedCount() shouldBe 1
             }
         }
     }
@@ -124,12 +138,12 @@ class EngineTest : BehaviorSpec({
                 repeat(2) {
                     e.resume(checkBody("failure", 42, "boom"))
                     n.msgs shouldHaveSize 0
-                    e.driver.reg.size() shouldBe 1
+                    e.driver.parkedCount() shouldBe 1
                 }
                 e.resume(checkBody("failure", 42, "boom"))
                 n.msgs shouldHaveSize 1
                 n.msgs[0].title shouldContain "review"
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
                 calls.get() shouldBe 3
             }
         }
@@ -140,11 +154,11 @@ class EngineTest : BehaviorSpec({
             Then("it frees the run, asks for review, and a late webhook is a benign no-op") {
                 val n = FakeNotifier()
                 val e = engine(seedRemote(), FakeGitHub(), n)
-                e.driver.reg.park("acme/api#42", ParkedRun("run-x", "c", attempts = 1), 1.hours, e.driver::onTimeout)
+                e.driver.store.put(seedParked("acme/api#42", "run-x", "c", attempts = 1))
                 e.driver.onTimeout("acme/api#42")
                 n.msgs shouldHaveSize 1
                 n.msgs[0].title shouldContain "review"
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
                 e.resume(checkBody("success", 42))
                 n.msgs shouldHaveSize 1
             }
@@ -178,7 +192,7 @@ class EngineTest : BehaviorSpec({
             Then("the error propagates and no run is parked") {
                 val e = Engine(fixSpec(AtomicInteger(0), triageThrows = true), Deps(gh = FakeGitHub(), ciTimeout = 1.hours, cloneUrl = { _, _ -> seedRemote() }))
                 shouldThrow<Exception> { e.kickoff("""{"repo":"acme/api","report":"r"}""".toByteArray()) }
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
             }
         }
     }
@@ -194,7 +208,7 @@ class EngineTest : BehaviorSpec({
                 shouldThrow<Exception> { e.kickoff("""{"repo":"acme/api","report":"r"}""".toByteArray()) }
                 n.msgs shouldHaveSize 1
                 n.msgs[0].title shouldContain "review"
-                e.driver.reg.size() shouldBe 0
+                e.driver.parkedCount() shouldBe 0
             }
         }
     }

@@ -1,6 +1,8 @@
 package io.github.jkjamies.automationagent.agent.fixflow
 
 import com.google.adk.kt.models.Model
+import com.google.adk.kt.sessions.SessionService
+import io.github.jkjamies.automationagent.agent.setup.ParkStore
 import io.github.jkjamies.automationagent.githubapi.Client
 import io.github.jkjamies.automationagent.gitrepo.Author
 import io.github.jkjamies.automationagent.notify.Message
@@ -75,6 +77,10 @@ data class Deps(
     val author: Author = defaultAuthor,
     val log: System.Logger = System.getLogger("automation-agent.fixflow"),
     val cloneUrl: ((owner: String, repo: String) -> String)? = null,
+    // Durable suspend/resume backends (default in-memory): [sessionService] holds the ADK session
+    // history; [parkStore] holds the parked-run records. Both null = the in-process defaults.
+    val sessionService: SessionService? = null,
+    val parkStore: ParkStore? = null,
 )
 
 /**

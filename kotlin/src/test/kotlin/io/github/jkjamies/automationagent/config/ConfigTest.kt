@@ -20,6 +20,57 @@ class ConfigTest : BehaviorSpec({
                 c.ciTimeout.inWholeMinutes shouldBe 90L
                 c.agentPrLabel shouldBe "automation-agent"
                 c.agentCheckName shouldBe "agent-lint-verify"
+                c.sessionBackend shouldBe SessionBackend.MEMORY
+                c.sqliteDsn shouldBe "automation-agent.db"
+                c.firestoreProject shouldBe ""
+                c.firestoreCollection shouldBe "automation_agent"
+                c.internalToken shouldBe ""
+            }
+        }
+    }
+
+    Given("explicit session-backend settings") {
+        When("loading the sqlite backend with overrides") {
+            val c = Config.loadFrom(
+                lookupOf(
+                    mapOf(
+                        "SESSION_BACKEND" to "sqlite",
+                        "SQLITE_DSN" to "/data/agent.db",
+                        "INTERNAL_TOKEN" to "sekret",
+                    ),
+                ),
+            )
+            Then("the backend, DSN, and internal token are read") {
+                c.sessionBackend shouldBe SessionBackend.SQLITE
+                c.sqliteDsn shouldBe "/data/agent.db"
+                c.internalToken shouldBe "sekret"
+            }
+        }
+
+        When("loading the firestore backend with overrides") {
+            val c = Config.loadFrom(
+                lookupOf(
+                    mapOf(
+                        "SESSION_BACKEND" to "firestore",
+                        "FIRESTORE_PROJECT" to "my-proj",
+                        "FIRESTORE_COLLECTION" to "agent_runs",
+                    ),
+                ),
+            )
+            Then("the backend, project, and collection are read") {
+                c.sessionBackend shouldBe SessionBackend.FIRESTORE
+                c.firestoreProject shouldBe "my-proj"
+                c.firestoreCollection shouldBe "agent_runs"
+            }
+        }
+    }
+
+    Given("an invalid SESSION_BACKEND") {
+        When("loading the configuration") {
+            Then("it fails") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("SESSION_BACKEND" to "postgres")))
+                }
             }
         }
     }
