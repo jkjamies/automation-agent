@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,6 +46,10 @@ func TestNewSessionServiceFirestore(t *testing.T) {
 	}
 	if svc == nil {
 		t.Fatal("firestore backend returned a nil service")
+	}
+	// The Firestore-backed service owns a client; close it so the test leaks no resources.
+	if closer, ok := svc.(io.Closer); ok {
+		t.Cleanup(func() { _ = closer.Close() })
 	}
 }
 

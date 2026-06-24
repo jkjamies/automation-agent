@@ -294,10 +294,11 @@ func (dr *Driver) onTimeout(key string) {
 // Cloud Scheduler via /internal/sweep. The store's Sweep claims each run atomically, so a
 // webhook racing the sweep still resolves it at most once.
 func (dr *Driver) SweepTimeouts(ctx context.Context) error {
+	// Process every record the store claimed even if Sweep also returns an error: the store's
+	// contract is that returned records are already claimed (pr_key cleared), so skipping them
+	// on error would strand them. Propagate the error afterwards so the handler 500s and Cloud
+	// Scheduler retries the records that could not be claimed this pass.
 	swept, err := dr.store.Sweep(ctx, time.Now().Add(-dr.timeout))
-	if err != nil {
-		return err
-	}
 	for _, run := range swept {
 		dr.stopTimer(run.PRKey)
 		fullRepo, pr := splitPRKey(run.PRKey)
@@ -305,7 +306,7 @@ func (dr *Driver) SweepTimeouts(ctx context.Context) error {
 		_ = dr.terminalNotify(ctx, outcomeTimeout, dr.engine.spec.ReviewTitle, run, fullRepo, pr, "")
 		dr.clear(ctx, run.SessionID)
 	}
-	return nil
+	return err
 }
 
 // gatherChanges best-effort fetches the PR branch's base...head diff for a terminal

@@ -143,6 +143,9 @@ func NewEngine(spec Spec, d Deps) *Engine {
 // CheckName is the agent verify check this engine resumes on.
 func (e *Engine) CheckName() string { return e.spec.CheckName }
 
+// Name is the engine's workflow name ("lint" | "coverage"), used for logging.
+func (e *Engine) Name() string { return e.spec.Name }
+
 // SweepTimeouts resolves this engine's parked runs whose CI never reported — the durable
 // timeout catch-all driven by Cloud Scheduler via /internal/sweep.
 func (e *Engine) SweepTimeouts(ctx context.Context) error { return e.driver.SweepTimeouts(ctx) }

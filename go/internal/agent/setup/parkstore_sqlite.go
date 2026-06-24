@@ -75,10 +75,20 @@ func NewSQLiteParkStore(dsn string) (ParkStore, error) {
 }
 
 func (s *sqliteParkStore) Put(ctx context.Context, r ParkRecord) error {
+	db := s.db.WithContext(ctx)
+	if r.PRKey != "" {
+		// One active row per pr_key: clear it on any OTHER session still holding it, so
+		// resolve/sweep have a single winner (the pr_key column is a non-unique index).
+		if err := db.Model(&parkRow{}).
+			Where("pr_key = ? AND session_id <> ?", r.PRKey, r.SessionID).
+			Update("pr_key", "").Error; err != nil {
+			return err
+		}
+	}
 	// Upsert by primary key (session id). Save rewrites every column, so the pr_key index
 	// follows the record automatically.
 	row := rowFromRecord(r)
-	return s.db.WithContext(ctx).Save(&row).Error
+	return db.Save(&row).Error
 }
 
 func (s *sqliteParkStore) Get(ctx context.Context, sessionID string) (ParkRecord, bool, error) {
@@ -116,25 +126,42 @@ func (s *sqliteParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]ParkRe
 		return nil, err
 	}
 	out := make([]ParkRecord, 0, len(rows))
+	var errs []error
 	for _, row := range rows {
-		rec, ok, err := s.claim(db, row)
+		// Claim each candidate; a per-row error skips that row (it stays parked for the next
+		// sweep) rather than discarding the rows already claimed this pass.
+		rec, ok, err := s.claimStale(db, row, cutoff)
 		if err != nil {
-			return out, err
+			errs = append(errs, err)
+			continue
 		}
 		if ok {
 			rec.PRKey = row.PRKey // restore for the caller (timeout sweep needs the PR)
 			out = append(out, rec)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
-// claim is the atomic compare-and-swap that backs ResolveByPRKey/Sweep: a conditional
-// UPDATE clears pr_key only while it is still set, so of N concurrent claimers exactly one
-// (the writer SQLite lets through first) gets RowsAffected==1; the rest see 0 and no-op.
-// The per-run row is retained (only pr_key is cleared) so a retry can still read its params.
+// claim is the atomic compare-and-swap that backs ResolveByPRKey: a conditional UPDATE
+// clears pr_key only while it is still set, so of N concurrent claimers exactly one (the
+// writer SQLite lets through first) gets RowsAffected==1; the rest see 0 and no-op. The
+// per-run row is retained (only pr_key is cleared) so a retry can still read its params.
 func (s *sqliteParkStore) claim(db *gorm.DB, row parkRow) (ParkRecord, bool, error) {
-	res := db.Model(&parkRow{}).Where("session_id = ? AND pr_key = ?", row.SessionID, row.PRKey).Update("pr_key", "")
+	return execClaim(db.Model(&parkRow{}).
+		Where("session_id = ? AND pr_key = ?", row.SessionID, row.PRKey), row)
+}
+
+// claimStale is the sweep's CAS: like claim, but also requires parked_at < cutoff, so a
+// row that was resolved and re-parked (fresh) after the scan is left alone rather than
+// cleared with a false timeout.
+func (s *sqliteParkStore) claimStale(db *gorm.DB, row parkRow, cutoff time.Time) (ParkRecord, bool, error) {
+	return execClaim(db.Model(&parkRow{}).
+		Where("session_id = ? AND pr_key = ? AND parked_at < ?", row.SessionID, row.PRKey, cutoff), row)
+}
+
+func execClaim(q *gorm.DB, row parkRow) (ParkRecord, bool, error) {
+	res := q.Update("pr_key", "")
 	if res.Error != nil {
 		return ParkRecord{}, false, res.Error
 	}

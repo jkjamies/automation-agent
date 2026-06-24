@@ -74,6 +74,10 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build session service: %w", err)
 	}
+	// Release a network-backed session service's client (e.g. firestore) on shutdown.
+	if closer, ok := sessions.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
 	parkStore, err := setup.NewParkStore(sigCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("build park store: %w", err)
@@ -146,12 +150,17 @@ func run(logger *slog.Logger) error {
 	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
 		webhook.WithInternalToken(cfg.InternalToken),
 		webhook.WithSweep(func(ctx context.Context) error {
+			// Sweep every engine even if one fails, so a single engine's error does not
+			// strand the others' timed-out runs for this pass (mirrors ciResumeHandler).
+			// The joined error still 500s the handler so Cloud Scheduler retries.
+			var errs []error
 			for _, e := range engines {
 				if err := e.SweepTimeouts(ctx); err != nil {
-					return err
+					errs = append(errs, err)
+					logger.Error("engine sweep failed", "workflow", e.Name(), "err", err)
 				}
 			}
-			return nil
+			return errors.Join(errs...)
 		}))
 
 	httpServer := &http.Server{

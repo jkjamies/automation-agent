@@ -26,7 +26,7 @@ agent locally without asking anyone.
   ollama pull gemma3            # the project defaults to gemma4:* model names
   cd go && make ollama-check    # curls $OLLAMA_HOST/api/tags
   ```
-  (Or skip Ollama and point at Vertex/AI-Studio Gemini — see [LLM selection](#llm-selection).)
+  (Or skip Ollama and point at Vertex/AI-Studio Gemini — see [LLM selection](#llm-selection--llm_provider).)
 - A **`.env`** file — copy the starting point and edit:
   ```bash
   cp .env.example .env          # repo root

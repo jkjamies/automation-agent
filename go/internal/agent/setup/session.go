@@ -21,7 +21,7 @@ import (
 //
 //	memory    -> in-process; tests and ephemeral local runs (today's behavior, default)
 //	sqlite    -> file-backed via adk session/database; durable local runs
-//	firestore -> cloud (Phase B); not yet implemented
+//	firestore -> cloud, via the custom Firestore-backed service; durable cloud runs
 //
 // Only the long-running fix loop needs durability; ephemeral one-shot runners
 // (explore/analyze/triage) keep using an in-memory session via NewRunner.

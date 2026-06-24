@@ -80,6 +80,7 @@ vars that matter specifically for a **cloud** deploy:
 | `LLM_PROVIDER` | `gemini` (+ `GOOGLE_GENAI_USE_VERTEXAI=TRUE`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`) unless a GPU VM runs Ollama |
 | `GITHUB_WEBHOOK_SECRET` | **set** — from Secret Manager |
 | `INTERNAL_TOKEN` | **set** — from Secret Manager (else cron/sweep are 404) |
+| `CI_TIMEOUT` | `90m` (default) — per-run CI wait before the timer/sweep frees a parked run |
 | `GITHUB_TOKEN`, notifier URLs | **set** — from Secret Manager |
 | `REPOS` | the kickoff allowlist |
 | `FIRESTORE_PROJECT` / `FIRESTORE_COLLECTION` | blank = detect from ADC / default `automation_agent` |

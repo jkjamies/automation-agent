@@ -18,6 +18,7 @@ exercised only against the Firestore emulator, so the default unit-coverage gate
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,8 @@ from automation_agent.agent.setup.parkstore import ParkRecord, ParkStore
 if TYPE_CHECKING:
     from google.cloud.firestore_v1.async_transaction import AsyncTransaction
     from google.cloud.firestore_v1.base_document import DocumentSnapshot
+
+_log = logging.getLogger(__name__)
 
 
 def _doc_from_record(r: ParkRecord) -> dict[str, Any]:
@@ -76,6 +79,16 @@ class FirestoreParkStore(ParkStore):
         return self._client.collection(self._coll)
 
     async def put(self, record: ParkRecord) -> None:
+        if record.pr_key != "":
+            # One active doc per pr_key: clear it on any OTHER session still holding it, so
+            # resolve/sweep have a single winner. Best-effort (not transactional with the set).
+            from google.cloud.firestore_v1.base_query import FieldFilter
+
+            query = self._col().where(filter=FieldFilter("pr_key", "==", record.pr_key))
+            async for snap in query.stream():
+                if snap.id == record.session_id:
+                    continue
+                await snap.reference.update({"pr_key": ""})
         await self._col().document(record.session_id).set(_doc_from_record(record))
 
     async def get(self, session_id: str) -> ParkRecord | None:
@@ -116,14 +129,26 @@ class FirestoreParkStore(ParkStore):
 
         out: list[ParkRecord] = []
         for sid, pr_key in candidates:
-            rec = await self._claim_by_session(sid)
+            # A per-doc failure skips that doc (it stays parked for the next sweep) rather than
+            # discarding the docs already claimed and returned this pass. A wholesale outage
+            # fails the scan above instead, which propagates so the handler retries.
+            try:
+                rec = await self._claim_stale_by_session(sid, pr_key, cutoff)
+            except Exception:  # noqa: BLE001 - isolate one doc's failure from the rest
+                _log.warning("firestore sweep: claim failed for session %s", sid, exc_info=True)
+                continue
             if rec is not None:
                 rec.pr_key = pr_key  # restore for the caller (sweep needs the PR)
                 out.append(rec)
         return out
 
-    async def _claim_by_session(self, sid: str) -> ParkRecord | None:
-        """The sweep's per-doc atomic claim, keyed by session id."""
+    async def _claim_stale_by_session(
+        self, sid: str, pr_key: str, cutoff: datetime
+    ) -> ParkRecord | None:
+        """The sweep's per-doc atomic claim, keyed by session id. Re-checks inside the
+        transaction that the doc still carries the expected (stale) pr_key and is still older
+        than cutoff, so a concurrent resolve+re-park between the scan and the claim leaves the
+        fresh park untouched instead of clearing it with a false timeout."""
         from google.cloud import firestore
 
         @firestore.async_transactional
@@ -132,7 +157,13 @@ class FirestoreParkStore(ParkStore):
             snap = await ref.get(transaction=transaction)
             if not snap.exists:
                 return None
-            return _claim_snapshot(transaction, snap)
+            d = snap.to_dict() or {}
+            parked_at = d.get("parked_at")
+            if d.get("pr_key", "") != pr_key or parked_at is None or not (parked_at < cutoff):
+                return None  # resolved and/or re-parked since the scan — not ours to sweep
+            transaction.update(ref, {"pr_key": ""})
+            d["pr_key"] = ""
+            return _record_from_doc(d)
 
         return await claim(self._client.transaction())
 

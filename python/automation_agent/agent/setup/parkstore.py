@@ -89,7 +89,13 @@ class ParkStore(ABC):
         """Atomically claim and return every parked record whose ``parked_at`` is before
         ``cutoff`` (CI never reported). Like :meth:`resolve_by_pr_key`, each record is
         claimed once. The returned records keep their ``pr_key`` so the caller knows which
-        PR timed out."""
+        PR timed out.
+
+        A claim is re-validated against ``cutoff`` inside the atomic step, so a record that
+        was resolved and re-parked (fresh) after the scan is left alone rather than swept.
+        Sweep does not strand records: a record it returns has already been claimed, and a
+        backend error on a *later* record never discards records already claimed in this
+        pass."""
 
     @abstractmethod
     async def parked_count(self) -> int:
@@ -121,6 +127,15 @@ class MemoryParkStore(ParkStore):
         prev = self._by_session.get(record.session_id)
         if prev is not None and prev.pr_key != "" and prev.pr_key != record.pr_key:
             self._index.pop(prev.pr_key, None)
+        if record.pr_key != "":
+            # One active record per pr_key: if a different session currently owns this key,
+            # un-park it so the index has a single winner. Otherwise resolve/sweep could return
+            # either session, and a later delete of the displaced session would strand this one.
+            owner = self._index.get(record.pr_key)
+            if owner is not None and owner != record.session_id:
+                displaced = self._by_session.get(owner)
+                if displaced is not None:
+                    self._by_session[owner] = replace(displaced, pr_key="")
         self._by_session[record.session_id] = replace(record)
         if record.pr_key != "":
             self._index[record.pr_key] = record.session_id
@@ -151,7 +166,9 @@ class MemoryParkStore(ParkStore):
 
     async def delete(self, session_id: str) -> None:
         rec = self._by_session.pop(session_id, None)
-        if rec is not None and rec.pr_key != "":
+        # Only drop the index entry while it still points at this session: another session may
+        # have since claimed the same pr_key (see put), and we must not strand its active park.
+        if rec is not None and rec.pr_key != "" and self._index.get(rec.pr_key) == session_id:
             self._index.pop(rec.pr_key, None)
 
     async def parked_count(self) -> int:
@@ -222,6 +239,13 @@ class SqliteParkStore(ParkStore):
     async def put(self, record: ParkRecord) -> None:
         async with self._lock:
             db = await self._db()
+            if record.pr_key != "":
+                # One active row per pr_key: clear it on any OTHER session still holding it, so
+                # resolve/sweep have a single winner (the pr_key index is non-unique).
+                await db.execute(
+                    "UPDATE parked_runs SET pr_key = '' WHERE pr_key = ? AND session_id <> ?",
+                    (record.pr_key, record.session_id),
+                )
             await db.execute(
                 f"INSERT INTO parked_runs ({_SQLITE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(session_id) DO UPDATE SET "
@@ -268,12 +292,20 @@ class SqliteParkStore(ParkStore):
             ) as cur:
                 rows = await cur.fetchall()
             out: list[ParkRecord] = []
-            for row in rows:
-                claimed = await self._claim(db, row)
-                if claimed is not None:
-                    claimed.pr_key = row[1]  # restore for the caller (sweep needs the PR)
-                    out.append(claimed)
-            await db.commit()
+            try:
+                for row in rows:
+                    # Re-check staleness in the CAS so a row resolved + re-parked (fresh) after
+                    # the scan is left alone instead of cleared with a false timeout.
+                    claimed = await self._claim_stale(db, row, cutoff)
+                    if claimed is not None:
+                        claimed.pr_key = row[1]  # restore for the caller (sweep needs the PR)
+                        out.append(claimed)
+                await db.commit()
+            except Exception:
+                # Roll back so partial claims do not linger uncommitted on the shared
+                # connection (all-or-nothing: nothing is stranded). The next sweep retries.
+                await db.rollback()
+                raise
             return out
 
     async def delete(self, session_id: str) -> None:
@@ -297,13 +329,31 @@ class SqliteParkStore(ParkStore):
 
     @staticmethod
     async def _claim(db: aiosqlite.Connection, row: aiosqlite.Row) -> ParkRecord | None:
-        """Atomic compare-and-swap backing resolve/sweep: clear pr_key only while it is
+        """Atomic compare-and-swap backing resolve_by_pr_key: clear pr_key only while it is
         still set, so of N racers exactly one gets rowcount==1 and the rest see 0. The
         per-run row is retained (only pr_key cleared) so a retry can still read its params.
         Caller holds the lock and commits."""
         cur = await db.execute(
             "UPDATE parked_runs SET pr_key = '' WHERE session_id = ? AND pr_key = ?",
             (row[0], row[1]),
+        )
+        if cur.rowcount == 0:
+            return None
+        rec = _row_to_record(row)
+        rec.pr_key = ""
+        return rec
+
+    @staticmethod
+    async def _claim_stale(
+        db: aiosqlite.Connection, row: aiosqlite.Row, cutoff: datetime
+    ) -> ParkRecord | None:
+        """The sweep's CAS: like _claim, but also requires parked_at < cutoff, so a row that
+        was resolved and re-parked (fresh) after the scan is left alone rather than cleared
+        with a false timeout. Caller holds the lock and commits."""
+        cur = await db.execute(
+            "UPDATE parked_runs SET pr_key = '' "
+            "WHERE session_id = ? AND pr_key = ? AND parked_at IS NOT NULL AND parked_at < ?",
+            (row[0], row[1], cutoff.timestamp()),
         )
         if cur.rowcount == 0:
             return None

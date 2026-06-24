@@ -52,7 +52,15 @@ type ParkStore interface {
 	// cleanup; no-op if absent.
 	Delete(ctx context.Context, sessionID string) error
 	// Sweep atomically claims and returns every parked record whose ParkedAt is before
-	// cutoff (CI never reported). Like ResolveByPRKey, each record is claimed once.
+	// cutoff (CI never reported). Like ResolveByPRKey, each record is claimed once, and the
+	// returned records keep their PRKey so the caller knows which PR timed out.
+	//
+	// A claim is re-validated against cutoff inside the atomic step, so a record that was
+	// resolved and re-parked (fresh) after the scan is left alone rather than swept.
+	// Sweep is best-effort across records: a backend error on one claim does not discard the
+	// records already claimed in this pass — they are returned alongside a non-nil error, and
+	// the caller MUST process them (notify/clear) before propagating the error, or those
+	// claimed runs strand with their PRKey cleared.
 	Sweep(ctx context.Context, cutoff time.Time) ([]ParkRecord, error)
 	// ParkedCount reports how many records are currently parked (PRKey-indexed).
 	ParkedCount(ctx context.Context) (int, error)
@@ -94,6 +102,17 @@ func (m *memoryParkStore) Put(_ context.Context, r ParkRecord) error {
 	// Drop a stale index entry if this session was previously parked under a different key.
 	if prev, ok := m.bySession[r.SessionID]; ok && prev.PRKey != "" && prev.PRKey != r.PRKey {
 		delete(m.index, prev.PRKey)
+	}
+	if r.PRKey != "" {
+		// One active record per PRKey: if a different session currently owns this key, un-park
+		// it so the index has a single winner. Otherwise resolve/sweep could return either
+		// session, and a later Delete of the displaced session would strand this one.
+		if owner, ok := m.index[r.PRKey]; ok && owner != r.SessionID {
+			if prev, ok := m.bySession[owner]; ok {
+				prev.PRKey = ""
+				m.bySession[owner] = prev
+			}
+		}
 	}
 	m.bySession[r.SessionID] = r
 	if r.PRKey != "" {
@@ -149,8 +168,12 @@ func (m *memoryParkStore) claimLocked(prKey, sid string) ParkRecord {
 func (m *memoryParkStore) Delete(_ context.Context, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Only drop the index entry while it still points at this session: another session may
+	// have since claimed the same PRKey (see Put), and we must not strand its active park.
 	if r, ok := m.bySession[sessionID]; ok && r.PRKey != "" {
-		delete(m.index, r.PRKey)
+		if owner, ok := m.index[r.PRKey]; ok && owner == sessionID {
+			delete(m.index, r.PRKey)
+		}
 	}
 	delete(m.bySession, sessionID)
 	return nil

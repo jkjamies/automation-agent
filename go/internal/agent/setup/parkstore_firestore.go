@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,6 +66,22 @@ func (s *firestoreParkStore) Close() error { return s.client.Close() }
 func (s *firestoreParkStore) col() *firestore.CollectionRef { return s.client.Collection(s.coll) }
 
 func (s *firestoreParkStore) Put(ctx context.Context, r ParkRecord) error {
+	if r.PRKey != "" {
+		// One active doc per pr_key: clear it on any OTHER session still holding it, so
+		// resolve/sweep have a single winner. Best-effort (not transactional with the Set).
+		docs, err := s.col().Where("pr_key", "==", r.PRKey).Documents(ctx).GetAll()
+		if err != nil {
+			return err
+		}
+		for _, snap := range docs {
+			if snap.Ref.ID == r.SessionID {
+				continue
+			}
+			if _, err := snap.Ref.Update(ctx, []firestore.Update{{Path: "pr_key", Value: ""}}); err != nil {
+				return err
+			}
+		}
+	}
 	_, err := s.col().Doc(r.SessionID).Set(ctx, parkDocFromRecord(r))
 	return err
 }
@@ -133,21 +150,28 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 	}
 
 	out := make([]ParkRecord, 0, len(candidates))
+	var errs []error
 	for _, c := range candidates {
-		rec, ok, err := s.claimBySession(ctx, c.sessionID)
+		// Claim each candidate; a per-doc error skips it (it stays parked for the next sweep)
+		// rather than discarding the docs already claimed this pass.
+		rec, ok, err := s.claimStaleBySession(ctx, c.sessionID, c.prKey, cutoff)
 		if err != nil {
-			return out, err
+			errs = append(errs, err)
+			continue
 		}
 		if ok {
 			rec.PRKey = c.prKey // restore for the caller (timeout sweep needs the PR)
 			out = append(out, rec)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
-// claimBySession is the sweep's per-doc atomic claim, keyed by session id.
-func (s *firestoreParkStore) claimBySession(ctx context.Context, sid string) (ParkRecord, bool, error) {
+// claimStaleBySession is the sweep's per-doc atomic claim, keyed by session id. Inside the
+// transaction it re-checks that the doc still carries the expected (stale) pr_key and is
+// still older than cutoff, so a concurrent resolve+re-park between the scan and the claim
+// leaves the fresh park untouched instead of clearing it with a false timeout.
+func (s *firestoreParkStore) claimStaleBySession(ctx context.Context, sid, prKey string, cutoff time.Time) (ParkRecord, bool, error) {
 	var rec ParkRecord
 	var found bool
 	err := s.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
@@ -159,8 +183,19 @@ func (s *firestoreParkStore) claimBySession(ctx context.Context, sid string) (Pa
 		if err != nil {
 			return err
 		}
-		rec, found, err = claimDoc(tx, snap)
-		return err
+		var d firestoreParkDoc
+		if err := snap.DataTo(&d); err != nil {
+			return err
+		}
+		if d.PRKey != prKey || d.ParkedAt.IsZero() || !d.ParkedAt.Before(cutoff) {
+			return nil // resolved and/or re-parked since the scan — not ours to sweep
+		}
+		if err := tx.Update(snap.Ref, []firestore.Update{{Path: "pr_key", Value: ""}}); err != nil {
+			return err
+		}
+		d.PRKey = ""
+		rec, found = d.toRecord(), true
+		return nil
 	})
 	if err != nil {
 		return ParkRecord{}, false, err

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"sort"
 	"strings"
 	"time"
 
@@ -149,23 +148,24 @@ func loadState(ctx context.Context, ref *firestore.DocumentRef) (map[string]any,
 	return d.State, nil
 }
 
-// mergeIntoState reads the scoped state doc, overlays delta, writes it back, and returns
-// the merged map. A no-op when delta is empty (avoids an unnecessary write).
-func mergeIntoState(ctx context.Context, ref *firestore.DocumentRef, delta map[string]any) (map[string]any, error) {
-	cur, err := loadState(ctx, ref)
+// loadStateTx reads a scoped state doc inside a transaction (so the read participates in the
+// transaction's snapshot and conflict detection). A missing doc yields an empty map.
+func loadStateTx(tx *firestore.Transaction, ref *firestore.DocumentRef) (map[string]any, error) {
+	snap, err := tx.Get(ref)
+	if status.Code(err) == codes.NotFound {
+		return map[string]any{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	if len(delta) == 0 {
-		return cur, nil
-	}
-	for k, v := range delta {
-		cur[k] = v
-	}
-	if _, err := ref.Set(ctx, stateDoc{State: cur}); err != nil {
+	var d stateDoc
+	if err := snap.DataTo(&d); err != nil {
 		return nil, err
 	}
-	return cur, nil
+	if d.State == nil {
+		d.State = map[string]any{}
+	}
+	return d.State, nil
 }
 
 // --- Service ---
@@ -180,23 +180,52 @@ func (s *firestoreSessionService) Create(ctx context.Context, req *session.Creat
 	}
 	appDelta, userDelta, sessDelta := extractStateDeltas(req.State)
 	now := time.Now()
-	// Create (not Set) is atomic: it fails with AlreadyExists rather than clobbering a
-	// concurrent create. Done first so a conflict leaves no app/user state side effect.
 	ref := s.sessionRef(req.AppName, req.UserID, sid)
-	if _, err := ref.Create(ctx, sessionDoc{
-		AppName: req.AppName, UserID: req.UserID, SessionID: sid,
-		State: sessDelta, UpdatedAt: now,
-	}); status.Code(err) == codes.AlreadyExists {
-		return nil, fmt.Errorf("session %s already exists", sid)
-	} else if err != nil {
-		return nil, err
-	}
+	appRef := s.appStateRef(req.AppName)
+	userRef := s.userStateRef(req.AppName, req.UserID)
 
-	appState, err := mergeIntoState(ctx, s.appStateRef(req.AppName), appDelta)
-	if err != nil {
-		return nil, err
-	}
-	userState, err := mergeIntoState(ctx, s.userStateRef(req.AppName, req.UserID), userDelta)
+	// One transaction creates the session and merges app/user state together, so a state
+	// write failure can no longer leave a session persisted without its state (or vice
+	// versa). All reads precede all writes, as Firestore transactions require.
+	var appState, userState map[string]any
+	err := s.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(ref)
+		if err == nil && snap.Exists() {
+			return fmt.Errorf("session %s already exists", sid)
+		}
+		if err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+		if appState, err = loadStateTx(tx, appRef); err != nil {
+			return err
+		}
+		if userState, err = loadStateTx(tx, userRef); err != nil {
+			return err
+		}
+		for k, v := range appDelta {
+			appState[k] = v
+		}
+		for k, v := range userDelta {
+			userState[k] = v
+		}
+		if err := tx.Create(ref, sessionDoc{
+			AppName: req.AppName, UserID: req.UserID, SessionID: sid,
+			State: sessDelta, UpdatedAt: now,
+		}); err != nil {
+			return err
+		}
+		if len(appDelta) > 0 {
+			if err := tx.Set(appRef, stateDoc{State: appState}); err != nil {
+				return err
+			}
+		}
+		if len(userDelta) > 0 {
+			if err := tx.Set(userRef, stateDoc{State: userState}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -309,24 +338,30 @@ func (s *firestoreSessionService) AppendEvent(ctx context.Context, curSession se
 	}
 
 	appDelta, userDelta, sessDelta := extractStateDeltas(event.Actions.StateDelta)
-	if _, err := mergeIntoState(ctx, s.appStateRef(sess.appName), appDelta); err != nil {
-		return err
-	}
-	if _, err := mergeIntoState(ctx, s.userStateRef(sess.appName, sess.userID), userDelta); err != nil {
-		return err
-	}
-
 	stored := trimTempState(event)
 	blob, err := json.Marshal(stored)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	ref := s.sessionRef(sess.appName, sess.userID, sess.sessionID)
+	appRef := s.appStateRef(sess.appName)
+	userRef := s.userStateRef(sess.appName, sess.userID)
+	// Merge app/user state in the same transaction as the session + event write, so the
+	// scoped state can no longer advance without the event that produced it (or vice versa).
+	// All reads precede all writes, as Firestore transactions require.
 	err = s.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
 		snap, err := tx.Get(ref)
 		if status.Code(err) == codes.NotFound {
 			return fmt.Errorf("session not found, cannot apply event")
 		}
+		if err != nil {
+			return err
+		}
+		appState, err := loadStateTx(tx, appRef)
+		if err != nil {
+			return err
+		}
+		userState, err := loadStateTx(tx, userRef)
 		if err != nil {
 			return err
 		}
@@ -345,6 +380,22 @@ func (s *firestoreSessionService) AppendEvent(ctx context.Context, curSession se
 		d.UpdatedAt = event.Timestamp
 		if err := tx.Set(ref, d); err != nil {
 			return err
+		}
+		if len(appDelta) > 0 {
+			for k, v := range appDelta {
+				appState[k] = v
+			}
+			if err := tx.Set(appRef, stateDoc{State: appState}); err != nil {
+				return err
+			}
+		}
+		if len(userDelta) > 0 {
+			for k, v := range userDelta {
+				userState[k] = v
+			}
+			if err := tx.Set(userRef, stateDoc{State: userState}); err != nil {
+				return err
+			}
 		}
 		evRef := ref.Collection("events").Doc(fmt.Sprintf("%020d", seq))
 		return tx.Set(evRef, eventDoc{Seq: seq, Timestamp: event.Timestamp, Blob: string(blob)})
@@ -405,8 +456,10 @@ func trimTempState(event *session.Event) *session.Event {
 	return &cp
 }
 
-// filterEvents applies the Get request's NumRecentEvents / After filters (events are
-// stored in append order).
+// filterEvents applies the Get request's NumRecentEvents / After filters. Events are stored
+// (and loaded) in sequence order, which is not guaranteed to be timestamp order — the caller
+// sets each event's Timestamp — so the After filter scans linearly rather than binary-searching
+// on a monotonicity it cannot assume.
 func filterEvents(events []*session.Event, numRecent int, after time.Time) []*session.Event {
 	if numRecent > 0 {
 		if start := len(events) - numRecent; start > 0 {
@@ -414,7 +467,13 @@ func filterEvents(events []*session.Event, numRecent int, after time.Time) []*se
 		}
 	}
 	if !after.IsZero() && len(events) > 0 {
-		keep := sort.Search(len(events), func(i int) bool { return !events[i].Timestamp.Before(after) })
+		keep := len(events)
+		for i, ev := range events {
+			if !ev.Timestamp.Before(after) {
+				keep = i
+				break
+			}
+		}
 		events = events[keep:]
 	}
 	return events

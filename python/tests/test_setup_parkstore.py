@@ -134,6 +134,42 @@ async def test_sweep_claims_stale_only(store) -> None:
     assert await store.resolve_by_pr_key("o/r#2") is not None
 
 
+async def test_sweep_skips_fresh_repark(store) -> None:
+    # A run re-parked with a fresh parked_at after going stale must not be swept: re-park
+    # updates the cutoff field, so the sweep leaves the fresh attempt alone.
+    await store.put(
+        ParkRecord(
+            session_id="s1", pr_key="o/r#8", call_id="c1", attempts=1,
+            parked_at=_now() - timedelta(hours=2),
+        )
+    )
+    # A webhook resolves the stale park, then a retry re-parks under the same key, now fresh.
+    assert await store.resolve_by_pr_key("o/r#8") is not None
+    await store.put(
+        ParkRecord(session_id="s1", pr_key="o/r#8", call_id="c2", attempts=2, parked_at=_now())
+    )
+
+    assert await store.sweep(_now() - timedelta(hours=1)) == []
+    run = await store.resolve_by_pr_key("o/r#8")
+    assert run is not None and run.call_id == "c2"
+
+
+async def test_single_owner_per_pr_key(store) -> None:
+    # Two sessions parking under one PR key keep a single active owner (the latest), and
+    # deleting the displaced session must not strand the active one.
+    await store.put(
+        ParkRecord(session_id="A", pr_key="o/r#9", call_id="ca", attempts=1, parked_at=_now())
+    )
+    await store.put(
+        ParkRecord(session_id="B", pr_key="o/r#9", call_id="cb", attempts=1, parked_at=_now())
+    )
+    assert await store.parked_count() == 1
+
+    await store.delete("A")  # delete the displaced session
+    run = await store.resolve_by_pr_key("o/r#9")
+    assert run is not None and run.session_id == "B" and run.call_id == "cb"
+
+
 async def test_delete_removes_record_and_index(store) -> None:
     await store.put(ParkRecord(session_id="s1", pr_key="o/r#1", call_id="c", parked_at=_now()))
     await store.delete("s1")

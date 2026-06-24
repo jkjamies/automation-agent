@@ -69,8 +69,8 @@ remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sh
 the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
 plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
-no longer strands in-flight runs; `memory` keeps the old ephemeral behavior. **(Go
-only so far — the other ports remain in-memory; see [`specs/parity-status.md`](specs/parity-status.md).)**
+no longer strands in-flight runs; `memory` keeps the old ephemeral behavior. (Per-port
+backend coverage: [`specs/parity-status.md`](specs/parity-status.md).)
 Deterministic, agent-free tooling lives under `internal/` and is called by
 agents but never imports them. Env vars + local run modes:
 [`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,

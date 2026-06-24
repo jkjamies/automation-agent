@@ -187,11 +187,55 @@ func runParkStoreSuite(t *testing.T, newStore func(t *testing.T) ParkStore) {
 		if len(swept) != 1 || swept[0].SessionID != "old" {
 			t.Fatalf("sweep = %+v, want only the stale 'old' record", swept)
 		}
+		// The swept record must keep its PRKey: the driver needs it to stop the run's timer
+		// and name the PR in the timeout summary.
+		if swept[0].PRKey != "o/r#1" {
+			t.Errorf("swept record PRKey = %q, want o/r#1 (retained for timeout cleanup)", swept[0].PRKey)
+		}
 		if n, _ := s.ParkedCount(ctx); n != 1 {
 			t.Errorf("only the fresh run should remain parked, count = %d", n)
 		}
 		if again, _ := s.Sweep(ctx, time.Now().Add(-time.Minute)); len(again) != 0 {
 			t.Errorf("a second sweep should claim nothing more, got %+v", again)
+		}
+	})
+
+	// A run re-parked with a fresh ParkedAt after going stale is not swept: re-park updates
+	// the cutoff field, so the sweep leaves the fresh attempt alone.
+	t.Run("SweepSkipsFreshRepark", func(t *testing.T) {
+		s := newStore(t)
+		stale := ParkRecord{SessionID: "sess", PRKey: "o/r#8", CallID: "c1", Attempts: 1, ParkedAt: time.Now().Add(-time.Hour)}
+		_ = s.Put(ctx, stale)
+		// Resolve (a webhook) then re-park (a retry) under the same key, now fresh.
+		if _, ok, _ := s.ResolveByPRKey(ctx, "o/r#8"); !ok {
+			t.Fatal("expected to resolve the stale park")
+		}
+		_ = s.Put(ctx, parkRec("sess", "o/r#8", "c2", 2)) // ParkedAt = now
+
+		if swept, err := s.Sweep(ctx, time.Now().Add(-time.Minute)); err != nil || len(swept) != 0 {
+			t.Fatalf("sweep = %+v, err=%v; want nothing (the re-park is fresh)", swept, err)
+		}
+		if run, ok, _ := s.ResolveByPRKey(ctx, "o/r#8"); !ok || run.CallID != "c2" {
+			t.Errorf("the fresh re-park should still resolve = %+v, ok=%v", run, ok)
+		}
+	})
+
+	// Two sessions parking under one PR key keep a single active owner (the latest), and
+	// deleting the displaced session does not strand the active one.
+	t.Run("SingleOwnerPerPRKey", func(t *testing.T) {
+		s := newStore(t)
+		_ = s.Put(ctx, parkRec("A", "o/r#9", "ca", 1))
+		_ = s.Put(ctx, parkRec("B", "o/r#9", "cb", 1))
+		if n, _ := s.ParkedCount(ctx); n != 1 {
+			t.Fatalf("one PR key must have a single active owner, count = %d", n)
+		}
+		// Deleting the displaced first session must not drop the active owner's index.
+		if err := s.Delete(ctx, "A"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		run, ok, _ := s.ResolveByPRKey(ctx, "o/r#9")
+		if !ok || run.SessionID != "B" || run.CallID != "cb" {
+			t.Fatalf("resolve after displacing A = %+v, ok=%v; want active session B", run, ok)
 		}
 	})
 }
