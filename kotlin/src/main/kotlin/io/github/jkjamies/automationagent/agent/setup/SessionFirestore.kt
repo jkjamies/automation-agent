@@ -56,15 +56,19 @@ class FirestoreSessionService(project: String, private val collection: String) :
             val now = System.currentTimeMillis()
             val sessionRef = ref(resolved, id)
             // A fresh session: purge any stale events left under this id (Firestore does not cascade,
-            // and the doc set below only resets next_seq=0). Mirrors the sqlite backend's reset, so
-            // reusing a session id cannot return stale history.
-            for (ev in sessionRef.collection("events").get().get().documents) ev.reference.delete().get()
-            sessionRef.set(
+            // and the doc set below only resets next_seq=0). The purge and the reset commit together
+            // in one batch, so a reused session id can never be left with partial history. Mirrors
+            // the sqlite backend's reset.
+            val batch = db.batch()
+            for (ev in sessionRef.collection("events").get().get().documents) batch.delete(ev.reference)
+            batch.set(
+                sessionRef,
                 mapOf(
                     "app_name" to resolved.appName, "user_id" to resolved.userId, "session_id" to id,
                     "state" to persistable, "next_seq" to 0L, "updated_at" to now,
                 ),
-            ).get()
+            )
+            batch.commit().get()
             Session(resolved, State(initial.toMutableMap(), mutableMapOf()), mutableListOf(), kotlin.time.Instant.fromEpochMilliseconds(now))
         }
 
