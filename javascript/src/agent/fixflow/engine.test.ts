@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PR, PRInput } from '../../githubapi/client';
+import type { Comparison, PR, PRInput } from '../../githubapi/client';
 import type { Message, Notifier } from '../../notify/notify';
 import { FakeLlm } from '../../testutil/fakes';
 import type { GitHub } from './applyfix';
@@ -29,6 +29,9 @@ class FakeGH implements GitHub {
   }
   async addLabels(_o: string, _r: string, _n: number, ...labels: string[]): Promise<void> {
     this.labeled.push(...labels);
+  }
+  async compare(): Promise<Comparison> {
+    return { totalCommits: 1, files: [{ path: 'a.ts', status: 'modified', additions: 1, deletions: 0 }] };
   }
 }
 
@@ -90,6 +93,27 @@ function newEngineFor(remote: string, gh: FakeGH, n: FakeNotifier, s: Spec = spe
   return newEngine(s, deps);
 }
 
+// Seed the engine's park store with a parked run, as if a prior kickoff had parked it.
+// Used to drive resume/timeout/sweep paths without running a full apply first.
+async function prepark(e: Engine, key: string, attempts: number): Promise<void> {
+  await e.driver.store.put({
+    sessionId: `sid-${key}`,
+    prKey: key,
+    callId: 'c',
+    attempts,
+    params: JSON.stringify({
+      owner: 'acme',
+      repo: 'api',
+      fullRepo: 'acme/api',
+      base: 'main',
+      report: 'r',
+      feedback: '',
+      newBranch: false,
+    }),
+    parkedAt: new Date(),
+  });
+}
+
 function checkBody(conclusion: string, pr: number, output = ''): string {
   return JSON.stringify({
     action: 'completed',
@@ -111,7 +135,7 @@ describe('Engine', () => {
     await e.kickoff('{"repo":"acme/api","base":"main","report":"r"}');
     expect(gh.created?.head).toBe('agent/fix');
     expect(gh.labeled).toHaveLength(1);
-    expect(e.driver.reg.size()).toBe(1);
+    expect(await e.driver.parkedCount()).toBe(1);
   });
 
   it('rejects a kickoff for a repo not in the allowlist', async () => {
@@ -125,7 +149,7 @@ describe('Engine', () => {
     });
     await expect(e.kickoff('{"repo":"acme/api","report":"r"}')).rejects.toThrow(/allowlist/);
     expect(gh.created).toBeFalsy();
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
   });
 
   it('accepts a kickoff for a repo in the allowlist', async () => {
@@ -140,7 +164,7 @@ describe('Engine', () => {
     });
     await e.kickoff('{"repo":"acme/api","base":"main","report":"r"}');
     expect(gh.created?.head).toBe('agent/fix');
-    expect(e.driver.reg.size()).toBe(1);
+    expect(await e.driver.parkedCount()).toBe(1);
   });
 
   it('notifies success and clears the run on a passing resume', async () => {
@@ -150,19 +174,17 @@ describe('Engine', () => {
     await e.resume(checkBody('success', 42));
     expect(n.msgs).toHaveLength(1);
     expect(n.msgs[0]!.title).toContain('succeeded');
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
   });
 
   it('asks for review when attempts are exhausted', async () => {
     const n = new FakeNotifier();
     const e = newEngineFor(await seedRemote(), new FakeGH(), n);
-    e.driver.reg.park('acme/api#42', { sessionId: 'run-x', callId: 'c', attempts: 3 }, 3_600_000, (k) =>
-      e.driver.onTimeout(k),
-    );
+    await prepark(e, 'acme/api#42', 3);
     await e.resume(checkBody('failure', 42, 'still broken'));
     expect(n.msgs).toHaveLength(1);
     expect(n.msgs[0]!.title).toContain('review');
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
   });
 
   it('retries and re-parks on a failing resume below the limit', async () => {
@@ -180,7 +202,7 @@ describe('Engine', () => {
     await e.resume(checkBody('failure', 42, 'still failing'));
     expect(gh.created).toBeNull(); // reused, not created
     expect(n.msgs).toHaveLength(0);
-    expect(e.driver.reg.size()).toBe(1);
+    expect(await e.driver.parkedCount()).toBe(1);
   });
 
   it('exhausts after maxIter failures through the full loop', async () => {
@@ -199,25 +221,23 @@ describe('Engine', () => {
     for (let i = 0; i < 2; i++) {
       await e.resume(checkBody('failure', 42, 'boom'));
       expect(n.msgs).toHaveLength(0);
-      expect(e.driver.reg.size()).toBe(1);
+      expect(await e.driver.parkedCount()).toBe(1);
     }
     await e.resume(checkBody('failure', 42, 'boom'));
     expect(n.msgs).toHaveLength(1);
     expect(n.msgs[0]!.title).toContain('review');
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
     expect(calls).toBe(3);
   });
 
   it('frees a run on timeout and ignores a late webhook', async () => {
     const n = new FakeNotifier();
     const e = newEngineFor(await seedRemote(), new FakeGH(), n);
-    e.driver.reg.park('acme/api#42', { sessionId: 'run-x', callId: 'c', attempts: 1 }, 3_600_000, (k) =>
-      e.driver.onTimeout(k),
-    );
+    await prepark(e, 'acme/api#42', 1);
     await e.driver.onTimeout('acme/api#42');
     expect(n.msgs).toHaveLength(1);
     expect(n.msgs[0]!.title).toContain('review');
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
 
     await e.resume(checkBody('success', 42)); // benign no-op
     expect(n.msgs).toHaveLength(1);
@@ -246,7 +266,7 @@ describe('Engine', () => {
     };
     const e = newEngineFor(await seedRemote('r2'), new FakeGH(), new FakeNotifier(), s);
     await expect(e.kickoff('{"repo":"acme/api","report":"r"}')).rejects.toThrow();
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
   });
 
   it('notifies for review when the apply step fails, not just on CI failure', async () => {
@@ -262,7 +282,7 @@ describe('Engine', () => {
     expect(n.msgs).toHaveLength(1);
     expect(n.msgs[0]!.title).toContain('review');
     expect(n.msgs[0]!.text).toContain('could not be applied');
-    expect(e.driver.reg.size()).toBe(0);
+    expect(await e.driver.parkedCount()).toBe(0);
   });
 
   it('exposes the label and check name', async () => {

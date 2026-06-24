@@ -16,6 +16,7 @@ interface FakeOpts {
   pulls?: unknown[];
   checkRunsByRef?: Record<string, unknown[]>;
   contents?: unknown;
+  comparison?: unknown;
 }
 
 interface Seen {
@@ -25,6 +26,7 @@ interface Seen {
   checkNameSeen?: string;
   checkFilterSeen?: string;
   contentsRef?: string | undefined;
+  compareBaseHead?: string;
 }
 
 function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
@@ -38,6 +40,10 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
     getContent: async (params: { ref?: string }) => {
       seen.contentsRef = params.ref;
       return { data: opts.contents };
+    },
+    compareCommits: async (params: { base: string; head: string }) => {
+      seen.compareBaseHead = `${params.base}...${params.head}`;
+      return { data: opts.comparison };
     },
   };
   const pulls = {
@@ -198,6 +204,34 @@ describe('findAgentPrs', () => {
     expect(seen.pullsState).toBe('open');
     expect(prs).toHaveLength(1);
     expect(prs[0]!.number).toBe(5);
+  });
+});
+
+describe('compare', () => {
+  it('projects total commits and changed files', async () => {
+    const { client, seen } = makeClient({
+      comparison: {
+        total_commits: 2,
+        files: [
+          { filename: 'a.ts', status: 'modified', additions: 3, deletions: 1 },
+          { filename: 'b.ts', status: 'added', additions: 10, deletions: 0 },
+        ],
+      },
+    });
+    const cmp = await client.compare('o', 'r', 'main', 'agent/fix');
+    expect(seen.compareBaseHead).toBe('main...agent/fix');
+    expect(cmp.totalCommits).toBe(2);
+    expect(cmp.files).toEqual([
+      { path: 'a.ts', status: 'modified', additions: 3, deletions: 1 },
+      { path: 'b.ts', status: 'added', additions: 10, deletions: 0 },
+    ]);
+  });
+
+  it('degrades missing fields to empty/0 defaults', async () => {
+    const { client } = makeClient({ comparison: {} });
+    const cmp = await client.compare('o', 'r', 'main', 'head');
+    expect(cmp.totalCommits).toBe(0);
+    expect(cmp.files).toEqual([]);
   });
 });
 

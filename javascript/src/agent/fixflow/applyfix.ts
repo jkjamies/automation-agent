@@ -11,15 +11,16 @@ import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { PR, PRInput } from '../../githubapi/client';
+import type { Comparison, PR, PRInput } from '../../githubapi/client';
 import { type Author, Repo } from '../../gitrepo/repo';
 import { safeJoin } from './files';
 
-/** The slice of githubapi the apply step needs (consumer-defined, fakeable). */
+/** The slice of githubapi the apply step + terminal summary need (consumer-defined, fakeable). */
 export interface GitHub {
   findAgentPrs(owner: string, repo: string, label: string): Promise<PR[]>;
   createPr(owner: string, repo: string, input: PRInput): Promise<PR>;
   addLabels(owner: string, repo: string, num: number, ...labels: string[]): Promise<void>;
+  compare(owner: string, repo: string, base: string, head: string): Promise<Comparison>;
 }
 
 /** A whole-file write an analyze step produces (a rewritten source file, a generated test, …). */

@@ -24,6 +24,21 @@ export const NotifyProvider = {
 } as const;
 export type NotifyProvider = (typeof NotifyProvider)[keyof typeof NotifyProvider];
 
+/**
+ * Selects where the suspend/resume session and its park record (`prKey → session,
+ * attempts, params`) are stored.
+ *
+ * - `memory` (default): in-process; a restart drops parked runs.
+ * - `sqlite`: a durable local file; parked runs survive a restart.
+ * - `firestore`: cloud-backed; for the serverless, scale-to-zero deployment.
+ */
+export const SessionBackend = {
+  Memory: 'memory',
+  Sqlite: 'sqlite',
+  Firestore: 'firestore',
+} as const;
+export type SessionBackend = (typeof SessionBackend)[keyof typeof SessionBackend];
+
 /** All runtime settings. */
 export interface Config {
   // LLM
@@ -56,6 +71,23 @@ export interface Config {
   // it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
   ciTimeoutMs: number;
   githubWebhookSecret: string;
+
+  // Sessions (durable suspend/resume)
+  // sessionBackend selects where the session + park record live (memory|sqlite|firestore).
+  sessionBackend: SessionBackend;
+  // sqliteDsn is the sqlite file path used by both the ADK session service and the
+  // park store when sessionBackend === 'sqlite' (a plain path, not a URI).
+  sqliteDsn: string;
+  // firestoreProject is the GCP project for the firestore backend; '' detects it from
+  // ADC / GOOGLE_CLOUD_PROJECT / the emulator env.
+  firestoreProject: string;
+  // firestoreCollection is the root collection prefix for sessions and parked runs.
+  firestoreCollection: string;
+
+  // Ingress / auth
+  // internalToken is the Bearer token guarding the /internal/* cron + sweep routes;
+  // '' leaves those routes disabled (404).
+  internalToken: string;
 }
 
 /** Read configuration from the process environment, applying defaults. */
@@ -118,6 +150,11 @@ export function loadFrom(get: Lookup): Config {
     maxIterations,
     ciTimeoutMs: parseDuration(getOr(get, 'CI_TIMEOUT', '90m')),
     githubWebhookSecret: getOr(get, 'GITHUB_WEBHOOK_SECRET', ''),
+    sessionBackend: getOr(get, 'SESSION_BACKEND', SessionBackend.Memory) as SessionBackend,
+    sqliteDsn: getOr(get, 'SQLITE_DSN', 'automation-agent.db'),
+    firestoreProject: getOr(get, 'FIRESTORE_PROJECT', ''),
+    firestoreCollection: getOr(get, 'FIRESTORE_COLLECTION', 'automation_agent'),
+    internalToken: getOr(get, 'INTERNAL_TOKEN', ''),
   };
 
   // Code models default to the base models when unset.
@@ -148,6 +185,15 @@ export function validate(c: Config): void {
   }
   if (c.maxIterations < 1) {
     throw new Error(`MAX_ITERATIONS must be >= 1, got ${c.maxIterations}`);
+  }
+  if (
+    c.sessionBackend !== SessionBackend.Memory &&
+    c.sessionBackend !== SessionBackend.Sqlite &&
+    c.sessionBackend !== SessionBackend.Firestore
+  ) {
+    throw new Error(
+      `invalid SESSION_BACKEND ${JSON.stringify(c.sessionBackend)} (want memory|sqlite|firestore)`,
+    );
   }
   const port = Number.parseInt(c.port, 10);
   if (!/^[+-]?\d+$/.test(c.port.trim()) || Number.isNaN(port)) {

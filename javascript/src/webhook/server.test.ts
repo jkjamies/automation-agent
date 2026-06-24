@@ -183,4 +183,86 @@ describe('webhook server', () => {
       expect(verifySignature('topsecret', 'deadbeef', body)).toBe(false); // missing prefix
     });
   });
+
+  describe('internal endpoints', () => {
+    const TOKEN = 'sekret-internal';
+    const bearer = `Bearer ${TOKEN}`;
+
+    it('404 when internal routes are disabled (no token configured)', async () => {
+      const c = new Capture();
+      for (const path of ['/internal/cron/daily', '/internal/cron/weekly', '/internal/sweep']) {
+        const resp = await request(new Server(c.ingest).app).post(path).set('Authorization', bearer);
+        expect(resp.status).toBe(404);
+      }
+      expect(c.env).toBeNull();
+    });
+
+    it('401 without a Bearer token', async () => {
+      const c = new Capture();
+      const srv = new Server(c.ingest, { internalToken: TOKEN, sweep: async () => {} }).app;
+      expect((await request(srv).post('/internal/cron/daily')).status).toBe(401);
+      expect((await request(srv).post('/internal/sweep').set('Authorization', 'Basic x')).status).toBe(401);
+    });
+
+    it('401 on a mismatched token', async () => {
+      const c = new Capture();
+      const srv = new Server(c.ingest, { internalToken: TOKEN }).app;
+      const resp = await request(srv).post('/internal/cron/daily').set('Authorization', 'Bearer wrong');
+      expect(resp.status).toBe(401);
+      expect(c.env).toBeNull();
+    });
+
+    it('daily cron -> 202 with KindCronDaily', async () => {
+      const c = new Capture();
+      const resp = await request(new Server(c.ingest, { internalToken: TOKEN }).app)
+        .post('/internal/cron/daily')
+        .set('Authorization', bearer);
+      expect(resp.status).toBe(202);
+      expect(c.env!.kind).toBe(Kind.CronDaily);
+      expect(c.env!.source).toBe('internal:/cron/daily');
+    });
+
+    it('weekly cron -> 202 with KindCronWeekly', async () => {
+      const c = new Capture();
+      const resp = await request(new Server(c.ingest, { internalToken: TOKEN }).app)
+        .post('/internal/cron/weekly')
+        .set('Authorization', bearer);
+      expect(resp.status).toBe(202);
+      expect(c.env!.kind).toBe(Kind.CronWeekly);
+    });
+
+    it('sweep -> 200 when it succeeds', async () => {
+      const c = new Capture();
+      let swept = false;
+      const srv = new Server(c.ingest, {
+        internalToken: TOKEN,
+        sweep: async () => {
+          swept = true;
+        },
+      }).app;
+      const resp = await request(srv).post('/internal/sweep').set('Authorization', bearer);
+      expect(resp.status).toBe(200);
+      expect(swept).toBe(true);
+    });
+
+    it('sweep -> 500 when the handler throws', async () => {
+      const c = new Capture();
+      const srv = new Server(c.ingest, {
+        internalToken: TOKEN,
+        sweep: async () => {
+          throw new Error('boom');
+        },
+      }).app;
+      const resp = await request(srv).post('/internal/sweep').set('Authorization', bearer);
+      expect(resp.status).toBe(500);
+    });
+
+    it('sweep -> 501 when no sweep handler is configured', async () => {
+      const c = new Capture();
+      const resp = await request(new Server(c.ingest, { internalToken: TOKEN }).app)
+        .post('/internal/sweep')
+        .set('Authorization', bearer);
+      expect(resp.status).toBe(501);
+    });
+  });
 });

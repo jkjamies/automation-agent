@@ -2,7 +2,7 @@ COVER_MIN   := 80
 OLLAMA_HOST ?= http://localhost:11434
 NPM         := npm
 
-.PHONY: help build run playground test cover lint fmt typecheck arch docs-check tidy spec ollama-check ci docker
+.PHONY: help build run playground test cover cover-firestore lint fmt typecheck arch docs-check tidy spec ollama-check ci docker
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -21,6 +21,10 @@ test: ## Run all tests
 
 cover: ## Run tests with coverage gate (>= $(COVER_MIN)%) over src/ (cmd is composition-only)
 	$(NPM) run cover
+
+cover-firestore: ## Run the emulator-gated firestore tests (needs a running Firestore emulator)
+	@test -n "$(FIRESTORE_EMULATOR_HOST)" || { echo "set FIRESTORE_EMULATOR_HOST (start: gcloud beta emulators firestore start)"; exit 1; }
+	npx vitest run src/agent/setup/parkstore_firestore.test.ts src/agent/setup/session_firestore.test.ts
 
 lint: ## Run eslint (the go vet analogue)
 	$(NPM) run lint

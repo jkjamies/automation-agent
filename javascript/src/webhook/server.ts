@@ -14,11 +14,17 @@ import { type Envelope, Kind, newEnvelope } from '../ingest/envelope';
 /** maxBodyBytes caps how much of a webhook body we read. */
 export const MAX_BODY_BYTES = 5 << 20; // 5 MiB
 
+/** The body for internal cron triggers, which carry no payload. */
+const EMPTY_BODY = Buffer.alloc(0);
+
 /**
  * IngestFunc consumes a normalized envelope. It should enqueue work and return
  * quickly; a rejected promise becomes a 500 to the caller.
  */
 export type IngestFunc = (e: Envelope) => Promise<void>;
+
+/** SweepFunc resolves every engine's timed-out parked runs (the /internal/sweep body). */
+export type SweepFunc = () => Promise<void>;
 
 /** Options for constructing a {@link Server}. */
 export interface ServerOptions {
@@ -27,6 +33,13 @@ export interface ServerOptions {
    * skipped (intended for local dev only).
    */
   secret?: string;
+  /**
+   * Bearer token guarding the /internal/* cron + sweep routes (Cloud Scheduler ingress).
+   * When empty, those routes are disabled and return 404.
+   */
+  internalToken?: string;
+  /** The sweep handler behind POST /internal/sweep. Omitted → that route returns 501. */
+  sweep?: SweepFunc;
   /** Injects a clock for deterministic receivedAt timestamps in tests. */
   now?: () => Date;
 }
@@ -55,12 +68,16 @@ export function verifySignature(secret: string, header: string, body: Buffer): b
 export class Server {
   private readonly ingest: IngestFunc;
   private readonly secret: string;
+  private readonly internalToken: string;
+  private readonly sweepFn?: SweepFunc;
   private readonly now: () => Date;
   private readonly expressApp: Express;
 
   constructor(ingest: IngestFunc, opts: ServerOptions = {}) {
     this.ingest = ingest;
     this.secret = opts.secret ?? '';
+    this.internalToken = opts.internalToken ?? '';
+    this.sweepFn = opts.sweep;
     this.now = opts.now ?? (() => new Date());
     this.expressApp = this.buildApp();
   }
@@ -107,7 +124,71 @@ export class Server {
       });
     });
 
+    // Internal ingress (Cloud Scheduler): cron triggers + the durable timeout sweep, guarded
+    // by a Bearer token. Disabled (404) until INTERNAL_TOKEN is set. The cron routes mirror
+    // the in-process scheduler so a scaled-to-zero deployment can drive the digests externally.
+    app.post('/internal/cron/daily', (req: Request, res: Response) => {
+      if (!this.internalAuthenticated(req, res)) {
+        return;
+      }
+      void this.dispatch(res, newEnvelope(Kind.CronDaily, 'internal:/cron/daily', EMPTY_BODY, this.now()));
+    });
+
+    app.post('/internal/cron/weekly', (req: Request, res: Response) => {
+      if (!this.internalAuthenticated(req, res)) {
+        return;
+      }
+      void this.dispatch(res, newEnvelope(Kind.CronWeekly, 'internal:/cron/weekly', EMPTY_BODY, this.now()));
+    });
+
+    app.post('/internal/sweep', (req: Request, res: Response) => {
+      if (!this.internalAuthenticated(req, res)) {
+        return;
+      }
+      void this.handleSweep(res);
+    });
+
     return app;
+  }
+
+  /**
+   * Guard an /internal/* route with the Bearer token. Writes the response and returns false
+   * when denied: 404 if internal routes are disabled (no token configured), 401 on a missing
+   * or mismatched token (compared in constant time).
+   */
+  private internalAuthenticated(req: Request, res: Response): boolean {
+    if (this.internalToken === '') {
+      res.status(404).type('text/plain').send('internal endpoints disabled');
+      return false;
+    }
+    const prefix = 'Bearer ';
+    const auth = headerValue(req, 'authorization');
+    if (!auth.startsWith(prefix)) {
+      res.status(401).type('text/plain').send('unauthorized');
+      return false;
+    }
+    const got = Buffer.from(auth.slice(prefix.length), 'utf8');
+    const want = Buffer.from(this.internalToken, 'utf8');
+    if (got.length !== want.length || !timingSafeEqual(got, want)) {
+      res.status(401).type('text/plain').send('unauthorized');
+      return false;
+    }
+    return true;
+  }
+
+  /** Run the configured sweep, mapping a missing handler to 501 and a sweep error to 500. */
+  private async handleSweep(res: Response): Promise<void> {
+    if (!this.sweepFn) {
+      res.status(501).type('text/plain').send('sweep not configured');
+      return;
+    }
+    try {
+      await this.sweepFn();
+    } catch {
+      res.status(500).type('text/plain').send('sweep failed');
+      return;
+    }
+    res.status(200).end();
   }
 
   /**

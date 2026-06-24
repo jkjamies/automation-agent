@@ -54,6 +54,20 @@ export interface CheckResult {
   completedAt: Date | null;
 }
 
+/** One file in a base...head comparison. */
+export interface ChangedFile {
+  path: string;
+  status: string; // added | modified | removed | renamed | ...
+  additions: number;
+  deletions: number;
+}
+
+/** Summarizes what changed between two refs (base...head). */
+export interface Comparison {
+  totalCommits: number;
+  files: ChangedFile[];
+}
+
 /** The parsed essentials of a GitHub check_run webhook event. */
 export interface CheckEvent {
   action: string; // created | completed | rerequested
@@ -87,6 +101,12 @@ export interface OctokitLike {
         repo: string;
         path: string;
         ref?: string;
+      }): Promise<{ data: unknown }>;
+      compareCommits(params: {
+        owner: string;
+        repo: string;
+        base: string;
+        head: string;
       }): Promise<{ data: unknown }>;
     };
     pulls: {
@@ -171,6 +191,16 @@ export class Client {
       return data.map(toCommit);
     } catch (err) {
       throw new Error(`list commits ${owner}/${repo}: ${errMsg(err)}`);
+    }
+  }
+
+  /** Return the base...head comparison (commit count + changed files). */
+  async compare(owner: string, repo: string, base: string, head: string): Promise<Comparison> {
+    try {
+      const { data } = await this.gh.rest.repos.compareCommits({ owner, repo, base, head });
+      return toComparison(data);
+    } catch (err) {
+      throw new Error(`compare ${owner}/${repo} ${base}...${head}: ${errMsg(err)}`);
     }
   }
 
@@ -382,6 +412,21 @@ function toPr(raw: unknown): PR {
     url: str(pr.html_url),
     labels,
   };
+}
+
+function toComparison(raw: unknown): Comparison {
+  const c = raw as Record<string, unknown>;
+  const filesRaw = (c.files as unknown[] | null | undefined) ?? [];
+  const files: ChangedFile[] = filesRaw.map((f) => {
+    const file = f as Record<string, unknown>;
+    return {
+      path: str(file.filename),
+      status: str(file.status),
+      additions: num(file.additions),
+      deletions: num(file.deletions),
+    };
+  });
+  return { totalCommits: num(c.total_commits), files };
 }
 
 /** Coerce a possibly-missing string field to `""`. */

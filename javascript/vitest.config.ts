@@ -9,7 +9,15 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/testutil/**', '**/*.d.ts'],
+      exclude: [
+        'src/**/*.test.ts',
+        'src/testutil/**',
+        '**/*.d.ts',
+        // The firestore backends are exercised only under the emulator (gated tests), so
+        // they are out of the default in-process coverage gate — mirroring the Go/Python ports.
+        'src/agent/setup/parkstore_firestore.ts',
+        'src/agent/setup/session_firestore.ts',
+      ],
       reporter: ['text', 'text-summary'],
       thresholds: {
         lines: 80,

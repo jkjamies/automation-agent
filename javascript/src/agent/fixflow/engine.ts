@@ -3,15 +3,16 @@
  *
  * It owns the event-driven loop — kickoff -> suspend -> CI resume -> loop or finish —
  * plus the apply mechanics and attempt counting. Each concrete agent supplies a
- * {@link Spec} (triage fn, analyze fn, branch/label/check names). State lives on GitHub;
- * there is no local store. The CI-wait suspend/resume itself is owned by the `Driver`
- * (ADK long-running + the in-memory registry).
+ * {@link Spec} (triage fn, analyze fn, branch/label/check names). The CI-wait
+ * suspend/resume itself is owned by the `Driver` (ADK long-running + an injected
+ * {@link ParkStore}, memory by default or a durable backend).
  */
-import type { BaseLlm } from '@google/adk';
+import type { BaseLlm, BaseSessionService } from '@google/adk';
 
 import { parseCheckRunEvent } from '../../githubapi/client';
 import type { Author } from '../../gitrepo/repo';
 import type { Message, Notifier } from '../../notify/notify';
+import type { ParkStore } from '../setup/parkstore';
 import {
   type ApplyConfig,
   type ApplyResult,
@@ -109,6 +110,17 @@ export interface Deps {
   author?: Author;
   log?: Logger | null;
   cloneUrl?: (owner: string, repo: string) => string;
+  /**
+   * Durable suspend/resume session backend. When null the Driver falls back to an
+   * in-memory session service (today's behavior). Built once at startup and shared by
+   * every engine so a parked run resumes against the same store after a restart.
+   */
+  sessionService?: BaseSessionService | null;
+  /**
+   * Where parked-run records live. When null the Driver falls back to an in-memory store.
+   * Built once at startup alongside the session service.
+   */
+  parkStore?: ParkStore | null;
 }
 
 /** The resolved deps after defaults are applied. */
@@ -124,6 +136,8 @@ export interface ResolvedDeps {
   author: Author;
   log: Logger | null;
   cloneUrl: (owner: string, repo: string) => string;
+  sessionService: BaseSessionService | null;
+  parkStore: ParkStore | null;
 }
 
 /**
@@ -238,6 +252,14 @@ export class Engine {
     }
   }
 
+  /**
+   * Resolve this engine's parked runs whose CI never reported. The durable timeout
+   * catch-all driven by the periodic /internal/sweep; delegates to the Driver.
+   */
+  async sweepTimeouts(): Promise<void> {
+    await this.driver.sweepTimeouts();
+  }
+
   /** Best-effort notification; no-op when no notifier is configured. */
   async notify(title: string, text: string, link: string): Promise<void> {
     if (!this.d.notify) {
@@ -262,6 +284,8 @@ export function newEngine(spec: Spec, d: Deps): Engine {
     author: d.author && d.author.name !== '' ? d.author : DEFAULT_AUTHOR,
     log: d.log ?? null,
     cloneUrl: d.cloneUrl ?? defaultCloneUrl,
+    sessionService: d.sessionService ?? null,
+    parkStore: d.parkStore ?? null,
   };
   return new Engine(spec, resolved);
 }
