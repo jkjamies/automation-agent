@@ -39,7 +39,7 @@ dependencies {
     // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:
     // KSP is only needed once a @Tool-annotated agent (root/summary) lands, and the webserver
     // backs the cmd/playground web runner. (Gradle resolves the -jvm variant of this KMP lib.)
-    implementation("com.google.adk:google-adk-kotlin-core:0.2.0")
+    implementation("com.google.adk:google-adk-kotlin-core:0.4.0")
 
     // Ktor — HTTP client (githubapi, the Ollama adapter) + server (webhook).
     implementation("io.ktor:ktor-client-core:$ktorVersion")
@@ -57,8 +57,8 @@ dependencies {
 
     // --- Deferred: ADK KSP processor + webserver (mirrors adk-go's tool generation + web UI) ---
     // Activated together with the KSP plugin above when an @Tool-annotated agent lands:
-    //   implementation("com.google.adk:google-adk-kotlin-webserver:0.2.0")
-    //   ksp("com.google.adk:google-adk-kotlin-processor:0.2.0")
+    //   implementation("com.google.adk:google-adk-kotlin-webserver:0.4.0")
+    //   ksp("com.google.adk:google-adk-kotlin-processor:0.4.0")
 }
 
 kotlin {
