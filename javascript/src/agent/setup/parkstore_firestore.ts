@@ -66,10 +66,12 @@ export class FirestoreParkStore implements ParkStore {
     this.collection = collection;
   }
 
+  /** The Firestore collection holding the park records. */
   private col() {
     return this.db.collection(this.collection);
   }
 
+  /** Upsert a session's doc, best-effort clearing the pr_key from any other session still holding it. */
   async put(record: ParkRecord): Promise<void> {
     if (record.prKey !== '') {
       // One active doc per pr_key: clear it on any OTHER session still holding it, so
@@ -84,6 +86,7 @@ export class FirestoreParkStore implements ParkStore {
     await this.col().doc(record.sessionId).set(recordToDoc(record));
   }
 
+  /** Read a session's record by id, or null if its doc does not exist. */
   async get(sessionId: string): Promise<ParkRecord | null> {
     const snap = await this.col().doc(sessionId).get();
     if (!snap.exists) {
@@ -92,6 +95,7 @@ export class FirestoreParkStore implements ParkStore {
     return docToRecord(snap.data() as ParkDoc);
   }
 
+  /** Transactionally claim the run parked under a PR key, so concurrent resolvers see a single winner. */
   resolveByPrKey(prKey: string): Promise<ParkRecord | null> {
     if (prKey === '') {
       return Promise.resolve(null); // an empty key would match unparked docs (pr_key='')
@@ -113,10 +117,12 @@ export class FirestoreParkStore implements ParkStore {
     });
   }
 
+  /** Delete a session's doc. */
   async delete(sessionId: string): Promise<void> {
     await this.col().doc(sessionId).delete();
   }
 
+  /** Claim every doc parked before the cutoff (each in its own transaction) for the timeout backstop. */
   async sweep(cutoff: Date): Promise<ParkRecord[]> {
     // Collect candidates (parked + stale) from a single scan, then claim each in its own
     // transaction so a concurrent resolve cannot double-claim. parked_at is filtered in
@@ -154,10 +160,12 @@ export class FirestoreParkStore implements ParkStore {
     return out;
   }
 
-  // The sweep's per-doc atomic claim, keyed by session id. Inside the transaction it
-  // re-checks that the doc still carries the expected (stale) pr_key and is still older
-  // than the cutoff, so a resolve+re-park between the scan and the claim leaves the fresh
-  // park untouched instead of clearing it with a false timeout.
+  /**
+   * The sweep's per-doc atomic claim, keyed by session id. Inside the transaction it
+   * re-checks that the doc still carries the expected (stale) pr_key and is still older
+   * than the cutoff, so a resolve+re-park between the scan and the claim leaves the fresh
+   * park untouched instead of clearing it with a false timeout.
+   */
   private claimStaleBySession(
     sid: string,
     prKey: string,
@@ -179,11 +187,13 @@ export class FirestoreParkStore implements ParkStore {
     });
   }
 
+  /** Count docs that still hold a PR key (i.e. currently parked runs), via a server-side aggregate. */
   async parkedCount(): Promise<number> {
     const agg = await this.col().where('pr_key', '!=', '').count().get();
     return agg.data().count;
   }
 
+  /** Release the underlying Firestore client. */
   async close(): Promise<void> {
     await this.db.terminate();
   }

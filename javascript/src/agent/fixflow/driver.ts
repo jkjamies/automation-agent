@@ -431,6 +431,7 @@ export class Driver {
     throw new Error(`${fullRepo} ${this.engine.spec.name}: ${reason}`);
   }
 
+  /** Emit through the optional structured logger, tagging every line with this workflow's name. */
   private log(level: keyof Logger, msg: string, fields: Record<string, unknown>): void {
     const l = this.engine.d.log;
     if (l) {
@@ -438,10 +439,15 @@ export class Driver {
     }
   }
 
+  /** Mint a fresh ADK session id for a new park. */
   private newSessionId(): string {
     return randomUUID();
   }
 
+  /**
+   * Fold the failed attempt's CI output back into the stored run params as feedback (and force a
+   * reuse of the existing branch) so the next resume re-runs the analyze step with that context.
+   */
   private async updateForRetry(sid: string, feedback: string): Promise<void> {
     const rec = await this.store.get(sid);
     if (!rec) {
@@ -471,6 +477,11 @@ export class Driver {
     }
   }
 
+  /**
+   * (Re)arm the in-process soft timer for a parked PR: if CI never reports within timeoutMs,
+   * onTimeout frees the run. The timer is unref'd so it never keeps the process alive, and a
+   * durable /internal/sweep backstops it across restarts.
+   */
   private armTimer(key: string): void {
     const old = this.timers.get(key);
     if (old) {
@@ -488,6 +499,7 @@ export class Driver {
     this.timers.set(key, t);
   }
 
+  /** Cancel and forget the soft timer for a PR once it has been resolved or swept. */
   private stopTimer(key: string): void {
     const t = this.timers.get(key);
     if (t) {

@@ -114,18 +114,22 @@ export class FirestoreSessionService extends BaseSessionService {
     await this.db.terminate();
   }
 
+  /** Doc reference for a single session, keyed by (app, user, session id). */
   private sessionRef(app: string, user: string, sid: string): DocumentReference {
     return this.db.collection(this.sessionsColl).doc(encodeKey(app, user, sid));
   }
 
+  /** Doc reference for an app's shared state. */
   private appStateRef(app: string): DocumentReference {
     return this.db.collection(this.appStateColl).doc(encodeKey(app));
   }
 
+  /** Doc reference for a user's per-app state. */
   private userStateRef(app: string, user: string): DocumentReference {
     return this.db.collection(this.userStateColl).doc(encodeKey(app, user));
   }
 
+  /** Read a state map from a doc inside a transaction, defaulting to empty when the doc is absent. */
   private async loadStateInTx(tx: Transaction, ref: DocumentReference): Promise<StateMap> {
     const snap = await tx.get(ref);
     if (!snap.exists) {
@@ -134,6 +138,7 @@ export class FirestoreSessionService extends BaseSessionService {
     return ((snap.data() as { state?: StateMap }).state ?? {}) as StateMap;
   }
 
+  /** Read a state map from a doc (non-transactional), defaulting to empty when the doc is absent. */
   private async loadState(ref: DocumentReference): Promise<StateMap> {
     const snap = await ref.get();
     if (!snap.exists) {
@@ -142,6 +147,10 @@ export class FirestoreSessionService extends BaseSessionService {
     return ((snap.data() as { state?: StateMap }).state ?? {}) as StateMap;
   }
 
+  /**
+   * Create a session and merge any app/user state deltas in one transaction, so a session is never
+   * persisted without its state (or vice versa). Generates a session id when the request omits one.
+   */
   async createSession(req: CreateSessionRequest): Promise<Session> {
     if (!req.appName || !req.userId) {
       throw new Error(
@@ -196,6 +205,7 @@ export class FirestoreSessionService extends BaseSessionService {
     });
   }
 
+  /** Load a session with its (optionally filtered) event history, merged over app/user/session state. */
   async getSession(req: GetSessionRequest): Promise<Session | undefined> {
     const snap = await this.sessionRef(req.appName, req.userId, req.sessionId).get();
     if (!snap.exists) {
@@ -216,11 +226,13 @@ export class FirestoreSessionService extends BaseSessionService {
     });
   }
 
+  /** Read a session's events from its `events` sub-collection, ordered by sequence number. */
   private async loadEvents(sessionRef: DocumentReference): Promise<Event[]> {
     const docs = await sessionRef.collection('events').orderBy('seq', 'asc').get();
     return docs.docs.map((d) => JSON.parse((d.data() as EventDoc).blob) as Event);
   }
 
+  /** List an app's sessions (optionally scoped to a user), each without its event history. */
   async listSessions(req: ListSessionsRequest): Promise<ListSessionsResponse> {
     if (!req.appName) {
       throw new Error(`appName is required, got ${JSON.stringify(req.appName)}`);
@@ -250,6 +262,7 @@ export class FirestoreSessionService extends BaseSessionService {
     return { sessions, page: 1, limit: totalItems, totalItems, totalPages: totalItems === 0 ? 0 : 1 };
   }
 
+  /** Delete a session and its events sub-collection (Firestore does not cascade). */
   async deleteSession(req: DeleteSessionRequest): Promise<void> {
     const ref = this.sessionRef(req.appName, req.userId, req.sessionId);
     // Firestore does not cascade: delete the events sub-collection before the session doc.

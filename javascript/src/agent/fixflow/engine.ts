@@ -290,6 +290,7 @@ export function newEngine(spec: Spec, d: Deps): Engine {
   return new Engine(spec, resolved);
 }
 
+/** Build the github.com URL for a pull request from its `owner/repo` and number. */
 export function pullUrl(fullRepo: string, num: number): string {
   return `https://github.com/${fullRepo}/pull/${num}`;
 }
