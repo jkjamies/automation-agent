@@ -104,6 +104,18 @@ describe.each(backends)('$name (conformance)', ({ setup }) => {
     expect(await store.resolveByPrKey('never/parked#9')).toBeNull();
   });
 
+  it('keeps a PR key active on at most one session', async () => {
+    // Two distinct sessions park the same PR (e.g. overlapping CI triggers). The later park
+    // wins the key; the earlier session is unparked so the key is never claimable twice.
+    await store.put(record({ sessionId: 's1', prKey: 'acme/api#1' }));
+    await store.put(record({ sessionId: 's2', prKey: 'acme/api#1' }));
+    expect(await store.parkedCount()).toBe(1);
+    const claimed = await store.resolveByPrKey('acme/api#1');
+    expect(claimed?.sessionId).toBe('s2');
+    expect(await store.resolveByPrKey('acme/api#1')).toBeNull(); // single winner, no double-claim
+    expect(await store.parkedCount()).toBe(0);
+  });
+
   it('drops the stale index when a session re-parks under a new key', async () => {
     await store.put(record({ sessionId: 's1', prKey: 'acme/api#1' }));
     await store.put(record({ sessionId: 's1', prKey: 'acme/api#2' }));

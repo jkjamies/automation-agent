@@ -216,9 +216,11 @@ export class Driver {
       return;
     }
 
-    await this.updateForRetry(run.sessionId, input.outputText);
     let res: DriveResult;
     try {
+      // Persist the retry params and resume under one guard: if updateForRetry fails after the
+      // record was claimed (above), clear() frees the run so it doesn't linger claimed-but-stuck.
+      await this.updateForRetry(run.sessionId, input.outputText);
       res = await this.lr.resume(run.sessionId, run.callId, TOOL_AWAIT_CI, {
         conclusion: input.conclusion,
         output: input.outputText,
@@ -475,7 +477,11 @@ export class Driver {
       clearTimeout(old);
     }
     const t = setTimeout(() => {
-      void this.onTimeout(key);
+      // onTimeout swallows notifier rejections itself, but a store read/cleanup failure before
+      // that catch would otherwise escape this detached call as an unhandledRejection.
+      void this.onTimeout(key).catch((err) => {
+        this.log('warn', 'timeout handler failed', { pr: key, err: String(err) });
+      });
     }, this.timeoutMs);
     // Don't let the pending timer keep the process alive.
     t.unref?.();

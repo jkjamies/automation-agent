@@ -19,9 +19,16 @@ import { type ParkRecord, type ParkStore } from './parkstore';
 // node:sqlite is a recent built-in that vite's bundler (used by vitest) does not yet
 // recognize — a static `import 'node:sqlite'` gets rewritten to a bare `sqlite` and fails
 // to resolve. Loading it through a real Node require sidesteps the bundler entirely; the
-// value side is required here while the type side comes from the erased `import type`.
+// value side is required lazily (see loadDatabaseSync) while the type side comes from the
+// erased `import type`.
 const nodeRequire = createRequire(import.meta.url);
-const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite');
+
+// Resolve node:sqlite only when a SqliteParkStore is actually constructed. The built-in is
+// gated behind a Node version (and, on some versions, a flag), so a top-level require would
+// make Memory/Firestore deployments pay the cost — and fail at import — even when unused.
+function loadDatabaseSync(): typeof import('node:sqlite').DatabaseSync {
+  return (nodeRequire('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
+}
 
 interface Row {
   session_id: string;
@@ -49,6 +56,7 @@ export class SqliteParkStore implements ParkStore {
   private closed = false;
 
   constructor(dsn: string) {
+    const DatabaseSync = loadDatabaseSync();
     this.db = new DatabaseSync(dsn);
     // WAL + a busy timeout so this connection coexists with the session service's
     // separate connection on the same file without spurious "database is locked".
@@ -70,20 +78,36 @@ export class SqliteParkStore implements ParkStore {
   }
 
   put(record: ParkRecord): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO parked_runs
-           (session_id, pr_key, call_id, attempts, params, parked_at)
-         VALUES (?, ?, ?, ?, ?, ?);`,
-      )
-      .run(
-        record.sessionId,
-        record.prKey,
-        record.callId,
-        record.attempts,
-        record.params,
-        record.parkedAt === null ? null : record.parkedAt.getTime(),
-      );
+    // A pr_key is active on at most one session — mirrors the memory store, whose prKey->sessionId
+    // index can only hold one holder. If another session is already parked under this key, unpark
+    // it first so parkedCount can't over-count and resolveByPrKey/sweep can't claim it twice. Both
+    // statements run in one transaction so a concurrent process never observes the key on two rows.
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      if (record.prKey !== '') {
+        this.db
+          .prepare("UPDATE parked_runs SET pr_key = '' WHERE pr_key = ? AND session_id <> ?;")
+          .run(record.prKey, record.sessionId);
+      }
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO parked_runs
+             (session_id, pr_key, call_id, attempts, params, parked_at)
+           VALUES (?, ?, ?, ?, ?, ?);`,
+        )
+        .run(
+          record.sessionId,
+          record.prKey,
+          record.callId,
+          record.attempts,
+          record.params,
+          record.parkedAt === null ? null : record.parkedAt.getTime(),
+        );
+      this.db.exec('COMMIT;');
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
     return Promise.resolve();
   }
 
