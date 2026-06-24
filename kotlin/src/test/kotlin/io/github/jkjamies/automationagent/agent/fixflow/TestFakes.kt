@@ -1,5 +1,6 @@
 package io.github.jkjamies.automationagent.agent.fixflow
 
+import io.github.jkjamies.automationagent.githubapi.Comparison
 import io.github.jkjamies.automationagent.githubapi.Pr
 import io.github.jkjamies.automationagent.githubapi.PrInput
 import io.github.jkjamies.automationagent.gitrepo.Author
@@ -17,9 +18,12 @@ internal class FakeGitHub(
     var existing: List<Pr> = emptyList(),
     private val findErr: Throwable? = null,
     private val createErr: Throwable? = null,
+    var comparison: Comparison = Comparison(),
 ) : GitHub {
     var created: PrInput? = null
     val labeled = mutableListOf<String>()
+
+    override suspend fun compare(owner: String, repo: String, base: String, head: String): Comparison = comparison
 
     override suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr> {
         findErr?.let { throw it }

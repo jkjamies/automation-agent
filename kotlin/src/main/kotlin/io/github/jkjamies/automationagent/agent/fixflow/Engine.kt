@@ -97,6 +97,9 @@ class Engine(val spec: Spec, val deps: Deps) {
 
     internal val driver: Driver = Driver.create(this)
 
+    /** Frees this engine's parked runs whose CI never reported (the durable timeout backstop). */
+    suspend fun sweepTimeouts() = driver.sweepTimeouts()
+
     /** The PR label this engine's workflow uses. */
     fun label(): String = spec.label
 

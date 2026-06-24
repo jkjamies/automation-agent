@@ -39,6 +39,10 @@ dependencies {
     // on raw JDBC here. Loaded only when the sqlite backend is selected.
     implementation("org.xerial:sqlite-jdbc:3.53.2.0")
 
+    // Cloud Firestore client for the serverless SESSION_BACKEND=firestore park store + session
+    // service (both hand-rolled, like Go's). Used only when the firestore backend is selected.
+    implementation("com.google.cloud:google-cloud-firestore:3.43.1")
+
     // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`
     // layer needs core only — it implements the `Model` interface for the Ollama adapter and
     // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:
@@ -91,6 +95,17 @@ tasks.test {
 // Enforce an 80% line-coverage floor (see .agents/standards/testing.md).
 kover {
     reports {
+        // The Firestore backends are emulator-gated (validated under a real Firestore emulator, not
+        // in the default run) and excluded from the coverage floor — mirrors the JS port.
+        filters {
+            excludes {
+                classes(
+                    "io.github.jkjamies.automationagent.agent.setup.FirestoreParkStore",
+                    "io.github.jkjamies.automationagent.agent.setup.FirestoreSessionService",
+                    "io.github.jkjamies.automationagent.agent.setup.SessionFirestoreKt",
+                )
+            }
+        }
         verify {
             rule {
                 minBound(80)

@@ -15,6 +15,7 @@ import io.github.jkjamies.automationagent.agent.setup.ParkRecord
 import io.github.jkjamies.automationagent.agent.setup.ParkStore
 import io.github.jkjamies.automationagent.agent.setup.SequencerConfig
 import io.github.jkjamies.automationagent.agent.setup.newSequencerModel
+import io.github.jkjamies.automationagent.githubapi.Comparison
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +27,7 @@ import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration
 
 private const val TOOL_APPLY_FIX = "apply_fix"
 private const val TOOL_AWAIT_CI = "await_ci"
@@ -182,18 +184,17 @@ class Driver private constructor(private val engine: Engine) {
                 return
             }
         stopTimer(key) // the webhook won; cancel the soft timer for this run
-        val link = pullUrl(input.fullRepo, input.prNumber)
 
         if (input.conclusion == "success") {
             clear(run.sessionId)
-            engine.notify(engine.spec.successTitle, "${input.fullRepo}: ${engine.spec.name} passed CI.", link)
+            terminalNotify(TerminalOutcome.SUCCESS, engine.spec.successTitle, run, input.fullRepo, input.prNumber, "")
             return
         }
 
         // failure
         if (run.attempts >= engine.maxIter) {
             clear(run.sessionId)
-            engine.notify(engine.spec.reviewTitle, "${input.fullRepo}: after ${run.attempts} attempts the ${engine.spec.name} fix still fails CI. Please review.", link)
+            terminalNotify(TerminalOutcome.EXHAUSTED, engine.spec.reviewTitle, run, input.fullRepo, input.prNumber, input.outputText)
             return
         }
 
@@ -217,7 +218,7 @@ class Driver private constructor(private val engine: Engine) {
         clear(run.sessionId)
         val (fullRepo, pr) = splitPrKey(key)
         engine.log.log(System.Logger.Level.WARNING, "fix timed out waiting for CI workflow=${engine.spec.name} repo=$fullRepo pr=$pr")
-        engine.notify(engine.spec.reviewTitle, "$fullRepo: the ${engine.spec.name} fix timed out after ${engine.ciTimeout} waiting for CI. Please review.", pullUrl(fullRepo, pr))
+        terminalNotify(TerminalOutcome.TIMEOUT, engine.spec.reviewTitle, run, fullRepo, pr, "")
     }
 
     /**
@@ -232,12 +233,48 @@ class Driver private constructor(private val engine: Engine) {
             clear(run.sessionId)
             val (fullRepo, pr) = splitPrKey(run.prKey)
             engine.log.log(System.Logger.Level.WARNING, "fix swept; CI never reported workflow=${engine.spec.name} repo=$fullRepo pr=$pr")
-            engine.notify(engine.spec.reviewTitle, "$fullRepo: the ${engine.spec.name} fix timed out after ${engine.ciTimeout} waiting for CI. Please review.", pullUrl(fullRepo, pr))
+            terminalNotify(TerminalOutcome.TIMEOUT, engine.spec.reviewTitle, run, fullRepo, pr, "")
         }
     }
 
     /** The number of currently parked runs (test/inspection utility). */
     suspend fun parkedCount(): Int = store.parkedCount()
+
+    /**
+     * Builds and sends the status-aware summary for a finished run: the outcome framing, the original
+     * targeted findings, and what actually changed on the PR (best-effort; a decode/compare failure
+     * still sends the attempt count + framing).
+     */
+    private suspend fun terminalNotify(outcome: TerminalOutcome, title: String, run: ParkRecord, fullRepo: String, prNumber: Int, lastOutput: String) {
+        var report = ""
+        var changed = Comparison()
+        try {
+            val rp = runParamsFromJson(run.params)
+            report = rp.report
+            changed = gatherChanges(rp)
+        } catch (e: Exception) {
+            engine.log.log(System.Logger.Level.WARNING, "decode run params for summary failed workflow=${engine.spec.name} session=${run.sessionId}: ${e.message}")
+        }
+        val input =
+            SummaryInput(
+                outcome = outcome, workflow = engine.spec.name, fullRepo = fullRepo, prNumber = prNumber,
+                attempts = run.attempts, report = report, lastOutput = lastOutput,
+                timeout = formatTimeout(engine.ciTimeout), checkName = engine.spec.checkName, changed = changed,
+            )
+        engine.notify(title, buildSummaryText(input), pullUrl(fullRepo, prNumber))
+    }
+
+    /**
+     * Best-effort fetch of the PR branch's base...head diff for a terminal summary. On error returns
+     * an empty comparison so the summary still reports the attempt count and findings.
+     */
+    private suspend fun gatherChanges(rp: RunParams): Comparison =
+        try {
+            engine.deps.gh.compare(rp.owner, rp.repo, rp.base, engine.spec.branch)
+        } catch (e: Exception) {
+            engine.log.log(System.Logger.Level.WARNING, "compare for summary failed workflow=${engine.spec.name} repo=${rp.fullRepo}: ${e.message}")
+            Comparison()
+        }
 
     // --- internals ---------------------------------------------------------
 
@@ -345,3 +382,14 @@ internal fun splitPrKey(key: String): Pair<String, Int> {
 
 internal fun prNumberFrom(resp: Map<String, Any?>?): Int =
     resp?.get("pr_number")?.toString()?.toDoubleOrNull()?.toInt() ?: 0
+
+/** Formats a duration as a compact human string (e.g. `90m`, `1h`, `30s`) for the timeout summary. */
+internal fun formatTimeout(d: Duration): String {
+    val ms = d.inWholeMilliseconds
+    return when {
+        ms > 0 && ms % 3_600_000L == 0L -> "${ms / 3_600_000L}h"
+        ms > 0 && ms % 60_000L == 0L -> "${ms / 60_000L}m"
+        ms > 0 && ms % 1_000L == 0L -> "${ms / 1_000L}s"
+        else -> "${ms}ms"
+    }
+}

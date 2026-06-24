@@ -712,6 +712,17 @@ the firestore emulator for local tests, and the pending-work list — lives in
 - Model in prod → likely `LLM_PROVIDER=gemini` (Vertex) unless we provision a GPU VM for
   Ollama. Config flag, no code change.
 
+**Private ingress.** For a deployment that must stay off the public internet, the service runs
+**private** (`ingress=internal-and-cloud-load-balancing`) behind an Internal Application Load
+Balancer, with a **self-hosted API gateway** on the operator's own network as the single front
+door. The gateway is the IAM-authenticated caller — it enforces the webhook edge policies (HMAC,
+GitHub IP allowlist, replay window, rate-limit) and presents a Google OIDC token to `/internal/*`
+(`INTERNAL_AUTH=oidc`), so a private Cloud Run still receives webhook-originated traffic and the
+shared bearer goes away. The HTTP contract is identical across ports, so the gateway config is
+port-agnostic. Architecture detail in
+[`deployment.md` § Private ingress](deployment.md#private-ingress); rollout intent in
+[`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+
 ---
 
 ## 14. Phased roadmap

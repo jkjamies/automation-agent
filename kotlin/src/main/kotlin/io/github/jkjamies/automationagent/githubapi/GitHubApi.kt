@@ -75,6 +75,12 @@ data class CheckResult(
     val completedAt: Instant = Instant.EPOCH,
 )
 
+/** Summarizes what changed between two refs (base...head). */
+data class Comparison(val totalCommits: Int = 0, val files: List<ChangedFile> = emptyList())
+
+/** One file in a [Comparison]. */
+data class ChangedFile(val path: String, val status: String = "", val additions: Int = 0, val deletions: Int = 0)
+
 /** The parsed essentials of a GitHub check_run webhook event. */
 data class CheckEvent(
     val action: String, // created | completed | rerequested
@@ -173,6 +179,20 @@ class Client(
             outputText = cr.output.text(),
             startedAt = parseInstant(cr.startedAt),
             completedAt = parseInstant(cr.completedAt),
+        )
+    }
+
+    /**
+     * Returns the commits and files changed between base and head (base...head). It is how a
+     * terminal summary reports what the agent actually did across its attempts, since the per-attempt
+     * work product lives only in the PR, not the session.
+     */
+    suspend fun compare(owner: String, repo: String, base: String, head: String): Comparison {
+        val resp = http.get(url("repos/$owner/$repo/compare/$base...$head")).orThrow()
+        val dto = resp.body<CompareDto>()
+        return Comparison(
+            totalCommits = dto.totalCommits,
+            files = dto.files.map { ChangedFile(path = it.filename.orEmpty(), status = it.status.orEmpty(), additions = it.additions, deletions = it.deletions) },
         )
     }
 
@@ -344,3 +364,17 @@ private data class CheckRunEventDto(
 
 @Serializable
 private data class RepoDto(@SerialName("full_name") val fullName: String? = null)
+
+@Serializable
+private data class CompareDto(
+    @SerialName("total_commits") val totalCommits: Int = 0,
+    val files: List<CompareFileDto> = emptyList(),
+)
+
+@Serializable
+private data class CompareFileDto(
+    val filename: String? = null,
+    val status: String? = null,
+    val additions: Int = 0,
+    val deletions: Int = 0,
+)

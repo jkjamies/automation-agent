@@ -43,13 +43,6 @@ import java.util.UUID
 
 private const val TEMP_PREFIX = "temp:" // request-scoped state keys, never persisted
 
-// The SDK's own Event Json, reached reflectively because it is `internal` (JVM-public). Pinned to
-// adk-kotlin 0.4.0; if the SDK relocates it this fails fast at startup, which is the right signal.
-private val adkEventJson: Json = run {
-    val method = Class.forName("com.google.adk.kt.serialization.SerializersKt").getMethod("getAdkJson")
-    method.invoke(null) as Json
-}
-
 /** A durable ADK [SessionService] backed by a local SQLite file via raw JDBC. */
 class SqliteSessionService(dsn: String) : SessionService {
     private val mutex = Mutex()

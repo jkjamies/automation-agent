@@ -23,6 +23,5 @@ fun newSessionService(cfg: Config): SessionService =
         // Absolute path so the session service and the park store open the very same file
         // regardless of the process working directory.
         SessionBackend.SQLITE -> SqliteSessionService(File(cfg.sqliteDsn).absolutePath)
-        SessionBackend.FIRESTORE ->
-            throw NotImplementedError("SESSION_BACKEND=firestore session service is not yet implemented in the Kotlin port")
+        SessionBackend.FIRESTORE -> FirestoreSessionService(cfg.firestoreProject, "${cfg.firestoreCollection}_sessions")
     }

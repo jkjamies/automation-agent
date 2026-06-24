@@ -14,6 +14,7 @@
 | You want to… | Read |
 |---|---|
 | Understand the cloud architecture + run the GCP setup | [`.agents/standards/deployment.md`](.agents/standards/deployment.md) |
+| Understand the **private-ingress** architecture (gateway → private Cloud Run) | [`.agents/standards/deployment.md` § Private ingress](.agents/standards/deployment.md#private-ingress) |
 | Run the agent on your machine (env vars, run modes, container) | [`.agents/standards/local-development.md`](.agents/standards/local-development.md) |
 | Run the tests (incl. the Firestore emulator) | [`.agents/standards/testing.md`](.agents/standards/testing.md) |
 | Drive the lint/coverage fixers from CI | [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md) |
@@ -45,5 +46,44 @@ The detailed, copy-paste steps for each item are in
 - [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
       current per-port drift is tracked in `specs/parity-status.md`.
 - [ ] **OIDC instead of a shared bearer** for `/internal/*`.
+- [ ] **Private ingress** — front the service with a self-hosted API gateway and make Cloud Run
+      private so each operator deploys an instance reachable only on their own network. Phased
+      rollout below in [Private ingress — what needs to be done](#private-ingress--what-needs-to-be-done).
 
 Full rationale and detail for every item: [`.agents/standards/deployment.md`](.agents/standards/deployment.md).
+
+## Private ingress — what needs to be done
+
+> The target architecture (self-hosted API gateway in front of a **private** Cloud Run, OIDC in
+> place of the shared bearer, each operator on their own network) is documented in
+> [`.agents/standards/deployment.md` § Private ingress](.agents/standards/deployment.md#private-ingress).
+> Nothing here is implemented yet. The fuller design — threat model, the per-item safety
+> checklist, alternatives considered, and the concrete gateway-product selection — lives in the
+> local spec `specs/20260624-private-ingress-gravitee-gateway.md`. Defaults
+> (`ingress=all`, `INTERNAL_AUTH=bearer`, in-process cron) reproduce today's public behavior, so
+> this is entirely opt-in.
+
+Phased so each step is independently testable:
+
+- [ ] **Phase 0 — private-ingress spike.** Stand up one Cloud Run with
+      `ingress=internal-and-cloud-load-balancing` + Internal ALB + serverless NEG; prove a curl
+      with an OIDC token works and the public URL is dead. *(No app change.)*
+- [ ] **Phase 1 — app auth.** Add `INTERNAL_AUTH` (`bearer`|`oidc`|`both`) + an OIDC verifier
+      (signature + `aud` = service URL + allowed SA email) and the `SCHEDULER=external` flag in
+      Go; switch Cloud Scheduler to OIDC; mirror to `python/`, `kotlin/`, `javascript/`. Retires
+      `INTERNAL_TOKEN` and folds in the existing OIDC + scheduler-disable TODOs above.
+- [ ] **Phase 2 — gateway.** Deploy the self-hosted API gateway on the operator network;
+      implement the HMAC / GitHub IP-allowlist / replay-window / rate-limit / size-cap policies +
+      OIDC mint + mTLS; route `/webhooks/*` (and optionally cron) through it.
+- [ ] **Phase 3 — hardening.** VPC Service Controls perimeter around Cloud Run + Firestore +
+      Secret Manager; IAM `roles/run.invoker` scoped to **only** the gateway + Scheduler SAs (no
+      `allUsers`/`allAuthenticatedUsers`); mTLS in transit; audit-log retention; and (GHE
+      Cloud / GitHub public) the hardened public listener + Cloud Armor/WAF.
+- [ ] **Phase 4 — docs + IaC.** Fold the adopted topology into `.agents/standards/deployment.md`,
+      this file, and `architecture-design.md` §13; add Terraform for the private topology (ties
+      into the IaC TODO above).
+- [ ] **CodeRabbit review before any commit** (repo hard rule).
+
+**Rollback** is pure config/infra: set Cloud Run `ingress=all`, restore `INTERNAL_AUTH=bearer`,
+remove the gateway + Internal ALB, point GitHub webhooks back at the Cloud Run URL, and re-enable
+the in-process or Scheduler cron. No data migration; sessions/park store are unaffected.

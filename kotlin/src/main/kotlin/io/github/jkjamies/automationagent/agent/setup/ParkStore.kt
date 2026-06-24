@@ -78,8 +78,11 @@ interface ParkStore {
     /** How many records are currently parked (PR-key-indexed). */
     suspend fun parkedCount(): Int
 
-    /** Release backing resources (durable backends). Default no-op; called on clean shutdown. */
-    suspend fun close()
+    /**
+     * Releases backing resources (durable backends). Not `suspend`: it is a blocking
+     * connection/client close called once on clean shutdown, so it needs no coroutine bridge.
+     */
+    fun close()
 }
 
 /**
@@ -143,7 +146,7 @@ class MemoryParkStore : ParkStore {
 
     override suspend fun parkedCount(): Int = synchronized(lock) { index.size }
 
-    override suspend fun close() {
+    override fun close() {
         // No backing resources for the in-memory store.
     }
 }
@@ -154,6 +157,5 @@ fun newParkStore(cfg: Config): ParkStore =
         SessionBackend.MEMORY -> MemoryParkStore()
         // Absolute path so the park store and the session service open the very same file.
         SessionBackend.SQLITE -> SqliteParkStore(File(cfg.sqliteDsn).absolutePath)
-        SessionBackend.FIRESTORE ->
-            throw NotImplementedError("SESSION_BACKEND=firestore park store is not yet implemented in the Kotlin port")
+        SessionBackend.FIRESTORE -> FirestoreParkStore(cfg.firestoreProject, "${cfg.firestoreCollection}_parked_runs")
     }

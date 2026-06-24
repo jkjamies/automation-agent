@@ -155,7 +155,9 @@ class SqliteParkStore(dsn: String) : ParkStore {
         }
     }
 
-    override suspend fun close() = tx { c -> c.close() }
+    override fun close() {
+        conn.close()
+    }
 
     private fun rowToRecord(rs: java.sql.ResultSet): ParkRecord {
         val parkedMs = rs.getLong("parked_at")

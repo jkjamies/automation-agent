@@ -178,4 +178,100 @@ class WebhookTest : BehaviorSpec({
             }
         }
     }
+
+    Given("internal routes with no token configured") {
+        When("POSTing to them with a bearer") {
+            Then("they are disabled (404) and nothing is dispatched") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest) }
+                    for (path in listOf("/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep")) {
+                        client.post(path) { header("Authorization", "Bearer x") }.status shouldBe HttpStatusCode.NotFound
+                    }
+                }
+                c.env shouldBe null
+            }
+        }
+    }
+
+    Given("internal routes with a token") {
+        When("POSTing without a bearer or with a wrong token") {
+            Then("they return 401") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest, internalToken = "sekret") }
+                    client.post("/internal/cron/daily").status shouldBe HttpStatusCode.Unauthorized
+                    client.post("/internal/sweep") {
+                        header("Authorization", "Bearer wrong")
+                    }.status shouldBe HttpStatusCode.Unauthorized
+                }
+                c.env shouldBe null
+            }
+        }
+
+        When("POSTing the daily cron with a valid bearer") {
+            Then("it accepts and emits a CRON_DAILY envelope") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest, internalToken = "sekret") }
+                    client.post("/internal/cron/daily") {
+                        header("Authorization", "Bearer sekret")
+                    }.status shouldBe HttpStatusCode.Accepted
+                }
+                val env = c.env.shouldNotBeNull()
+                env.kind shouldBe Kind.CRON_DAILY
+                env.source shouldBe "internal:/cron/daily"
+            }
+        }
+
+        When("POSTing the weekly cron with a valid bearer") {
+            Then("it accepts and emits a CRON_WEEKLY envelope") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest, internalToken = "sekret") }
+                    client.post("/internal/cron/weekly") {
+                        header("Authorization", "Bearer sekret")
+                    }.status shouldBe HttpStatusCode.Accepted
+                }
+                c.env.shouldNotBeNull().kind shouldBe Kind.CRON_WEEKLY
+            }
+        }
+    }
+
+    Given("the internal sweep endpoint") {
+        When("the sweep succeeds") {
+            Then("it returns 200 and runs the handler") {
+                var swept = false
+                testApplication {
+                    application { webhookRoutes(Capture().ingest, internalToken = "sekret", sweep = SweepFunc { swept = true }) }
+                    client.post("/internal/sweep") {
+                        header("Authorization", "Bearer sekret")
+                    }.status shouldBe HttpStatusCode.OK
+                }
+                swept shouldBe true
+            }
+        }
+
+        When("the sweep handler throws") {
+            Then("it returns 500") {
+                testApplication {
+                    application { webhookRoutes(Capture().ingest, internalToken = "sekret", sweep = SweepFunc { throw RuntimeException("boom") }) }
+                    client.post("/internal/sweep") {
+                        header("Authorization", "Bearer sekret")
+                    }.status shouldBe HttpStatusCode.InternalServerError
+                }
+            }
+        }
+
+        When("no sweep handler is configured") {
+            Then("it returns 501") {
+                testApplication {
+                    application { webhookRoutes(Capture().ingest, internalToken = "sekret") }
+                    client.post("/internal/sweep") {
+                        header("Authorization", "Bearer sekret")
+                    }.status shouldBe HttpStatusCode.NotImplemented
+                }
+            }
+        }
+    }
 })
