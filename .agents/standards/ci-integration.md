@@ -210,10 +210,18 @@ jobs:
 The check's `check_run` event is delivered to `POST /webhooks/github` (verified with
 `GITHUB_WEBHOOK_SECRET` via the `X-Hub-Signature-256` HMAC). The agent then:
 
-- **success** → posts a success summary to Slack/Teams,
+- **success** → posts a status-aware success summary to Slack/Teams (commits + changed files,
+  via `githubapi.Compare`, plus the original findings),
 - **failure & attempts < `MAX_ITERATIONS` (3)** → re-analyzes with the check output as
   feedback and pushes onto the same branch,
 - **failure & attempts ≥ 3** → posts "needs human review" + the PR link.
+
+If the check **never reports** (a missed or never-arriving webhook), the run is freed after
+`CI_TIMEOUT` (default 90m) — by an in-process per-run timer on a warm instance, and by the
+durable `POST /internal/sweep` catch-all (Cloud Scheduler-driven) on the durable backends, so
+a restart can't leave a run waiting forever. Either way the agent posts a timeout
+"needs human review" + PR link. (Go reference; see
+`.agents/standards/architecture-design.md` §8 and `DEPLOYMENT.md`.)
 
 Configure the webhook on each repo (Settings → Webhooks): payload URL
 `https://<agent-host>/webhooks/github`, content type `application/json`, secret =

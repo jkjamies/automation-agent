@@ -1,8 +1,11 @@
 # Automation Agent — Architecture & Build Plan
 
 > Status: **Implemented.** This is the living design doc; the design below is built —
-> Phases 1–5 are implemented and `make ci` is green.
-> Last updated: 2026-06-21.
+> Phases 1–5 are implemented and `make ci` is green. The CI feedback loop now runs on
+> **durable sessions** (§8): one `SESSION_BACKEND` env selects an in-memory (default),
+> sqlite (durable local), or firestore (cloud) backend, so a parked run survives a process
+> restart — the change that unlocks Cloud Run scale-to-zero. Per-port drift is tracked in
+> `specs/parity-status.md`. Last updated: 2026-06-23.
 
 A single long-running Go service that ingests events from many sources, routes every
 ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
@@ -80,7 +83,7 @@ future human interaction or additional hooks — hence the root-agent indirectio
               │  Parallel[fetch×N]  │   │   apply_fix(git/PR)   │  │   apply_fix(git/PR)    │
               │   → summarize(LLM)  │   │   → await_ci (suspend)│  │   → await_ci (suspend) │
               │   → notify          │   │   → resume (webhook / │  │   → resume (webhook /  │
-              └─────────┬──────────┘   │      CI_TIMEOUT timer) │  │      CI_TIMEOUT timer) │
+              └─────────┬──────────┘   │      timer / sweep)    │  │      timer / sweep)    │
                         ▼              │   → notify(summary)    │  │   → notify(summary)    │
                   Slack / Teams        └───────────┬───────────┘  └───────────┬───────────┘
                                                    ▼                          ▼
@@ -112,7 +115,8 @@ everything in-process.
 | Git working tree | `github.com/go-git/go-git/v5` | clone/branch/commit/push (pure Go) |
 | Arch tests | `github.com/matthewmcnew/archtest` or hand-rolled `go/packages` | import-boundary assertions |
 | Lint | `golangci-lint` (incl. `depguard`) | quality gate |
-| In-flight state | *(in-memory parked-run registry)* | in-flight runs (PR key → session/call id + attempt count) live only in memory; a per-run `CI_TIMEOUT` timer bounds each wait. GitHub holds the durable PR artifacts (PR + label + check/SHA) but is **not** consulted to recover in-flight state. A process restart strands parked runs (accepted trade-off; crash recovery is out of scope). A DB is a scale-*out* / crash-recovery concern, neither of which is in scope today |
+| Suspend/resume state | adk `session.Service` + `setup.ParkStore` (both `SESSION_BACKEND`-switched) | the parked fix loop's state — the ADK suspend/resume event history *and* the park record (PR key → session/call id, attempt count, serialized run params) — is held by two provider-switched stores: `memory` (default, in-process), `sqlite` (local file), or `firestore` (cloud). A per-run `CI_TIMEOUT` timer fast-paths each wait; the `ParkStore` sweep is the durable catch-all. With a durable backend a process restart **resumes** parked runs cleanly (the change that unlocks Cloud Run scale-to-zero); `memory` keeps the old non-durable behavior. Both deps are confined to `internal/agent/setup` (ARCH-enforced) |
+| Durable-session SDKs | `github.com/glebarez/sqlite`, `gorm.io/gorm`, `cloud.google.com/go/firestore` | back the sqlite + firestore session/park stores; **setup-only** (ARCH-enforced) |
 
 ---
 
@@ -214,7 +218,13 @@ automation-agent/
     │   │   ├── gemini.go          # gemini factory
     │   │   ├── prompt.go          # embed.FS prompt loader -> GetPrompt("summary/summarize")
     │   │   ├── events.go          # helpers to emit/parse session.Event + text
-    │   │   ├── runner.go          # build adk Runner + session service
+    │   │   ├── runner.go          # build adk Runner + (ephemeral) session service
+    │   │   ├── session.go         # NewSessionService: SESSION_BACKEND switch (memory|sqlite|firestore)
+    │   │   ├── session_firestore.go # custom firestore-backed session.Service (cloud)
+    │   │   ├── parkstore.go       # ParkStore interface + memory impl (the park record)
+    │   │   ├── parkstore_sqlite.go    # gorm/sqlite ParkStore (durable local)
+    │   │   ├── parkstore_firestore.go # firestore ParkStore (cloud)
+    │   │   ├── longrun.go         # LongRunDriver: ADK suspend/resume over a session.Service
     │   │   └── AGENTS.md
     │   ├── root/
     │   │   ├── agents_setup.go    # BuildRootAgent(deps) -> agent.Agent
@@ -237,8 +247,8 @@ automation-agent/
     │   │   └── AGENTS.md
     │   └── fixflow/               # generic fix engine shared by lint + coverage
     │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
-    │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout)
-    │       ├── registry.go        # in-memory parked-run registry (the in-flight record)
+    │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts) over a ParkStore
+    │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
     │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
     │       ├── analyze.go         # analyze step
     │       ├── explore.go         # repo exploration helper
@@ -267,9 +277,14 @@ automation-agent/
         └── AGENTS.md
 ```
 
-In-flight suspend/resume state lives in the `fixflow` package's **in-memory parked-run
-registry** (`registry.go`) — there is no separate recovery package and no PR-scan ticker.
-Resume is webhook-driven, with a per-run `CI_TIMEOUT` timer as the catch-all.
+Suspend/resume state is split across two `internal/agent/setup`-owned stores, both selected
+by one `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`): the ADK `session.Service`
+(suspend/resume event history) and the `setup.ParkStore` (the park record — `prKey→sessionID`,
+attempts, serialized run params). The `fixflow` Driver holds a `ParkStore`, not an in-process
+map. Resume is webhook-driven (fast path), with a per-run `CI_TIMEOUT` timer **and** the
+durable `ParkStore` sweep (driven by Cloud Scheduler via `/internal/sweep`) as catch-alls.
+There is no PR-scan ticker over labeled PRs. With a durable backend a process restart resumes
+parked runs; `memory` (default) keeps the old non-durable behavior.
 
 ---
 
@@ -350,60 +365,92 @@ uses branch `automation-agent/test-coverage`, label `automation-agent-coverage`,
 
 ## 8. Suspend / resume design (CI feedback loop)
 
-> **This section will be refined with the detailed notes from the prior discussion.**
-> The structure below is the scaffold those notes drop into.
+> **Durable sessions.** One `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`) selects
+> two provider-switched stores; `memory` is the zero-dependency default, `firestore` is the
+> prod path. Per-port drift is tracked in `specs/parity-status.md`.
 
 ### The hard constraint: CI takes 20–40 minutes (often more with retries)
 
 A fix can't be confirmed for 20–40 min (×3 iterations → up to ~2 h wall-clock), so the
-workflow can't sit in a blocked goroutine. We don't run a local durable database either —
-in-flight runs live **only in an in-memory parked-run registry**. GitHub holds the durable
-PR artifacts:
+workflow can't sit in a blocked goroutine — the run **suspends** and **resumes** on the CI
+webhook. Where that suspended state lives is a config choice, not a hardcoded "in-memory only":
 
-- the **PR** exists on GitHub (number, branch, head SHA),
-- the **check conclusion** exists on GitHub (the agent verify check),
-- the **label** marks it as ours,
-- the current findings are re-derivable by reading the check output / re-running the gate.
+**One env, two provider-switched stores (both confined to `internal/agent/setup`):**
 
-But GitHub is **not** consulted to recover in-flight state. When a fix applies and parks on
-`await_ci`, the Driver records a `ParkedRun` (session id + call id + attempt count) in the
-registry, keyed by PR, and arms a per-run `CI_TIMEOUT` timer. Consequences:
+- a durable ADK **`session.Service`** — the suspend/resume *event history* the agent needs to
+  continue a parked run, and
+- a custom **`setup.ParkStore`** — the *park record*: `prKey→sessionID`, attempt count, the
+  parked long-running call id, and the run's serialized params (so a retry — or a restart —
+  can reconstruct exactly what to apply). `Params` is an opaque blob the store never
+  interprets, which keeps it free of fixflow types and lets one interface back all three
+  backends.
 
-1. **No local DB, no file, no volume, no retention janitor, nothing to clean up manually.**
-   Matches the "lightweight" goal.
-2. **In-flight state is the registry — and it is non-durable.** A process restart loses the
-   registry and **strands** any parked runs: those PRs are abandoned. This is an accepted
-   trade-off; crash recovery is explicitly **out of scope**.
-3. **Resume is webhook-driven, not a scan.** A GitHub `check_run` webhook looks the run up by
-   PR key and resolves it; there is no periodic re-scan of labeled PRs. The per-run
-   `CI_TIMEOUT` timer is the catch-all if CI never reports.
-4. **Attempt count lives in the registry.** Each `ParkedRun` carries its `Attempts`; it is
+`SESSION_BACKEND` picks the pair:
+
+| `SESSION_BACKEND` | session.Service | ParkStore | Durable across restart? | Use |
+|---|---|---|---|---|
+| `memory` (default) | in-process | in-process map | **no** | tests, ephemeral local runs |
+| `sqlite` | adk `session/database` (file) | gorm/sqlite (same file) | **yes** | durable local runs |
+| `firestore` | custom firestore `session.Service` | firestore | **yes** | cloud (scale-to-zero) |
+
+GitHub still holds the durable PR artifacts (PR number/branch/head SHA, the check conclusion,
+the `automation-agent` label) and the findings remain re-derivable from the check output — but
+GitHub is **not** scanned to recover in-flight state. Instead, when a fix applies and parks on
+`await_ci`, the Driver writes a park record to the `ParkStore` (keyed by sessionID, indexed by
+PR key) and arms a per-run `CI_TIMEOUT` timer. Consequences:
+
+1. **The `memory` default keeps it lightweight** — no DB, no file, no volume, nothing to clean
+   up — exactly the old behavior, for tests and throwaway local runs.
+2. **A durable backend survives a restart.** With `sqlite` (local) or `firestore` (prod) the
+   park record and session history outlive the process, so a restart **resumes** in-flight
+   runs cleanly rather than stranding them. **This is what unlocks Cloud Run scale-to-zero**:
+   the instance can be torn down between events and rehydrate the parked run when CI reports.
+3. **Session IDs are UUIDs.** A shared/durable store is accessed across restarts (and
+   potentially instances), so a process-local counter would collide or overwrite persisted
+   runs — kickoff mints a `uuid.NewString()`.
+4. **Resume is webhook-driven, not a scan.** A GitHub `check_run` webhook looks the run up by
+   PR key and resolves it; there is no periodic re-scan of labeled PRs.
+5. **Attempt count lives in the park record.** Each record carries its `Attempts`; it is
    **not** derived from distinct agent-pushed GitHub SHAs.
-5. **Idempotency via atomic resolve.** Exactly one of {webhook, timeout timer} resolves a run:
-   `Resolve` atomically removes the registry entry, so late or duplicate deliveries (and a
-   timer firing the same instant a webhook lands) find nothing and no-op — no dedupe table.
-6. **Timeout is a real timer, not a derived timestamp.** Each parked run arms a `time.Timer`
-   for `CI_TIMEOUT`; on fire, `onTimeout` claims the run and posts "needs human review" + PR
-   link.
+6. **Idempotency via an atomic single-winner claim.** `ResolveByPRKey` (and `Sweep`) clears
+   the PR index atomically in every backend — a mutex (memory), a conditional `UPDATE … WHERE
+   pr_key = ?` CAS (sqlite), or a transaction (firestore) — so of N concurrent claimers
+   (a late/duplicate webhook, or a timer racing a webhook) exactly one wins and the rest no-op.
+   No dedupe table. The per-run record is *retained* on resolve (a retry still needs its
+   params); terminal `clear` is what deletes it.
+7. **Eager cleanup so durable backends don't leak.** Terminal `clear` deletes the park record
+   **and** calls `LongRunDriver.DeleteSession`, removing the ADK session too — otherwise a
+   durable backend would accumulate completed sessions.
+8. **Two timeout layers.** A per-run `time.Timer` (`CI_TIMEOUT`, default 90m) is the fast,
+   in-process catch-all; it is lost on restart, so the durable `ParkStore.Sweep` (driven by
+   Cloud Scheduler via `/internal/sweep`) is the restart-safe catch-all. The atomic claim
+   makes a webhook racing either timer safe.
 
 ### Flow
 
 ```
-lint payload ──▶ root ──▶ fixflow Driver (Sequencer-driven fixer)
+lint payload ──▶ root ──▶ fixflow Driver (Sequencer-driven fixer, holds a ParkStore)
    │
+   │  Kickoff: mint sessionID (UUID); Put run params in the ParkStore
    │  attempt i:
-   │   1. apply_fix(code): analyze + go-git clone/branch/edit/commit/push; go-github open/update PR
+   │   1. apply_fix(code): load run params from ParkStore by sessionID (never model-supplied);
+   │                       analyze + go-git clone/branch/edit/commit/push; go-github open/update PR
    │   2. await_ci       : LONG-RUNNING tool (IsLongRunning()=true) — returns "pending" now,
-   │                       run SUSPENDS; Driver records a ParkedRun {session, call, attempts}
-   │                       in the in-memory registry (keyed by PR) and arms a CI_TIMEOUT timer
+   │                       run SUSPENDS; Driver parks the record {sessionID, prKey, callID,
+   │                       attempts, params} in the ParkStore and arms a CI_TIMEOUT timer.
+   │                       The session.Service holds the suspend/resume event history.
+   │                       (sqlite/firestore: both persist → a restart can resume.)
    │
    ▼ (20–40+ min later)
-/webhooks/github (check_run) ──▶ Driver.Resume: Resolve the parked run by PR key
-                  ┌─ CI success ─▶ finish: post success summary (Slack/Teams) + PR link
+/webhooks/github (check_run) ──▶ Driver.Resume: ResolveByPRKey atomically claims the run
+                  ┌─ CI success ─▶ finish: post success summary (Slack/Teams) + PR link; clear
                   ├─ CI failure & attempts < MAX_ITERATIONS ─▶ resume the run: apply_fix again WITH ci feedback
-                  └─ CI failure & attempts == MAX_ITERATIONS ─▶ finish: "needs human review" + PR link
+                  └─ CI failure & attempts == MAX_ITERATIONS ─▶ finish: "needs human review" + PR link; clear
    │
-   └─ (if CI never reports) CI_TIMEOUT timer ──▶ onTimeout: free the run, "needs human review" + PR link
+   ├─ (CI never reports, warm)    CI_TIMEOUT timer ─▶ onTimeout: claim, notify "needs review", clear
+   └─ (CI never reports, restarted) POST /internal/sweep ─▶ ParkStore.Sweep: claim stale, notify, clear
+
+   clear = ParkStore.Delete + LongRunDriver.DeleteSession (no leaked sessions on durable backends)
 ```
 
 ### CI signal — a dedicated, label-triggered agent check (GitHub)
@@ -436,31 +483,48 @@ jobs:
 fresh conclusion each loop with no extra orchestration. We listen only for *this check's
 name* (`AGENT_CHECK_NAME`) completing; the repo's other checks are ignored.
 
-### Two ingress endpoints
+### Ingress endpoints
 
-- `POST /webhooks/lint` — **kickoff.** Platform-agnostic lint JSON. May be posted by a
-  scheduled GitHub Actions lint job (e.g. Mondays 09:00) or any other source. Starts the
-  lint-fixer. (This replaces an internal Monday cron for lint — the schedule lives on the
-  CI side.)
-- `POST /webhooks/github` — **resume.** GitHub `check_run` events; verify
-  `X-Hub-Signature-256` HMAC against `GITHUB_WEBHOOK_SECRET`.
+**Webhook ingress (HMAC, `GITHUB_WEBHOOK_SECRET`):**
+
+- `POST /webhooks/lint` / `POST /webhooks/coverage` — **kickoff.** Platform-agnostic lint /
+  coverage JSON. May be posted by a scheduled GitHub Actions job or any other source. Starts
+  the fixer. (This replaces an internal cron for the kickoff — the schedule lives CI-side.)
+- `POST /webhooks/github` — **resume.** GitHub `check_run` events.
+
+**Cloud Scheduler ingress (Bearer token, `INTERNAL_TOKEN`; disabled → 404 when unset):**
+
+- `POST /internal/cron/{daily,weekly}` — externalize the commit-digest schedules so the
+  schedule lives GCP-side and the instance can scale to zero between fires. They emit the
+  same envelopes the in-process scheduler would.
+- `POST /internal/sweep` — the **durable timeout catch-all**: drives `ParkStore.Sweep` /
+  `Engine.SweepTimeouts`, resolving every parked run whose CI never reported within
+  `CI_TIMEOUT`. This is the restart-safe counterpart to the in-process per-run timer.
+
+> **Caution:** the in-process cron (`CRON_DAILY`/`CRON_WEEKLY`) still exists. If Cloud
+> Scheduler also fires `/internal/cron/*`, a warm instance double-fires the digests. Pick one
+> (see [`DEPLOYMENT.md`](../../DEPLOYMENT.md) for the ops detail and the pending
+> scheduler-disable flag).
 
 ### Correlation strategy (same-PR retry)
 
 Retries push new commits to the **same** branch/PR (confirmed). The **PR key**
-(`fullRepo#pr_number`) is the stable correlation key the registry is keyed on:
+(`fullRepo#pr_number`) is the per-park resume index the `ParkStore` maintains over the
+sessionID-keyed record:
 
 - Match an incoming `check_run` to a parked run by **PR key** (built from the event's repo +
   `pull_requests[].number`).
-- `Resolve` atomically claims the run, so a late or duplicate delivery — or a timeout timer
-  firing the same instant — finds nothing and no-ops.
+- `ResolveByPRKey` atomically claims the run (clears the PR index), so a late or duplicate
+  delivery — or a timeout timer firing the same instant — finds nothing and no-ops. The
+  per-run record is retained so a retry can still read its params; terminal `clear` deletes it.
 
-We persist **nothing durably**. In-flight identity (session id, call id, attempt count) lives
-in the **in-memory parked-run registry**; the only durable bit on GitHub is the PR itself
-plus its label/check/SHA. A restart drops the registry and strands parked runs (accepted —
-crash recovery is out of scope).
+What persists depends on `SESSION_BACKEND`: with `memory` (default) nothing persists across a
+restart (old behavior); with `sqlite`/`firestore` the park record and the ADK session history
+both persist, so a restart resumes the run. Session identity is a **UUID** (a process-local
+counter would collide once the store is shared/durable). The PR itself plus its label/check/SHA
+remain the durable artifacts on GitHub.
 
-**Attempt count: tracked in the registry.** Each `ParkedRun` carries its `Attempts`; the
+**Attempt count: tracked in the park record.** Each record carries its `Attempts`; the
 Driver increments it on each retry and compares against `MAX_ITERATIONS`. It is **not**
 derived from GitHub SHAs. The give-up decision:
 
@@ -472,19 +536,25 @@ derived from GitHub SHAs. The give-up decision:
 Because the loop is bounded by `MAX_ITERATIONS` and the count lives with the run, it can
 never run away.
 
-### Two safety layers — webhook + per-run timeout (no scan, no ticker)
+### Safety layers — webhook + per-run timer + durable sweep (no PR-scan ticker)
 
 There is **no** reconcile loop and **no** periodic re-scan of labeled PRs. Resume rests on
-two layers:
+three layers, all funnelling through the `ParkStore`'s atomic single-winner claim:
 
 - **Webhook (fast path).** A GitHub `check_run` event resolves the parked run by PR key the
   moment CI finishes.
-- **Per-run `CI_TIMEOUT` timer (catch-all).** When a run parks, it arms a `time.Timer` for
-  `CI_TIMEOUT` (default 90m). If CI never reports — a missed or never-arriving webhook — the
-  timer fires `onTimeout`, frees the run, and posts "needs human review" + PR link. Exactly
-  one of {webhook, timer} wins, via the registry's atomic `Resolve`.
-- **No retention/deletion step** — resolved runs are removed from the registry on resolve. A
-  finished PR is merged or closed by the normal review workflow; that *is* the cleanup.
+- **Per-run `CI_TIMEOUT` timer (warm catch-all).** When a run parks it arms a `time.Timer`
+  for `CI_TIMEOUT` (default 90m). If CI never reports, `onTimeout` claims the run and posts
+  "needs human review" + PR link. The timer is in-process, so a restart loses it — hence:
+- **`ParkStore.Sweep` (durable catch-all).** Cloud Scheduler POSTs `/internal/sweep`, which
+  claims every parked record whose `ParkedAt` precedes `now − CI_TIMEOUT` and resolves it the
+  same way. This is the restart-safe replacement for the lost timer. Exactly one of {webhook,
+  timer, sweep} wins, via the store's atomic claim (mutex / sqlite CAS / firestore txn).
+- **Eager terminal cleanup.** On resolve the Driver `clear`s the run — `ParkStore.Delete` +
+  `LongRunDriver.DeleteSession` — so a durable backend does not leak completed sessions. (A
+  finished PR is still merged/closed by the normal review workflow.) A *separate* orphan-session
+  GC for sessions that crash between create-and-park is still pending — see
+  [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 ### ADK mechanics
 
@@ -493,23 +563,35 @@ two layers:
   deterministic Sequencer model drives the fixer agent to emit a fixed `apply_fix → await_ci`
   sequence.
 - Resume feeds the CI outcome back into the suspended run (by session id + call id) and drives
-  the next `apply_fix → await_ci` step. adk-go has **no** durable engine, and we deliberately
-  don't add one — `IsLongRunning` plus the in-memory parked-run registry is the suspend/resume
-  mechanism.
+  the next `apply_fix → await_ci` step. adk-go has **no** durable *workflow* engine; we supply
+  durability at the **session** layer instead — `IsLongRunning` over a `SESSION_BACKEND`-selected
+  `session.Service`, plus the `ParkStore` for the run record, is the suspend/resume mechanism.
+  The `LongRunDriver` (`setup/longrun.go`) is the generic plumbing: `Start` runs to a park,
+  `Resume` feeds a result back, `DeleteSession` cleans up; it carries no fixflow policy.
 
-### When a DB / shared registry enters the picture
+### Status-aware terminal summaries
 
-A datastore (or shared registry) becomes worthwhile only when we want one of two things,
-**neither of which is in scope today**:
+A finished run posts a status-aware summary (`fixflow/summary.go`) framed by outcome —
+**success**, **max-iter exhausted**, or **timeout**. The per-attempt work product lives only on
+the PR (commits + diff), never in the session, so the summary enriches the notification by
+calling `githubapi.Compare` (base…branch: commit count + changed files) and pulling the original
+findings + attempt count from the park record. The compare is best-effort: on error the summary
+still reports attempts and findings.
 
-- **Crash recovery.** The current registry is in-memory, so a restart strands parked runs. A
-  durable store (small Postgres, or an engine like Temporal/River) would let runs survive a
-  restart.
-- **Multiple instances (HA / horizontal scale).** Two replicas can't share the in-memory
-  registry; that needs a shared lock or work queue.
+### Crash recovery and multiple instances
 
-Either would slot behind the existing **registry + CI-handler** seam — the agent code doesn't
-change. Single persistent instance with crash recovery out of scope: none of this is needed.
+What used to be "out of scope" is now the **default-off** behavior, switchable by config:
+
+- **Crash recovery.** With `SESSION_BACKEND=sqlite` (local) or `firestore` (cloud) the park
+  record and ADK session history persist, so a restart resumes parked runs — no Postgres or
+  Temporal/River needed. `memory` (default) keeps the non-durable behavior for tests/throwaway
+  runs.
+- **Multiple instances (HA / horizontal scale).** `firestore` is a shared store and every claim
+  (`ResolveByPRKey`/`Sweep`) is a single-winner transaction, so replicas can in principle share
+  it safely; running multiple instances is not exercised yet, but the seam is there.
+
+This all sits behind the **`session.Service` + `ParkStore`** interfaces in `internal/agent/setup`
+— the agent code is identical across backends.
 
 ---
 
@@ -571,31 +653,61 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `OLLAMA_HOST` | Ollama base URL | `http://localhost:11434` |
 | `OLLAMA_MODEL` | model tag | `gemma4:12b` |
 | `GEMINI_MODEL` / Vertex creds | prod path | — |
+| `SESSION_BACKEND` | where the durable suspend/resume session **and** park record live: `memory` (default, in-process) \| `sqlite` (durable local) \| `firestore` (cloud) | `memory` |
+| `SQLITE_DSN` | sqlite data source (used when `=sqlite`) | `file:automation-agent.db?_pragma=busy_timeout(5000)` |
+| `FIRESTORE_PROJECT` | GCP project (used when `=firestore`); blank = detect from ADC / `GOOGLE_CLOUD_PROJECT` | — |
+| `FIRESTORE_COLLECTION` | collection-name prefix (`_sessions`, `_app_state`, `_user_state`, `_parked_runs`) | `automation_agent` |
 | `REPOS` | comma-separated `owner/repo`; also the kickoff allowlist — when non-empty, the fix-loop only acts on listed repos (empty = no restriction) | — |
-| `GITHUB_TOKEN` | go-github auth | — |
+| `GITHUB_TOKEN` | go-github auth (PR create/label/compare) | — |
 | `NOTIFY_PROVIDER` | `slack` \| `teams` | `slack` |
 | `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` | notify targets | — |
 | `PORT` | webhook server port | `8080` |
-| `CRON_DAILY` / `CRON_WEEKLY` | schedules | `0 9 * * *` / `0 9 * * 1` |
+| `CRON_DAILY` / `CRON_WEEKLY` | **in-process** schedules (see §13 caution) | `0 9 * * *` / `0 9 * * 1` |
 | `MAX_ITERATIONS` | lint-fix loop cap | `3` |
-| `CI_TIMEOUT` | per-run timer: how long a suspended fix run waits for its CI result before "needs review" | `90m` |
-| `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/github` | — |
+| `CI_TIMEOUT` | how long a suspended fix run waits for its CI result before the timer/sweep frees it ("needs review") | `90m` |
+| `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/*` | — |
+| `INTERNAL_TOKEN` | Bearer token for `/internal/*` (Cloud Scheduler cron + sweep); empty disables them (404) | — |
 | `AGENT_PR_LABEL` | label that triggers the agent verify check | `automation-agent` |
 | `AGENT_CHECK_NAME` | check name we resume on | `agent-lint-verify` |
+
+The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
+[`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 ---
 
 ## 13. Deployment
 
-Target: a **persistent** GCP instance (always-on for cron + webhooks).
+Target: **Cloud Run + Firestore** (the durable-session path), or a persistent instance for the
+in-memory mode. The full ops walkthrough — Firestore setup, ADC roles, Cloud Scheduler jobs,
+the firestore emulator for local tests, and the pending-work list — lives in
+[`DEPLOYMENT.md`](../../DEPLOYMENT.md); the design-level summary:
 
-- **Cloud Run** with `min-instances=1` (keeps cron + webhook listener warm), or a **GCE VM**
-  if we co-locate Ollama-on-GPU.
-- **No persistent disk or database** — in-flight state lives only in the in-memory parked-run
-  registry, so the service is lightweight. The trade-off: a restart/redeploy **strands** any
-  in-flight fix runs (those PRs are abandoned; crash recovery is out of scope). Run it
-  always-on (min-instances=1 or a VM) to receive webhooks and run the daily cron, and avoid
-  redeploying while runs are parked.
+```
+ GitHub repo ──webhook(HMAC)──► POST /webhooks/{lint,coverage,github}
+ Cloud Scheduler ─bearer─►       POST /internal/cron/{daily,weekly}   (digests)
+ Cloud Scheduler ─bearer─►       POST /internal/sweep                 (timeout catch-all)
+                                         │
+                                    Cloud Run service (this app)
+                                         │
+                       ┌─────────────────┴─────────────────┐
+                  session.Service                       ParkStore
+                  (suspend/resume history)         (prKey→session, attempts, params)
+                  memory | sqlite | firestore     memory | sqlite | firestore
+```
+
+- **Prod (scale-to-zero): Cloud Run + `SESSION_BACKEND=firestore`.** Because firestore makes
+  parked runs durable, the instance no longer has to stay warm to avoid stranding work — it can
+  scale toward zero and rehydrate a parked run when CI reports. ADC gives the service account
+  `roles/datastore.user` (Firestore) and `roles/aiplatform.user` (Gemini-on-Vertex); no keys.
+- **Cloud Scheduler** drives `/internal/cron/{daily,weekly}` (digests) and `/internal/sweep`
+  (durable timeout catch-all), each Bearer-authed with `INTERNAL_TOKEN`.
+- **Caution — don't double-fire the digests.** The in-process cron (`CRON_DAILY`/`CRON_WEEKLY`)
+  still runs; on a warm instance it fires *in addition to* Cloud Scheduler. Until a flag to
+  disable it lands (pending — see `DEPLOYMENT.md`), pick one: `min-instances=1` + in-process
+  cron (no Scheduler cron jobs), **or** Cloud Scheduler + treat the in-process cron as redundant.
+- **Lightweight mode: `SESSION_BACKEND=memory`** (default) on a persistent instance
+  (`min-instances=1` or a GCE VM) keeps the old zero-storage behavior — but a restart strands
+  parked runs, so avoid redeploying while runs are parked.
 - Secrets → **Secret Manager**, not plain `.env`.
 - Model in prod → likely `LLM_PROVIDER=gemini` (Vertex) unless we provision a GPU VM for
   Ollama. Config flag, no code change.
@@ -615,15 +727,36 @@ Each phase is independently testable.
 4. **Root + Summary** — end-to-end summary workflow on a real repo via local Gemma →
    Slack/Teams.
 5. **Lint-fixer** — the suspend/resume workflow, incorporating the detailed notes.
-6. **Deployment** — Cloud Run (min-instances=1) or GCE; decide Ollama-on-GPU vs Gemini.
+6. **Deployment** — Cloud Run or GCE; decide Ollama-on-GPU vs Gemini.
+
+**Durable-sessions migration:**
+
+- **Spike** — confirm Firestore + Cloud Run durable sessions over Agent Runtime + Cloud SQL.
+  ✅ done.
+- **Phase A** — `session.Service` abstraction + `SESSION_BACKEND` switch (memory|sqlite|firestore).
+  ✅ done.
+- **Phase B** — `ParkStore` interface replacing the in-memory registry/`runs` map; sqlite +
+  firestore backends; UUID session ids; atomic single-winner claim. ✅ done.
+- **Phase C** — eager terminal cleanup (`DeleteSession`) + status-aware terminal summaries
+  (success / max-iter / timeout, enriched via `githubapi.Compare`). ✅ done.
+- **Phase D** — Cloud Scheduler ingress: `/internal/cron/{daily,weekly}` + `/internal/sweep`
+  (durable timeout catch-all), Bearer-auth via `INTERNAL_TOKEN`. ✅ done.
+- **Phase E (pending)** — orphan-session GC (sessions that crash between create-and-park),
+  Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, an in-process-scheduler
+  disable flag (so `min-instances=0` is safe), and CI running the Firestore emulator. Detail in
+  [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+- **Cross-port parity** — keep the ports in lockstep on the durable-session design; current
+  per-port drift is tracked in `specs/parity-status.md`.
 
 ---
 
 ## 15. Open questions
 
-1. **Persistence:** ✅ no durable store — in-flight runs live in an **in-memory parked-run
-   registry**; GitHub holds the durable PR artifacts but is not consulted to recover in-flight
-   state. Non-durable: a restart strands parked runs (crash recovery is out of scope). See §8.
+1. **Persistence:** ✅ **resolved — durable sessions.** One `SESSION_BACKEND` env selects
+   the ADK `session.Service` + `setup.ParkStore`: `memory` (default, non-durable — the old
+   behavior) | `sqlite` (durable local) | `firestore` (durable cloud, scale-to-zero). With a
+   durable backend a restart resumes parked runs; GitHub still holds the durable PR artifacts.
+   Per-port drift: `specs/parity-status.md`. See §8.
 2. **Notify:** build the `Notifier` interface + both Slack and Teams impls; choice is one
    env var. Teams targets the new **Workflows/Adaptive Card** format (O365 connectors
    deprecating). ✅ assumed.
@@ -681,5 +814,8 @@ Notes:
 - `loopagent` shape is verified from the official example
   (`examples/workflowagents/loop/main.go`). Sequential/parallel are assumed to share the
   embedded-`agent.Config` shape — to confirm against their example dirs during Phase 1.
-- adk-go has **no** durable workflow engine; `IsLongRunning` (the long-running `await_ci`
-  tool) + the in-memory parked-run registry is the suspend/resume mechanism.
+- adk-go has **no** durable *workflow* engine; durability is supplied at the session layer
+  instead. `IsLongRunning` (the long-running `await_ci` tool) over a `SESSION_BACKEND`-selected
+  `session.Service`, plus the `setup.ParkStore` for the run record, is the suspend/resume
+  mechanism. adk-go ships inmemory/database/vertexai session services; the **firestore**
+  `session.Service` is a custom impl in `internal/agent/setup`.

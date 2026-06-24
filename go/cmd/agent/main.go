@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -66,6 +67,26 @@ func run(logger *slog.Logger) error {
 	gh := githubapi.New(cfg.GitHubToken)
 	notifier := buildNotifier(logger, cfg)
 
+	// One session service + park store, shared by both fix engines (namespaced by app
+	// name). memory (default) keeps today's behavior; durable backends persist parked runs
+	// across restarts.
+	sessions, err := setup.NewSessionService(sigCtx, cfg)
+	if err != nil {
+		return fmt.Errorf("build session service: %w", err)
+	}
+	// Release a network-backed session service's client (e.g. firestore) on shutdown.
+	if closer, ok := sessions.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	parkStore, err := setup.NewParkStore(sigCtx, cfg)
+	if err != nil {
+		return fmt.Errorf("build park store: %w", err)
+	}
+	// Release a network-backed store's client (e.g. firestore) on shutdown.
+	if closer, ok := parkStore.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
+
 	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents
 	// so the weekly cron posts a real 7-day digest, not a copy of the daily one.
 	summaryDaily := buildSummaryAgent(logger, cfg, llm, gh, notifier, 24*time.Hour, "Daily commit digest")
@@ -75,6 +96,7 @@ func run(logger *slog.Logger) error {
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
+		SessionService: sessions, ParkStore: parkStore,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)
@@ -106,8 +128,9 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Webhooks enqueue asynchronously and return fast. Dispatches run on a bounded pool
-	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (Parked
-	// runs are still in-memory, so a restart strands them — an accepted trade.)
+	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (With a
+	// durable SESSION_BACKEND parked runs survive a restart; the default memory backend
+	// does not.)
 	var dispatchWG sync.WaitGroup
 	dispatchSem := make(chan struct{}, maxConcurrentDispatch)
 	if cfg.GitHubWebhookSecret == "" {
@@ -124,7 +147,21 @@ func run(logger *slog.Logger) error {
 			}
 		}()
 		return nil
-	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret))
+	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
+		webhook.WithInternalToken(cfg.InternalToken),
+		webhook.WithSweep(func(ctx context.Context) error {
+			// Sweep every engine even if one fails, so a single engine's error does not
+			// strand the others' timed-out runs for this pass (mirrors ciResumeHandler).
+			// The joined error still 500s the handler so Cloud Scheduler retries.
+			var errs []error
+			for _, e := range engines {
+				if err := e.SweepTimeouts(ctx); err != nil {
+					errs = append(errs, err)
+					logger.Error("engine sweep failed", "workflow", e.Name(), "err", err)
+				}
+			}
+			return errors.Join(errs...)
+		}))
 
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,

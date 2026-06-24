@@ -13,9 +13,12 @@ flowchart TD
     Agents --> Tpl["templates/ — spec templates"]
 
     Std --> S1["go-style.md"]
-    Std --> S2["testing.md (>=80% coverage, never assert LLM output)"]
+    Std --> S2["testing.md (how to run every test kind; >=80% coverage, never assert LLM output)"]
     Std --> S3["agent-build-pattern.md (agents_setup.go vs <name>.go)"]
     Std --> S4["architecture.md (import boundaries, ingest->root->workflow)"]
+    Std --> S5["local-development.md (run modes, env vars, container)"]
+    Std --> S6["deployment.md (cloud architecture, GCP setup — source of truth)"]
+    Std --> S7["language-parity.md · ci-integration.md · architecture-design.md"]
     Std -->|enforced by| Enf["ARCH/, make ci, .golangci.yml"]
 
     Skl --> K1["add-workflow-agent.md"]
@@ -43,9 +46,19 @@ The rules of the codebase. Enforced where possible by `ARCH/`, `make ci`, and
 `.golangci.yml`; otherwise treat them as required review criteria.
 
 - `go-style.md` — formatting, naming, error handling, package design.
-- `testing.md` — the ≥80% coverage rule and the "never assert LLM output" rule.
+- `testing.md` — how to run every kind of test per port (Go current); the ≥80% coverage
+  and "never assert LLM output" rules.
+- `local-development.md` — prerequisites, run modes, env-var reference, local container.
+- `deployment.md` — **source of truth** for cloud architecture + GCP setup (root
+  `DEPLOYMENT.md` is a thin status/checklist pointer back here).
+- `ci-integration.md` — how a CI workflow drives the lint/coverage fixers.
 - `agent-build-pattern.md` — the `agents_setup.go` (wiring) vs `<name>.go` (logic) split.
 - `architecture.md` — import boundaries and the ingest→root→workflow flow.
+- `architecture-design.md` — the authoritative language-neutral design.
+- `language-parity.md` — the 1:1 cross-port contract (Go is the reference).
+
+The how-to-run docs document the design and how each port runs/tests/deploys; per-port
+drift is tracked in `specs/parity-status.md`.
 
 When standards and convenience conflict, the standards win.
 

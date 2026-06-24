@@ -8,8 +8,10 @@ A lightweight, long-running Go service that ingests events from many sources
   posted to Slack or Teams.
 - **Lint-fixer** — consumes an agnostic lint payload, opens a PR with a fix, and
   loops (max 3) on CI feedback before posting a result. Suspend/resume rides on
-  ADK long-running tools plus an in-memory parked-run registry (no database); a
-  process restart strands in-flight runs — an accepted trade-off.
+  ADK long-running tools plus a **pluggable durable backend** (`SESSION_BACKEND` =
+  `memory` | `sqlite` | `firestore`): with a durable backend a process restart
+  **resumes cleanly** instead of stranding in-flight runs, and terminal results post
+  a status-aware summary (what changed on the PR + the targeted findings).
 - **Coverage-fixer** — consumes an agnostic coverage report (JaCoCo, lcov, `go cover`,
   …) and opens a PR adding tests for *meaningful* uncovered logic, with the same CI
   loop. Shares the `fixflow` engine with the lint-fixer.
@@ -50,13 +52,29 @@ make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
 
-See also [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md) (how CI sends lint
-problems) and [`.agents/standards/deployment.md`](.agents/standards/deployment.md) (local + cloud).
+How-to guides:
+[`local-development.md`](.agents/standards/local-development.md) (run modes, env vars,
+container), [`testing.md`](.agents/standards/testing.md) (every test kind + the Firestore
+emulator), [`deployment.md`](.agents/standards/deployment.md) (cloud architecture + GCP
+setup — source of truth), and [`ci-integration.md`](.agents/standards/ci-integration.md)
+(how CI drives the fixers). [`DEPLOYMENT.md`](DEPLOYMENT.md) is the short status/checklist.
+
+### Durable sessions
+
+The fix loop's suspend/resume state is stored behind one `SESSION_BACKEND` switch —
+`memory` (default, zero-dependency), `sqlite` (durable local file), or `firestore` (cloud,
+scale-to-zero). Cloud Scheduler can drive the digests and the timeout sweep via
+`POST /internal/cron/{daily,weekly}` and `POST /internal/sweep` (Bearer-auth'd with
+`INTERNAL_TOKEN`). With a durable backend a process restart resumes parked runs cleanly,
+which is what lets Cloud Run scale toward zero.
 
 ## Status & TODO
 
-Phases 1–5 are implemented and `make ci` is green (≥80% coverage per package). The
-core service runs locally; the LLM steps are verified against real Gemma. Remaining
+Phases 1–5, plus the **durable-sessions migration** (spike + Phases A–D: `SESSION_BACKEND`
+switch, the `ParkStore` seam replacing the in-memory registry, Firestore session/park
+backends, status-aware summaries, and Cloud Scheduler `/internal` ingress) are implemented
+**in Go** and `make ci` is green (≥80% coverage; Firestore validated against the emulator).
+The core service runs locally; the LLM steps are verified against real Gemma. Remaining
 work to reach a fully production-validated system:
 
 - [ ] **Add the `agent-lint-verify` GitHub Action** to each target repo (label-triggered
@@ -69,17 +87,20 @@ work to reach a fully production-validated system:
       summary digest and lint-fix results actually post.
 - [ ] **Real end-to-end lint-fix run** against a live repo (needs the three items above)
       to validate kickoff → PR → CI → resume → success/needs-review.
-- [ ] **Phase 6 — cloud deploy**: Cloud Run (`min-instances=1`) or GCE, Secret Manager,
-      `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). Outline in
-      [`.agents/standards/deployment.md`](.agents/standards/deployment.md). No DB; in-flight fix runs are tracked
-      in-memory, so run a single instance (a restart strands parked runs).
+- [ ] **Cloud deploy**: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager,
+      `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). With durable sessions a restart
+      resumes cleanly, so Cloud Run can scale toward zero (Cloud Scheduler drives the cron +
+      sweep). Full step-by-step + remaining infra TODOs in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+- [ ] **Cross-port parity**: keep the ports in lockstep on the durable-session design
+      (sessions + park store + `/internal` ingress + status-aware summaries); current
+      per-port drift is tracked in `specs/parity-status.md`.
 
 Nice-to-haves:
 
 - [ ] Summary repo **org auto-discovery** (`GITHUB_ORG`) instead of a static `REPOS` list.
 - [ ] **Eval** for lint-fix quality (the wiring is proven; fix quality depends on
       model/prompt — bigger Gemma models or Gemini improve it).
-- [ ] A shared lock/DB **only if** scaling to multiple instances (see architecture §8).
+- [ ] **Orphan-session GC** + IaC/Terraform + OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md) TODOs).
 
 ## Layout
 

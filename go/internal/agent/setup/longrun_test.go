@@ -7,10 +7,47 @@ import (
 	"testing"
 
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/genai"
 )
+
+// TestLongRunDriverDeleteSession proves terminal cleanup (E-eager) actually removes the
+// stored session, so a durable backend does not leak completed runs.
+func TestLongRunDriverDeleteSession(t *testing.T) {
+	apply, await, _, _ := lrTools(t)
+	model := NewSequencerModel(SequencerConfig{Action: "apply", Wait: "await"})
+	ag, err := llmagent.New(llmagent.Config{
+		Name: "lr", Model: model, Instruction: "apply then await", Tools: []tool.Tool{apply, await},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := session.InMemoryService()
+	d, err := NewLongRunDriver("lr-app", "u", ag, sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := d.Start(ctx, "s1", "go"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	get := &session.GetRequest{AppName: "lr-app", UserID: "u", SessionID: "s1"}
+	if _, err := sess.Get(ctx, get); err != nil {
+		t.Fatalf("session should exist after Start: %v", err)
+	}
+	if err := d.DeleteSession(ctx, "s1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := sess.Get(ctx, get); err == nil {
+		t.Error("session should be gone after DeleteSession")
+	}
+	if err := d.DeleteSession(ctx, "s1"); err != nil {
+		t.Errorf("deleting a missing session should no-op, got %v", err)
+	}
+}
 
 type lrEmpty struct{}
 
@@ -60,7 +97,7 @@ func newLRDriver(t *testing.T, apply, await tool.Tool) *LongRunDriver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewLongRunDriver("lr-app", "u", ag)
+	d, err := NewLongRunDriver("lr-app", "u", ag, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

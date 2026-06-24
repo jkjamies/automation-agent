@@ -1,7 +1,8 @@
 """fixflow — the reusable event-driven PR-fix engine (kickoff -> suspend -> CI resume).
 
 Concrete agents (lintfixer, covfixer) supply a :class:`Spec`; the engine owns the loop,
-the apply mechanics, attempt counting, and the in-memory parked-run registry.
+the apply mechanics, and attempt counting. The suspended runs live in an injected
+``setup.ParkStore`` backend (memory | sqlite | firestore), owned by the Driver.
 """
 
 from automation_agent.agent.fixflow.analyze import EditFunc, parallel_analyze
@@ -28,7 +29,6 @@ from automation_agent.agent.fixflow.engine import (
 from automation_agent.agent.fixflow.envelope import Kickoff, parse_kickoff
 from automation_agent.agent.fixflow.explore import explore
 from automation_agent.agent.fixflow.files import read_file
-from automation_agent.agent.fixflow.registry import ParkedRun, RunRegistry
 from automation_agent.agent.fixflow.tools import repo_tools
 from automation_agent.agent.fixflow.util import (
     extract_json_array,
@@ -48,9 +48,7 @@ __all__ = [
     "FileWork",
     "GitHub",
     "Kickoff",
-    "ParkedRun",
     "ResumeInput",
-    "RunRegistry",
     "Spec",
     "TriageFunc",
     "apply_fix",

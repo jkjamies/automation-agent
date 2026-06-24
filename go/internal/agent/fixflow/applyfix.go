@@ -15,6 +15,7 @@ type GitHub interface {
 	FindAgentPRs(ctx context.Context, owner, repo, label string) ([]githubapi.PR, error)
 	CreatePR(ctx context.Context, owner, repo string, in githubapi.PRInput) (githubapi.PR, error)
 	AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error
+	Compare(ctx context.Context, owner, repo, base, head string) (githubapi.Comparison, error)
 }
 
 // FileEdit is a whole-file write an analyze step produces (a rewritten source file,

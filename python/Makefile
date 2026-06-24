@@ -2,7 +2,7 @@ COVER_MIN  := 80
 OLLAMA_HOST ?= http://localhost:11434
 UV         := uv
 
-.PHONY: help build run playground test cover lint fmt typecheck arch docs-check tidy spec ollama-check ci docker
+.PHONY: help build run playground test cover cover-firestore lint fmt typecheck arch docs-check tidy spec ollama-check ci docker
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -21,6 +21,10 @@ test: ## Run all tests
 
 cover: ## Run tests with coverage gate (>= $(COVER_MIN)%) over automation_agent/ (cmd is composition-only)
 	$(UV) run pytest --cov=automation_agent --cov-report=term-missing --cov-fail-under=$(COVER_MIN) -q
+
+cover-firestore: ## Run the firestore-backed tests against a running emulator (needs FIRESTORE_EMULATOR_HOST)
+	@test -n "$$FIRESTORE_EMULATOR_HOST" || { echo "set FIRESTORE_EMULATOR_HOST first (gcloud emulators firestore start)"; exit 1; }
+	$(UV) run pytest tests/test_setup_parkstore.py tests/test_setup_session.py -q
 
 lint: ## Run ruff
 	$(UV) run ruff check .

@@ -10,8 +10,17 @@ import (
 
 	"google.golang.org/adk/model"
 
+	"github.com/jkjamies/automation-agent/internal/agent/setup"
 	"github.com/jkjamies/automation-agent/internal/githubapi"
 )
+
+// seedParked puts a parked run directly into the driver's store, for tests that exercise
+// Resume/timeout without driving a real kickoff first.
+func seedParked(e *Engine, prKey, sid, callID string, attempts int) {
+	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
+		SessionID: sid, PRKey: prKey, CallID: callID, Attempts: attempts, ParkedAt: time.Now(),
+	})
+}
 
 // testSpec is a Spec with deterministic fake triage/analyze (no LLM), so the engine
 // loop can be tested in isolation.
@@ -59,8 +68,8 @@ func TestEngineKickoffParks(t *testing.T) {
 	if len(gh.labeled) != 1 {
 		t.Errorf("expected label, got %v", gh.labeled)
 	}
-	if e.driver.reg.Len() != 1 {
-		t.Errorf("expected one parked run awaiting CI, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 1 {
+		t.Errorf("expected one parked run awaiting CI, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -77,8 +86,8 @@ func TestEngineResumeSuccess(t *testing.T) {
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "succeeded") {
 		t.Errorf("expected success notification, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("success should free the parked run, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("success should free the parked run, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -87,7 +96,7 @@ func TestEngineResumeExhausted(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
 	// Park a run that has already used all attempts.
-	e.driver.reg.Park("acme/api#42", &ParkedRun{SessionID: "run-x", CallID: "c", Attempts: 3}, time.Hour, e.driver.onTimeout)
+	seedParked(e, "acme/api#42", "run-x", "c", 3)
 
 	if err := e.Resume(context.Background(), checkBody("failure", 42, "still broken")); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -95,8 +104,8 @@ func TestEngineResumeExhausted(t *testing.T) {
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
 		t.Errorf("expected needs-review notification, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("exhausted run should be freed, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("exhausted run should be freed, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -126,8 +135,8 @@ func TestEngineResumeRetry(t *testing.T) {
 	if len(n.msgs) != 0 {
 		t.Errorf("retry should not notify, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 1 {
-		t.Errorf("retry should leave the run parked, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 1 {
+		t.Errorf("retry should leave the run parked, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -157,8 +166,8 @@ func TestEngineFullLoopExhausts(t *testing.T) {
 		if len(n.msgs) != 0 {
 			t.Fatalf("attempt %d should not notify yet, got %+v", i+2, n.msgs)
 		}
-		if e.driver.reg.Len() != 1 {
-			t.Fatalf("attempt %d should re-park, got %d", i+2, e.driver.reg.Len())
+		if e.driver.parkedCount() != 1 {
+			t.Fatalf("attempt %d should re-park, got %d", i+2, e.driver.parkedCount())
 		}
 	}
 	if err := e.Resume(context.Background(), checkBody("failure", 42, "boom")); err != nil {
@@ -167,8 +176,8 @@ func TestEngineFullLoopExhausts(t *testing.T) {
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
 		t.Errorf("expected needs-review after MaxIter, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("run should be freed after giving up, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("run should be freed after giving up, got %d", e.driver.parkedCount())
 	}
 	if calls != 3 {
 		t.Errorf("expected exactly 3 apply attempts, got %d", calls)
@@ -179,14 +188,14 @@ func TestEngineFullLoopExhausts(t *testing.T) {
 func TestEngineTimeoutFreesRun(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
-	e.driver.reg.Park("acme/api#42", &ParkedRun{SessionID: "run-x", CallID: "c", Attempts: 1}, time.Hour, e.driver.onTimeout)
+	seedParked(e, "acme/api#42", "run-x", "c", 1)
 
 	e.driver.onTimeout("acme/api#42")
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
 		t.Errorf("expected timeout review notification, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("timeout should free the run, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("timeout should free the run, got %d", e.driver.parkedCount())
 	}
 	// A late webhook after the timeout is a benign no-op.
 	if err := e.Resume(context.Background(), checkBody("success", 42, "")); err != nil {
@@ -194,6 +203,42 @@ func TestEngineTimeoutFreesRun(t *testing.T) {
 	}
 	if len(n.msgs) != 1 {
 		t.Errorf("late webhook after timeout should not notify again, got %+v", n.msgs)
+	}
+}
+
+// A run parked longer ago than CITimeout is resolved by the durable sweep (notify + free),
+// the catch-all behind the soft in-memory timer.
+func TestEngineSweepTimesOutStaleRun(t *testing.T) {
+	n := &fakeNotifier{}
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
+		SessionID: "run-x", PRKey: "acme/api#42", CallID: "c", Attempts: 1,
+		ParkedAt: time.Now().Add(-2 * time.Hour), // older than the 1h CITimeout
+	})
+	if err := e.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("SweepTimeouts: %v", err)
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("expected a timeout review notification, got %+v", n.msgs)
+	}
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("swept run should be freed, got %d", e.driver.parkedCount())
+	}
+}
+
+// A freshly parked run is left alone by the sweep.
+func TestEngineSweepSkipsFreshRun(t *testing.T) {
+	n := &fakeNotifier{}
+	e := newEngine(seedRemote(t), &fakeGH{}, n)
+	seedParked(e, "acme/api#42", "run-x", "c", 1) // ParkedAt = now
+	if err := e.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("SweepTimeouts: %v", err)
+	}
+	if len(n.msgs) != 0 {
+		t.Errorf("a fresh run must not be swept, got %+v", n.msgs)
+	}
+	if e.driver.parkedCount() != 1 {
+		t.Errorf("fresh run should remain parked, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -230,8 +275,8 @@ func TestEngineKickoffTriageError(t *testing.T) {
 	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","report":"r"}`)); err == nil {
 		t.Fatal("expected triage error to propagate")
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("a failed apply should not park a run, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("a failed apply should not park a run, got %d", e.driver.parkedCount())
 	}
 }
 
@@ -252,8 +297,8 @@ func TestEngineApplyFailureNotifies(t *testing.T) {
 	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
 		t.Errorf("expected a needs-review notification on apply failure, got %+v", n.msgs)
 	}
-	if e.driver.reg.Len() != 0 {
-		t.Errorf("a failed apply should not leave a parked run, got %d", e.driver.reg.Len())
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("a failed apply should not leave a parked run, got %d", e.driver.parkedCount())
 	}
 }
 

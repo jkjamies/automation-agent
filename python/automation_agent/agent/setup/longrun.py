@@ -17,7 +17,7 @@ from google.adk.agents import BaseAgent
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.models import BaseLlm, LlmRequest, LlmResponse
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from automation_agent.agent.setup.events import assistant_text, content_text
@@ -44,18 +44,34 @@ class LongRunDriver:
     caller; this type only knows how to run-to-park and resume-with-a-result.
     """
 
-    def __init__(self, app_name: str, user_id: str, root: BaseAgent) -> None:
+    def __init__(
+        self,
+        app_name: str,
+        user_id: str,
+        root: BaseAgent,
+        session_service: BaseSessionService | None = None,
+    ) -> None:
         app = App(
             name=app_name,
             root_agent=root,
             resumability_config=ResumabilityConfig(is_resumable=True),
         )
-        self._session_service = InMemorySessionService()
+        # A durable session_service (sqlite/firestore) makes a parked run survive a process
+        # restart; the default in-memory one keeps today's behavior (a restart strands it).
+        self._session_service = session_service or InMemorySessionService()
         self._runner = Runner(
             app=app, session_service=self._session_service, auto_create_session=True
         )
         self._app_name = app_name
         self._user_id = user_id
+
+    async def delete_session(self, session_id: str) -> None:
+        """Remove a session's stored history. Terminal cleanup calls this so a durable
+        backend (sqlite/firestore) does not accumulate completed sessions; on the in-memory
+        backend it just frees the map entry. Deleting a missing session is a no-op."""
+        await self._session_service.delete_session(
+            app_name=self._app_name, user_id=self._user_id, session_id=session_id
+        )
 
     async def start(self, session_id: str, text: str) -> DriveResult:
         """Seed a fresh invocation on ``session_id`` and drive until the agent parks

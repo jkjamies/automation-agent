@@ -23,9 +23,14 @@ MAX_BODY_BYTES = 5 << 20  # 5 MiB
 class _BodyTooLarge(Exception):
     """Raised when a request body exceeds MAX_BODY_BYTES (caller returns 413)."""
 
+
 # IngestFunc consumes a normalized envelope. It should enqueue work and return
 # quickly; a raised error becomes a 500 to the caller.
 IngestFunc = Callable[[Envelope], Awaitable[None]]
+
+# SweepFunc resolves parked runs whose CI never reported (the durable timeout catch-all).
+# Driven by Cloud Scheduler via POST /internal/sweep.
+SweepFunc = Callable[[], Awaitable[None]]
 
 
 def verify_signature(secret: str, header: str, body: bytes) -> bool:
@@ -46,10 +51,16 @@ class Server:
         ingest: IngestFunc,
         *,
         secret: str = "",
+        internal_token: str = "",
+        sweep: SweepFunc | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.ingest = ingest
         self.secret = secret
+        # internal_token guards the /internal/* endpoints (Cloud Scheduler cron + sweep).
+        # Empty disables them (404), so they are never open by default.
+        self.internal_token = internal_token
+        self.sweep_fn = sweep
         self.now = now if now is not None else (lambda: datetime.now(UTC))
         self._app = self._build_app()
 
@@ -72,9 +83,7 @@ class Server:
                 return body
             if not self._authenticated(request, body):
                 return Response(content="invalid signature", status_code=401)
-            return await self._dispatch(
-                new(Kind.LINT, "webhook:/lint", body, self.now())
-            )
+            return await self._dispatch(new(Kind.LINT, "webhook:/lint", body, self.now()))
 
         @app.post("/webhooks/coverage")
         async def coverage(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
@@ -83,9 +92,7 @@ class Server:
                 return body
             if not self._authenticated(request, body):
                 return Response(content="invalid signature", status_code=401)
-            return await self._dispatch(
-                new(Kind.COVERAGE, "webhook:/coverage", body, self.now())
-            )
+            return await self._dispatch(new(Kind.COVERAGE, "webhook:/coverage", body, self.now()))
 
         @app.post("/webhooks/github")
         async def github(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
@@ -94,11 +101,58 @@ class Server:
                 return body
             if not self._authenticated(request, body):
                 return Response(content="invalid signature", status_code=401)
+            return await self._dispatch(new(Kind.CI, "webhook:/github", body, self.now()))
+
+        # Cloud Scheduler ingress (Bearer-token auth; disabled with a 404 unless
+        # internal_token is set). Lets the cron schedule live GCP-side so the instance can
+        # scale to zero. These emit the same envelopes the in-process scheduler would —
+        # use one or the other, not both (see DEPLOYMENT.md).
+        @app.post("/internal/cron/daily")
+        async def cron_daily(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            denied = self._internal_authenticated(request)
+            if denied is not None:
+                return denied
             return await self._dispatch(
-                new(Kind.CI, "webhook:/github", body, self.now())
+                new(Kind.CRON_DAILY, "internal:/cron/daily", b"", self.now())
             )
 
+        @app.post("/internal/cron/weekly")
+        async def cron_weekly(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            denied = self._internal_authenticated(request)
+            if denied is not None:
+                return denied
+            return await self._dispatch(
+                new(Kind.CRON_WEEKLY, "internal:/cron/weekly", b"", self.now())
+            )
+
+        @app.post("/internal/sweep")
+        async def sweep(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            denied = self._internal_authenticated(request)
+            if denied is not None:
+                return denied
+            if self.sweep_fn is None:
+                return Response(content="sweep not configured", status_code=501)
+            try:
+                await self.sweep_fn()
+            except Exception:
+                return Response(content="sweep failed", status_code=500)
+            return Response(status_code=200)
+
         return app
+
+    def _internal_authenticated(self, request: Request) -> Response | None:
+        """Guard the /internal/* endpoints with a Bearer token. Returns the error Response
+        to send (404 when no token is configured — disabled by default; 401 on a missing or
+        wrong token), or None when the request is authorized."""
+        if self.internal_token == "":
+            return Response(content="internal endpoints disabled", status_code=404)
+        prefix = "Bearer "
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith(prefix):
+            return Response(content="unauthorized", status_code=401)
+        if not hmac.compare_digest(auth[len(prefix) :], self.internal_token):
+            return Response(content="unauthorized", status_code=401)
+        return None
 
     def _authenticated(self, request: Request, body: bytes) -> bool:
         """Verify the request's HMAC signature when a secret is configured. With no secret
@@ -107,9 +161,7 @@ class Server:
         GitHub webhook."""
         if self.secret == "":
             return True
-        return verify_signature(
-            self.secret, request.headers.get("X-Hub-Signature-256", ""), body
-        )
+        return verify_signature(self.secret, request.headers.get("X-Hub-Signature-256", ""), body)
 
     async def _take_body(self, request: Request) -> bytes | Response:
         """Read the request body, or return the error response to send: a transport read

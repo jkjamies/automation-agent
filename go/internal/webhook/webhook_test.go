@@ -169,3 +169,63 @@ func TestCoverageKickoffRequiresSignature(t *testing.T) {
 		t.Fatalf("unsigned status = %d, want 401", rec.Code)
 	}
 }
+
+// With no INTERNAL_TOKEN, the /internal/* endpoints are disabled (404).
+func TestInternalEndpointsDisabledWithoutToken(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest)
+	for _, path := range []string{"/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep"} {
+		if rec := do(t, s, http.MethodPost, path, "", nil); rec.Code != http.StatusNotFound {
+			t.Errorf("%s without token = %d, want 404", path, rec.Code)
+		}
+	}
+}
+
+// A configured token requires a matching Bearer credential.
+func TestInternalRequiresBearer(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest, WithInternalToken("secret"))
+	if rec := do(t, s, http.MethodPost, "/internal/cron/daily", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no bearer = %d, want 401", rec.Code)
+	}
+	if rec := do(t, s, http.MethodPost, "/internal/cron/daily", "", map[string]string{"Authorization": "Bearer wrong"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong bearer = %d, want 401", rec.Code)
+	}
+}
+
+// An authorized cron call dispatches the corresponding summary envelope.
+func TestInternalCronDispatches(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest, WithInternalToken("secret"))
+	rec := do(t, s, http.MethodPost, "/internal/cron/weekly", "", map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if c.env.Kind != ingest.KindCronWeekly {
+		t.Errorf("kind = %q, want cron.weekly", c.env.Kind)
+	}
+}
+
+// An authorized sweep call invokes the sweep function.
+func TestInternalSweep(t *testing.T) {
+	c := &capture{}
+	swept := false
+	s := New(c.ingest, WithInternalToken("secret"), WithSweep(func(context.Context) error { swept = true; return nil }))
+	rec := do(t, s, http.MethodPost, "/internal/sweep", "", map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !swept {
+		t.Error("sweep func was not invoked")
+	}
+}
+
+// Sweep with no sweep function configured reports not-implemented.
+func TestInternalSweepNotConfigured(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest, WithInternalToken("secret"))
+	rec := do(t, s, http.MethodPost, "/internal/sweep", "", map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501", rec.Code)
+	}
+}

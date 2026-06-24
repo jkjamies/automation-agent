@@ -166,3 +166,74 @@ def test_verify_signature_directly() -> None:
     assert not verify_signature("topsecret", "sha256=deadbeef", body)
     assert not verify_signature("topsecret", "", body)
     assert not verify_signature("topsecret", "deadbeef", body)  # missing prefix
+
+
+# --- /internal/* (Cloud Scheduler ingress) -----------------------------------
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_internal_endpoints_disabled_without_token() -> None:
+    # No internal_token -> the endpoints are off (404), never open by default.
+    c = Capture()
+    client = TestClient(Server(c.ingest).app)
+    for path in ("/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep"):
+        assert client.post(path).status_code == 404
+    assert c.env is None
+
+
+def test_internal_cron_requires_bearer_token() -> None:
+    c = Capture()
+    client = TestClient(Server(c.ingest, internal_token="s3cret").app)
+    # Missing / wrong token -> 401.
+    assert client.post("/internal/cron/daily").status_code == 401
+    assert client.post("/internal/cron/daily", headers=_bearer("nope")).status_code == 401
+    assert c.env is None
+
+
+def test_internal_cron_daily_dispatches() -> None:
+    c = Capture()
+    client = TestClient(Server(c.ingest, internal_token="s3cret").app)
+    resp = client.post("/internal/cron/daily", headers=_bearer("s3cret"))
+    assert resp.status_code == 202
+    assert c.env is not None
+    assert c.env.kind == Kind.CRON_DAILY
+    assert c.env.source == "internal:/cron/daily"
+
+
+def test_internal_cron_weekly_dispatches() -> None:
+    c = Capture()
+    client = TestClient(Server(c.ingest, internal_token="s3cret").app)
+    resp = client.post("/internal/cron/weekly", headers=_bearer("s3cret"))
+    assert resp.status_code == 202
+    assert c.env is not None and c.env.kind == Kind.CRON_WEEKLY
+
+
+def test_internal_sweep_runs_sweep_func() -> None:
+    ran = {"n": 0}
+
+    async def _sweep() -> None:
+        ran["n"] += 1
+
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret", sweep=_sweep).app)
+    resp = client.post("/internal/sweep", headers=_bearer("s3cret"))
+    assert resp.status_code == 200
+    assert ran["n"] == 1
+
+
+def test_internal_sweep_not_configured_is_501() -> None:
+    # internal_token set but no sweep func wired -> 501 (auth still required).
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret").app)
+    assert client.post("/internal/sweep").status_code == 401  # auth first
+    assert client.post("/internal/sweep", headers=_bearer("s3cret")).status_code == 501
+
+
+def test_internal_sweep_error_is_500() -> None:
+    async def _boom() -> None:
+        raise RuntimeError("sweep boom")
+
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret", sweep=_boom).app)
+    resp = client.post("/internal/sweep", headers=_bearer("s3cret"))
+    assert resp.status_code == 500

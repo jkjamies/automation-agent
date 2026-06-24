@@ -4,8 +4,10 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +29,22 @@ const (
 	NotifyTeams NotifyProvider = "teams"
 )
 
+// SessionBackend selects where the ADK session (the durable suspend/resume history of
+// the parked fix loop) is stored.
+type SessionBackend string
+
+const (
+	// SessionMemory keeps sessions in-process: tests and ephemeral local runs. A restart
+	// strands parked runs. This is the default — selecting it changes nothing.
+	SessionMemory SessionBackend = "memory"
+	// SessionSQLite persists sessions to a local file via the adk session/database
+	// backend, so a parked run survives a restart. For real local runs.
+	SessionSQLite SessionBackend = "sqlite"
+	// SessionFirestore is the cloud backend (serverless, scales to zero): a custom
+	// Firestore session.Service + ParkStore, both built under internal/agent/setup.
+	SessionFirestore SessionBackend = "firestore"
+)
+
 // Config holds all runtime settings.
 type Config struct {
 	// LLM
@@ -38,6 +56,16 @@ type Config struct {
 	// (lint rewrite, coverage test generation). Falls back to the default model.
 	OllamaCodeModel string
 	GeminiCodeModel string
+
+	// Sessions
+	SessionBackend SessionBackend
+	// SQLiteDSN is the data source for SESSION_BACKEND=sqlite (ignored otherwise). A
+	// glebarez/modernc DSN: a file path, optionally with ?_pragma=… options.
+	SQLiteDSN string
+	// FirestoreProject is the GCP project for SESSION_BACKEND=firestore; empty detects it
+	// from ADC / GOOGLE_CLOUD_PROJECT. FirestoreCollection is the collection-name prefix.
+	FirestoreProject    string
+	FirestoreCollection string
 
 	// GitHub / repos
 	Repos       []string
@@ -59,11 +87,38 @@ type Config struct {
 	// it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
 	CITimeout           time.Duration
 	GitHubWebhookSecret string
+	// InternalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
+	// cron + sweep). Empty disables those endpoints (404).
+	InternalToken string
 }
 
 // Load reads configuration from the process environment, applying defaults.
 func Load() (Config, error) {
-	return loadFrom(os.LookupEnv)
+	c, err := loadFrom(os.LookupEnv)
+	if err != nil {
+		return Config{}, err
+	}
+	// When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
+	// CLI login so a local run authenticates to GitHub without a hand-set token. Any
+	// failure (gh absent, not logged in, timeout) leaves the token empty (anonymous).
+	if c.GitHubToken == "" {
+		c.GitHubToken = ghCLIToken()
+	}
+	return c, nil
+}
+
+// ghCLIToken returns the token from `gh auth token`, or "" if the gh CLI is missing,
+// unauthenticated, or errors. This is the one place config shells out rather than
+// reading the environment; it exists so local runs reuse an existing gh login. The
+// short timeout guards against a hung subprocess stalling startup.
+func ghCLIToken() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // loadFrom builds a Config from an arbitrary lookup func, which keeps Load
@@ -76,8 +131,12 @@ func loadFrom(get lookup) (Config, error) {
 		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
 		GeminiModel:         getOr(get, "GEMINI_MODEL", ""),
 		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
+		SessionBackend:      SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
+		SQLiteDSN:           getOr(get, "SQLITE_DSN", "file:automation-agent.db?_pragma=busy_timeout(5000)"),
+		FirestoreProject:    getOr(get, "FIRESTORE_PROJECT", ""),
+		FirestoreCollection: getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
 		Repos:               splitList(getOr(get, "REPOS", "")),
-		GitHubToken:         getOr(get, "GITHUB_TOKEN", ""),
+		GitHubToken:         getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
 		SlackWebhookURL:     getOr(get, "SLACK_WEBHOOK_URL", ""),
 		TeamsWebhookURL:     getOr(get, "TEAMS_WEBHOOK_URL", ""),
@@ -85,6 +144,7 @@ func loadFrom(get lookup) (Config, error) {
 		CronDaily:           getOr(get, "CRON_DAILY", "0 9 * * *"),
 		CronWeekly:          getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
+		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
 	}
 
 	var err error
@@ -120,6 +180,11 @@ func (c Config) Validate() error {
 	case NotifySlack, NotifyTeams:
 	default:
 		return fmt.Errorf("invalid NOTIFY_PROVIDER %q (want slack|teams)", c.NotifyProvider)
+	}
+	switch c.SessionBackend {
+	case SessionMemory, SessionSQLite, SessionFirestore:
+	default:
+		return fmt.Errorf("invalid SESSION_BACKEND %q (want memory|sqlite|firestore)", c.SessionBackend)
 	}
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)

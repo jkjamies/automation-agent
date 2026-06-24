@@ -2,17 +2,20 @@ package fixflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 
 	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"github.com/jkjamies/automation-agent/internal/githubapi"
 )
 
 const (
@@ -20,9 +23,10 @@ const (
 	toolAwaitCI  = "await_ci"
 )
 
-// runParams are the per-run inputs the apply_fix tool needs. They are owned by the
-// Driver (keyed by session id) and never model-controlled, so a misbehaving model cannot
-// redirect which repo or branch is edited.
+// runParams are the per-run inputs the apply_fix tool needs. They are looked up by session
+// id and never model-controlled, so a misbehaving model cannot redirect which repo or
+// branch is edited. They are persisted (serialized) in the ParkStore so a retry — or, with
+// a durable backend, a restart — can reconstruct them.
 type runParams struct {
 	owner, repo, fullRepo string
 	base, report          string
@@ -30,34 +34,73 @@ type runParams struct {
 	newBranch             bool   // true on kickoff (create from base); false on retry (reuse branch)
 }
 
+// runParamsJSON is the serialized form stored in ParkRecord.Params. runParams' own fields
+// are unexported (so only this package can build them), so an explicit shim does the
+// marshalling rather than reflecting over the struct directly.
+type runParamsJSON struct {
+	Owner     string `json:"owner"`
+	Repo      string `json:"repo"`
+	FullRepo  string `json:"full_repo"`
+	Base      string `json:"base"`
+	Report    string `json:"report"`
+	Feedback  string `json:"feedback"`
+	NewBranch bool   `json:"new_branch"`
+}
+
+func marshalRunParams(rp *runParams) (string, error) {
+	b, err := json.Marshal(runParamsJSON{
+		Owner: rp.owner, Repo: rp.repo, FullRepo: rp.fullRepo,
+		Base: rp.base, Report: rp.report, Feedback: rp.feedback, NewBranch: rp.newBranch,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func unmarshalRunParams(s string) (*runParams, error) {
+	var j runParamsJSON
+	if err := json.Unmarshal([]byte(s), &j); err != nil {
+		return nil, err
+	}
+	return &runParams{
+		owner: j.Owner, repo: j.Repo, fullRepo: j.FullRepo,
+		base: j.Base, report: j.Report, feedback: j.Feedback, newBranch: j.NewBranch,
+	}, nil
+}
+
 // Driver runs a Spec's CI-wait loop on ADK's IsLongRunning suspend/resume. It owns the
-// long-run agent, the in-memory parked-run registry, and each session's run params. All
-// policy — retry vs give up, attempt counting, the per-run timeout — lives here; the
-// agent's sequencer model only emits a fixed apply_fix→await_ci sequence.
+// long-run agent and a ParkStore of suspended runs; all policy — retry vs give up, attempt
+// counting, the per-run timeout — lives here, while the agent's sequencer model only emits
+// a fixed apply_fix→await_ci sequence.
 //
-// Lifecycle: Kickoff applies a fix and parks on await_ci (registered in the registry).
-// A check_run webhook drives Resume, which atomically claims the parked run and either
+// Lifecycle: Kickoff applies a fix and parks on await_ci (recorded in the store). A
+// check_run webhook drives Resume, which atomically claims the parked run and either
 // notifies success, resumes for another attempt, or gives up at MaxIter. If CI never
-// reports, the registry's per-run timer fires onTimeout, which frees the run and asks
-// for human review. There is no durable store: a process restart strands parked runs
-// (an accepted trade — see the architecture notes).
+// reports, a soft per-run timer fires onTimeout, which frees the run and asks for human
+// review. The timer is in-memory (lost on restart); the durable catch-all is the
+// ParkStore sweep (wired in a later step). With a durable ParkStore + session backend a
+// parked run survives a restart; with the default in-memory ones it does not.
 type Driver struct {
 	engine  *Engine
 	lr      *setup.LongRunDriver
-	reg     *runRegistry
+	store   setup.ParkStore
 	timeout time.Duration
 
-	mu   sync.Mutex
-	runs map[string]*runParams // session id -> params
-	seq  uint64                // session id counter (process-local uniqueness)
+	mu     sync.Mutex
+	timers map[string]*time.Timer // prKey -> soft timeout timer
 }
 
 func newDriver(e *Engine) (*Driver, error) {
+	store := e.d.ParkStore
+	if store == nil {
+		store = setup.NewMemoryParkStore()
+	}
 	dr := &Driver{
 		engine:  e,
-		reg:     newRunRegistry(),
+		store:   store,
 		timeout: e.d.CITimeout,
-		runs:    map[string]*runParams{},
+		timers:  map[string]*time.Timer{},
 	}
 	tools, err := dr.tools()
 	if err != nil {
@@ -79,7 +122,7 @@ func newDriver(e *Engine) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	lr, err := setup.NewLongRunDriver("fixflow-"+e.spec.Name, "fixer", fixer)
+	lr, err := setup.NewLongRunDriver("fixflow-"+e.spec.Name, "fixer", fixer, e.d.SessionService)
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +156,20 @@ type applyFixResult struct {
 	HeadSHA  string `json:"head_sha"`
 }
 
-// applyFix runs one fix attempt for the calling session. The run params are looked up by
-// session id (Driver-owned), so the model's (empty) args cannot influence the target.
+// applyFix runs one fix attempt for the calling session. The run params are loaded from the
+// store by session id (never model-supplied), so the model's (empty) args cannot influence
+// the target.
 func (dr *Driver) applyFix(tc tool.Context, _ applyFixArgs) (applyFixResult, error) {
-	rp, ok := dr.runParamsFor(tc.SessionID())
+	rec, ok, err := dr.store.Get(tc, tc.SessionID())
+	if err != nil {
+		return applyFixResult{}, fmt.Errorf("apply_fix: load run %q: %w", tc.SessionID(), err)
+	}
 	if !ok {
 		return applyFixResult{}, fmt.Errorf("apply_fix: no run params for session %q", tc.SessionID())
+	}
+	rp, err := unmarshalRunParams(rec.Params)
+	if err != nil {
+		return applyFixResult{}, fmt.Errorf("apply_fix: decode run %q: %w", tc.SessionID(), err)
 	}
 	res, err := dr.engine.attemptOnce(tc, rp)
 	if err != nil {
@@ -147,13 +198,16 @@ func (dr *Driver) awaitCI(_ tool.Context, _ awaitCIArgs) (awaitCIResult, error) 
 // Kickoff starts a new suspended run: apply the fix, then park awaiting CI.
 func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
 	sid := dr.newSessionID()
-	dr.setRunParams(sid, &runParams{
+	rp := &runParams{
 		owner: k.Owner(), repo: k.Name(), fullRepo: k.Repo,
 		base: k.Base, report: k.ReportText(), newBranch: true,
-	})
+	}
+	if err := dr.putParams(ctx, sid, rp); err != nil {
+		return err
+	}
 	res, err := dr.lr.Start(ctx, sid, "Apply the fix and wait for CI.")
 	if err != nil {
-		dr.clear(sid)
+		dr.clear(ctx, sid)
 		return err
 	}
 	return dr.afterDrive(ctx, sid, k.Repo, res, 1)
@@ -172,57 +226,121 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 	}
 
 	key := prKey(in.FullRepo, in.PRNumber)
-	run, ok := dr.reg.Resolve(key)
+	run, ok, err := dr.store.ResolveByPRKey(ctx, key)
+	if err != nil {
+		return fmt.Errorf("resume: resolve %s: %w", key, err)
+	}
 	if !ok {
 		// Late, duplicate, raced with the timeout, or after a restart — nothing to do.
 		dr.engine.d.Log.Info("resume: no parked run", "workflow", dr.engine.spec.Name, "pr", key, "conclusion", in.Conclusion)
 		return nil
 	}
-	link := pullURL(in.FullRepo, in.PRNumber)
+	dr.stopTimer(key)
 
+	// Notify before clear so the summary is sent while the record is intact, then clear
+	// unconditionally (a notify error is returned/logged, not a reason to leak the run). A
+	// duplicate webhook cannot double-notify: ResolveByPRKey above already claimed the run.
 	if in.Conclusion == "success" {
-		dr.clear(run.SessionID)
 		dr.engine.d.Log.Info("fix succeeded", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber)
-		return dr.engine.notify(ctx, dr.engine.spec.SuccessTitle, fmt.Sprintf("%s: %s passed CI.", in.FullRepo, dr.engine.spec.Name), link)
+		err := dr.terminalNotify(ctx, outcomeSuccess, dr.engine.spec.SuccessTitle, run, in.FullRepo, in.PRNumber, "")
+		dr.clear(ctx, run.SessionID)
+		return err
 	}
 
 	// failure
 	if run.Attempts >= dr.engine.d.MaxIter {
-		dr.clear(run.SessionID)
 		dr.engine.d.Log.Warn("fix exhausted attempts", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber, "attempts", run.Attempts)
-		return dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
-			fmt.Sprintf("%s: after %d attempts the %s fix still fails CI. Please review.", in.FullRepo, run.Attempts, dr.engine.spec.Name), link)
+		err := dr.terminalNotify(ctx, outcomeExhausted, dr.engine.spec.ReviewTitle, run, in.FullRepo, in.PRNumber, in.OutputText)
+		dr.clear(ctx, run.SessionID)
+		return err
 	}
 
-	dr.updateForRetry(run.SessionID, in.OutputText)
+	if err := dr.updateForRetry(ctx, run.SessionID, in.OutputText); err != nil {
+		dr.clear(ctx, run.SessionID)
+		return err
+	}
 	res, err := dr.lr.Resume(ctx, run.SessionID, run.CallID, toolAwaitCI, map[string]any{
 		"conclusion": in.Conclusion, "output": in.OutputText,
 	})
 	if err != nil {
-		dr.clear(run.SessionID)
+		dr.clear(ctx, run.SessionID)
 		return err
 	}
 	dr.engine.d.Log.Info("fix retrying", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber, "attempt", run.Attempts+1)
 	return dr.afterDrive(ctx, run.SessionID, in.FullRepo, res, run.Attempts+1)
 }
 
-// onTimeout fires (from the registry timer) when a parked run's CI never reports. It
+// onTimeout fires (from the soft per-run timer) when a parked run's CI never reports. It
 // claims the run, frees it, and asks for human review.
 func (dr *Driver) onTimeout(key string) {
-	run, ok := dr.reg.Resolve(key)
+	ctx := context.Background()
+	run, ok, err := dr.store.ResolveByPRKey(ctx, key)
+	if err != nil {
+		dr.engine.d.Log.Error("timeout resolve failed", "workflow", dr.engine.spec.Name, "pr", key, "err", err)
+		return
+	}
 	if !ok {
 		return // already resolved by a webhook
 	}
-	dr.clear(run.SessionID)
+	dr.stopTimer(key)
 	fullRepo, pr := splitPRKey(key)
-	link := pullURL(fullRepo, pr)
 	dr.engine.d.Log.Warn("fix timed out waiting for CI", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "timeout", dr.timeout)
-	_ = dr.engine.notify(context.Background(), dr.engine.spec.ReviewTitle,
-		fmt.Sprintf("%s: the %s fix timed out after %s waiting for CI. Please review.", fullRepo, dr.engine.spec.Name, dr.timeout), link)
+	_ = dr.terminalNotify(ctx, outcomeTimeout, dr.engine.spec.ReviewTitle, run, fullRepo, pr, "")
+	dr.clear(ctx, run.SessionID)
+}
+
+// SweepTimeouts resolves every parked run whose CI never reported within CITimeout — the
+// durable catch-all behind the soft in-memory timer (which a restart loses). Driven by
+// Cloud Scheduler via /internal/sweep. The store's Sweep claims each run atomically, so a
+// webhook racing the sweep still resolves it at most once.
+func (dr *Driver) SweepTimeouts(ctx context.Context) error {
+	// Process every record the store claimed even if Sweep also returns an error: the store's
+	// contract is that returned records are already claimed (pr_key cleared), so skipping them
+	// on error would strand them. Propagate the error afterwards so the handler 500s and Cloud
+	// Scheduler retries the records that could not be claimed this pass.
+	swept, err := dr.store.Sweep(ctx, time.Now().Add(-dr.timeout))
+	for _, run := range swept {
+		dr.stopTimer(run.PRKey)
+		fullRepo, pr := splitPRKey(run.PRKey)
+		dr.engine.d.Log.Warn("fix swept after timeout", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "timeout", dr.timeout)
+		_ = dr.terminalNotify(ctx, outcomeTimeout, dr.engine.spec.ReviewTitle, run, fullRepo, pr, "")
+		dr.clear(ctx, run.SessionID)
+	}
+	return err
+}
+
+// gatherChanges best-effort fetches the PR branch's base...head diff for a terminal
+// summary. On error it returns an empty comparison so the summary still reports the attempt
+// count and findings.
+func (dr *Driver) gatherChanges(ctx context.Context, rp *runParams) githubapi.Comparison {
+	cmp, err := dr.engine.d.GH.Compare(ctx, rp.owner, rp.repo, rp.base, dr.engine.spec.Branch)
+	if err != nil {
+		dr.engine.d.Log.Warn("compare for summary failed", "workflow", dr.engine.spec.Name, "repo", rp.fullRepo, "err", err)
+		return githubapi.Comparison{}
+	}
+	return cmp
+}
+
+// terminalNotify builds and sends the status-aware summary for a finished run: the outcome
+// framing, the original targeted findings, and what actually changed on the PR.
+func (dr *Driver) terminalNotify(ctx context.Context, outcome terminalOutcome, title string, run setup.ParkRecord, fullRepo string, prNumber int, lastOutput string) error {
+	in := summaryInput{
+		outcome: outcome, workflow: dr.engine.spec.Name, fullRepo: fullRepo,
+		prNumber: prNumber, attempts: run.Attempts, lastOutput: lastOutput,
+		timeout: dr.timeout.String(), checkName: dr.engine.spec.CheckName,
+	}
+	if rp, err := unmarshalRunParams(run.Params); err == nil {
+		in.report = rp.report
+		in.changed = dr.gatherChanges(ctx, rp)
+	} else {
+		dr.engine.d.Log.Warn("decode run params for summary failed; sending without findings/diff",
+			"workflow", dr.engine.spec.Name, "session", run.SessionID, "err", err)
+	}
+	return dr.engine.notify(ctx, title, buildSummaryText(in), pullURL(fullRepo, prNumber))
 }
 
 // afterDrive inspects a drive's outcome and either surfaces an apply error or parks the
-// run (and its timeout) under its PR key.
+// run (and arms its timeout) under its PR key.
 func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setup.DriveResult, attempt int) error {
 	if apply := res.ToolResponses[toolApplyFix]; apply != nil {
 		if msg, bad := apply["error"]; bad {
@@ -236,7 +354,10 @@ func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setu
 	if pr == 0 {
 		return dr.failApply(ctx, sid, fullRepo, "parked without a PR number")
 	}
-	dr.reg.Park(prKey(fullRepo, pr), &ParkedRun{SessionID: sid, CallID: res.ParkedCallID, Attempts: attempt}, dr.timeout, dr.onTimeout)
+	key := prKey(fullRepo, pr)
+	if err := dr.park(ctx, sid, key, res.ParkedCallID, attempt); err != nil {
+		return dr.failApply(ctx, sid, fullRepo, fmt.Sprintf("could not record parked run: %v", err))
+	}
 	dr.engine.d.Log.Info("fix applied; awaiting CI", "workflow", dr.engine.spec.Name, "repo", fullRepo, "pr", pr, "attempt", attempt)
 	return nil
 }
@@ -246,45 +367,107 @@ func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setu
 // only bubble up to the dispatcher's logger and never reach the review channel — a fix
 // that can't even open its PR would vanish silently.
 func (dr *Driver) failApply(ctx context.Context, sid, fullRepo, reason string) error {
-	dr.clear(sid)
+	dr.clear(ctx, sid)
 	_ = dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
 		fmt.Sprintf("%s: the %s fix could not be applied (%s). Please review.", fullRepo, dr.engine.spec.Name, reason), "")
 	return fmt.Errorf("%s %s: %s", fullRepo, dr.engine.spec.Name, reason)
 }
 
+// newSessionID returns a globally unique session id. A UUID (not a process-local counter)
+// is required because the ParkStore is shared across Drivers and, with a durable backend,
+// across restarts and instances — a counter would collide or overwrite persisted runs.
 func (dr *Driver) newSessionID() string {
-	dr.mu.Lock()
-	defer dr.mu.Unlock()
-	dr.seq++
-	return fmt.Sprintf("run-%d", dr.seq)
+	return uuid.NewString()
 }
 
-func (dr *Driver) setRunParams(sid string, rp *runParams) {
-	dr.mu.Lock()
-	defer dr.mu.Unlock()
-	dr.runs[sid] = rp
+// putParams stores a fresh run's inputs (not yet parked: no PR key, no timer).
+func (dr *Driver) putParams(ctx context.Context, sid string, rp *runParams) error {
+	blob, err := marshalRunParams(rp)
+	if err != nil {
+		return err
+	}
+	return dr.store.Put(ctx, setup.ParkRecord{SessionID: sid, Params: blob})
 }
 
-func (dr *Driver) runParamsFor(sid string) (*runParams, bool) {
-	dr.mu.Lock()
-	defer dr.mu.Unlock()
-	rp, ok := dr.runs[sid]
-	return rp, ok
+// park records that sid is now suspended awaiting CI under key, and arms the soft timeout.
+// It preserves the run's stored params (read-modify-write of the existing record).
+func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int) error {
+	rec, ok, err := dr.store.Get(ctx, sid)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		rec = setup.ParkRecord{SessionID: sid}
+	}
+	rec.PRKey = key
+	rec.CallID = callID
+	rec.Attempts = attempt
+	rec.ParkedAt = time.Now()
+	if err := dr.store.Put(ctx, rec); err != nil {
+		return err
+	}
+	dr.armTimer(key)
+	return nil
 }
 
-func (dr *Driver) updateForRetry(sid, feedback string) {
-	dr.mu.Lock()
-	defer dr.mu.Unlock()
-	if rp, ok := dr.runs[sid]; ok {
-		rp.feedback = "The previous attempt failed CI with:\n" + feedback
-		rp.newBranch = false
+// updateForRetry records the previous attempt's CI failure as feedback and switches the
+// run off branch-creation, persisting the change for the retry's apply_fix.
+func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) error {
+	rec, ok, err := dr.store.Get(ctx, sid)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	rp, err := unmarshalRunParams(rec.Params)
+	if err != nil {
+		return err
+	}
+	rp.feedback = "The previous attempt failed CI with:\n" + feedback
+	rp.newBranch = false
+	blob, err := marshalRunParams(rp)
+	if err != nil {
+		return err
+	}
+	rec.Params = blob
+	return dr.store.Put(ctx, rec)
+}
+
+// clear is terminal cleanup: it removes the run from the park store and deletes the ADK
+// session so a durable backend does not leak completed runs. (The timer, if any, is
+// stopped by the resolve that precedes clear.)
+func (dr *Driver) clear(ctx context.Context, sid string) {
+	if err := dr.store.Delete(ctx, sid); err != nil {
+		dr.engine.d.Log.Error("clear run failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
+	}
+	if err := dr.lr.DeleteSession(ctx, sid); err != nil {
+		dr.engine.d.Log.Error("delete session failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
 	}
 }
 
-func (dr *Driver) clear(sid string) {
+func (dr *Driver) armTimer(key string) {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()
-	delete(dr.runs, sid)
+	if old, ok := dr.timers[key]; ok {
+		old.Stop() // replace any prior parking for this PR (e.g. a retry re-park)
+	}
+	dr.timers[key] = time.AfterFunc(dr.timeout, func() { dr.onTimeout(key) })
+}
+
+func (dr *Driver) stopTimer(key string) {
+	dr.mu.Lock()
+	defer dr.mu.Unlock()
+	if t, ok := dr.timers[key]; ok {
+		t.Stop()
+		delete(dr.timers, key)
+	}
+}
+
+// parkedCount reports the number of currently parked runs (used by tests).
+func (dr *Driver) parkedCount() int {
+	n, _ := dr.store.ParkedCount(context.Background())
+	return n
 }
 
 func prKey(fullRepo string, number int) string { return fmt.Sprintf("%s#%d", fullRepo, number) }

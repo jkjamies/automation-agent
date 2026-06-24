@@ -74,6 +74,38 @@ type CheckResult struct {
 
 func ptr[T any](v T) *T { return &v }
 
+// Comparison summarizes what changed between two refs (base...head).
+type Comparison struct {
+	TotalCommits int
+	Files        []ChangedFile
+}
+
+// ChangedFile is one file in a comparison.
+type ChangedFile struct {
+	Path      string
+	Status    string // added | modified | removed | renamed | ...
+	Additions int
+	Deletions int
+}
+
+// Compare returns the commits and files changed between base and head (base...head). It is
+// how a terminal summary reports what the agent actually did across its attempts, since the
+// per-attempt work product lives only in the PR, not the session.
+func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (Comparison, error) {
+	cmp, _, err := c.gh.Repositories.CompareCommits(ctx, owner, repo, base, head, nil)
+	if err != nil {
+		return Comparison{}, fmt.Errorf("compare %s/%s %s...%s: %w", owner, repo, base, head, err)
+	}
+	out := Comparison{TotalCommits: cmp.GetTotalCommits()}
+	for _, f := range cmp.Files {
+		out.Files = append(out.Files, ChangedFile{
+			Path: f.GetFilename(), Status: f.GetStatus(),
+			Additions: f.GetAdditions(), Deletions: f.GetDeletions(),
+		})
+	}
+	return out, nil
+}
+
 // ListCommitsSince returns commits to owner/repo authored since the given time.
 func (c *Client) ListCommitsSince(ctx context.Context, owner, repo string, since time.Time) ([]Commit, error) {
 	opts := &github.CommitsListOptions{Since: since, ListOptions: github.ListOptions{PerPage: 100}}

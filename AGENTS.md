@@ -55,7 +55,7 @@ flowchart TD
     Dec -->|success| Chat
     Dec -->|"failure & attempts<3"| LFK
     Dec -->|"failure & attempts>=3"| Chat
-    TO["per-run CI_TIMEOUT timer (in-memory)"] -.->|"CI never reports -> needs review"| Chat
+    TO["per-run CI_TIMEOUT (soft timer + durable /internal/sweep)"] -.->|"CI never reports -> needs review"| Chat
 
     Models["model.LLM: Ollama/Gemma (local) | Gemini (cloud)"] -.-> Sum
     Models -.-> LFK
@@ -67,9 +67,15 @@ Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one o
 workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
 remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sharing
 the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
-plus an in-memory parked-run registry (no durable store; a restart strands in-flight
-runs). Deterministic, agent-free tooling lives under `internal/` and is called by
-agents but never imports them.
+plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
+(`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
+no longer strands in-flight runs; `memory` keeps the old ephemeral behavior. (Per-port
+backend coverage: [`specs/parity-status.md`](specs/parity-status.md).)
+Deterministic, agent-free tooling lives under `internal/` and is called by
+agents but never imports them. Env vars + local run modes:
+[`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,
+the `/internal/*` hooks, and GCP setup:
+[`.agents/standards/deployment.md`](.agents/standards/deployment.md).
 
 ## Conventions (enforced by `ARCH/` + `make ci`)
 

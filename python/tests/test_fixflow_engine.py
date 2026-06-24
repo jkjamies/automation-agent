@@ -5,7 +5,7 @@ a fake GitHub, and a fake Notifier.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from git import Actor
@@ -17,12 +17,42 @@ from automation_agent.agent.fixflow import (
     Engine,
     FileEdit,
     FileWork,
-    ParkedRun,
     Spec,
     new_engine,
 )
-from automation_agent.githubapi import PR, PRInput
+from automation_agent.agent.fixflow.driver import RunParams
+from automation_agent.agent.setup import ParkRecord
+from automation_agent.githubapi import PR, ChangedFile, Comparison, PRInput
 from automation_agent.notify import Message
+
+
+async def _prepark(
+    e: Engine,
+    key: str,
+    *,
+    session_id: str,
+    attempts: int,
+    parked_at: datetime | None = None,
+) -> None:
+    """Seed a parked run directly in the store (bypassing kickoff) so the exhausted /
+    timeout / sweep terminal paths can be exercised in isolation. Stores valid run params so
+    the terminal summary can decode the findings."""
+    repo, _, _num = key.partition("#")
+    owner, _, name = repo.partition("/")
+    params = RunParams(
+        owner=owner, repo=name, full_repo=repo, base="main", report="lint findings"
+    ).to_json()
+    await e.driver.store.put(
+        ParkRecord(
+            session_id=session_id,
+            pr_key=key,
+            call_id="c",
+            attempts=attempts,
+            params=params,
+            parked_at=parked_at or datetime.now(UTC),
+        )
+    )
+
 
 # --- fakes ------------------------------------------------------------------
 
@@ -42,6 +72,12 @@ class FakeGH:
 
     def add_labels(self, owner: str, repo: str, number: int, *labels: str) -> None:
         self.labeled.extend(labels)
+
+    def compare(self, owner: str, repo: str, base: str, head: str) -> Comparison:
+        return Comparison(
+            total_commits=1,
+            files=[ChangedFile(path="a.go", status="modified", additions=3, deletions=1)],
+        )
 
 
 class FakeNotifier:
@@ -72,18 +108,29 @@ async def _analyze(_in: AnalyzeInput) -> list[FileEdit]:
 
 def _spec() -> Spec:
     return Spec(
-        name="test", branch="agent/fix", label="automation-agent",
-        check_name="agent-test-verify", commit_message="fix", pr_title="Fix",
-        success_title="Fix succeeded", review_title="Needs human review",
-        triage=_triage, analyze=_analyze,
+        name="test",
+        branch="agent/fix",
+        label="automation-agent",
+        check_name="agent-test-verify",
+        commit_message="fix",
+        pr_title="Fix",
+        success_title="Fix succeeded",
+        review_title="Needs human review",
+        triage=_triage,
+        analyze=_analyze,
     )
 
 
 def _new_engine(remote: str, gh: FakeGH, n: FakeNotifier) -> Engine:
     return new_engine(
         _spec(),
-        Deps(gh=gh, notify=n, max_iter=3, ci_timeout=timedelta(hours=1),
-             clone_url=lambda _o, _r: remote),
+        Deps(
+            gh=gh,
+            notify=n,
+            max_iter=3,
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: remote,
+        ),
     )
 
 
@@ -93,7 +140,9 @@ def _check_body(conclusion: str, pr: int, output: str = "") -> bytes:
     payload = {
         "action": "completed",
         "check_run": {
-            "name": "agent-test-verify", "status": "completed", "conclusion": conclusion,
+            "name": "agent-test-verify",
+            "status": "completed",
+            "conclusion": conclusion,
             "pull_requests": [{"number": pr, "head": {"ref": "agent/fix"}}],
             "output": {"text": output},
         },
@@ -113,20 +162,21 @@ async def test_engine_kickoff_parks(tmp_path) -> None:
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
     assert gh.created is not None and gh.created.head == "agent/fix"
     assert len(gh.labeled) == 1
-    assert e.driver.reg.len() == 1
+    assert await e.driver.parked_count() == 1
 
 
 async def test_engine_kickoff_rejects_repo_not_in_allowlist() -> None:
     gh = FakeGH()
     e = new_engine(
         _spec(),
-        Deps(gh=gh, notify=FakeNotifier(), repos=["allowed/repo"],
-             clone_url=lambda _o, _r: "unused"),
+        Deps(
+            gh=gh, notify=FakeNotifier(), repos=["allowed/repo"], clone_url=lambda _o, _r: "unused"
+        ),
     )
     with pytest.raises(ValueError, match="allowlist"):
         await e.kickoff(b'{"repo":"acme/api","report":"r"}')
     assert gh.created is None
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_kickoff_allows_repo_in_allowlist(tmp_path) -> None:
@@ -134,12 +184,17 @@ async def test_engine_kickoff_allows_repo_in_allowlist(tmp_path) -> None:
     gh = FakeGH()
     e = new_engine(
         _spec(),
-        Deps(gh=gh, notify=FakeNotifier(), repos=["acme/api"],
-             ci_timeout=timedelta(hours=1), clone_url=lambda _o, _r: remote),
+        Deps(
+            gh=gh,
+            notify=FakeNotifier(),
+            repos=["acme/api"],
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: remote,
+        ),
     )
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
     assert gh.created is not None and gh.created.head == "agent/fix"
-    assert e.driver.reg.len() == 1
+    assert await e.driver.parked_count() == 1
 
 
 async def test_engine_resume_success(tmp_path) -> None:
@@ -148,19 +203,19 @@ async def test_engine_resume_success(tmp_path) -> None:
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
     await e.resume(_check_body("success", 42))
     assert len(n.msgs) == 1 and "succeeded" in n.msgs[0].title
-    assert e.driver.reg.len() == 0
+    # The status-aware summary reports the outcome + what changed on the PR (from compare).
+    body = n.msgs[0].text
+    assert "passed CI" in body and "a.go" in body
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_resume_exhausted(tmp_path) -> None:
     n = FakeNotifier()
     e = _new_engine(_seed_remote(tmp_path), FakeGH(), n)
-    e.driver.reg.park(
-        "acme/api#42", ParkedRun(session_id="run-x", call_id="c", attempts=3),
-        timedelta(hours=1), e.driver.on_timeout,
-    )
+    await _prepark(e, "acme/api#42", session_id="run-x", attempts=3)
     await e.resume(_check_body("failure", 42, "still broken"))
     assert len(n.msgs) == 1 and "review" in n.msgs[0].title
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_resume_retry(tmp_path) -> None:
@@ -181,7 +236,7 @@ async def test_engine_resume_retry(tmp_path) -> None:
     await e.resume(_check_body("failure", 42, "still failing"))
     assert gh.created is None  # reused, not created
     assert len(n.msgs) == 0
-    assert e.driver.reg.len() == 1
+    assert await e.driver.parked_count() == 1
 
 
 async def test_engine_full_loop_exhausts(tmp_path) -> None:
@@ -198,8 +253,13 @@ async def test_engine_full_loop_exhausts(tmp_path) -> None:
     spec.analyze = varying
     e = new_engine(
         spec,
-        Deps(gh=gh, notify=n, max_iter=3, ci_timeout=timedelta(hours=1),
-             clone_url=lambda _o, _r: remote),
+        Deps(
+            gh=gh,
+            notify=n,
+            max_iter=3,
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: remote,
+        ),
     )
 
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
@@ -207,26 +267,42 @@ async def test_engine_full_loop_exhausts(tmp_path) -> None:
     for _ in range(2):
         await e.resume(_check_body("failure", 42, "boom"))
         assert len(n.msgs) == 0
-        assert e.driver.reg.len() == 1
+        assert await e.driver.parked_count() == 1
     await e.resume(_check_body("failure", 42, "boom"))
     assert len(n.msgs) == 1 and "review" in n.msgs[0].title
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
     assert calls["n"] == 3
 
 
 async def test_engine_timeout_frees_run(tmp_path) -> None:
     n = FakeNotifier()
     e = _new_engine(_seed_remote(tmp_path), FakeGH(), n)
-    e.driver.reg.park(
-        "acme/api#42", ParkedRun(session_id="run-x", call_id="c", attempts=1),
-        timedelta(hours=1), e.driver.on_timeout,
-    )
+    await _prepark(e, "acme/api#42", session_id="run-x", attempts=1)
     await e.driver.on_timeout("acme/api#42")
     assert len(n.msgs) == 1 and "review" in n.msgs[0].title
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
     # A late webhook after the timeout is a benign no-op.
     await e.resume(_check_body("success", 42))
     assert len(n.msgs) == 1
+
+
+async def test_engine_sweep_times_out_stale_runs(tmp_path) -> None:
+    # The durable catch-all (driven by /internal/sweep): frees runs whose CI never
+    # reported, leaving fresher ones parked. (ci_timeout is 1h via _new_engine.)
+    n = FakeNotifier()
+    e = _new_engine(_seed_remote(tmp_path), FakeGH(), n)
+    stale = datetime.now(UTC) - timedelta(hours=2)
+    await _prepark(e, "acme/api#42", session_id="run-stale", attempts=1, parked_at=stale)
+    await _prepark(e, "acme/api#43", session_id="run-fresh", attempts=1)  # parked_at=now
+
+    await e.sweep_timeouts()
+    assert len(n.msgs) == 1 and "review" in n.msgs[0].title
+    assert await e.driver.parked_count() == 1  # only the stale run was swept
+    # A late webhook for the swept PR is a benign no-op; the fresh run still resolves.
+    await e.resume(_check_body("success", 42))
+    assert len(n.msgs) == 1
+    await e.resume(_check_body("success", 43))
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_resume_unknown_pr(tmp_path) -> None:
@@ -253,12 +329,15 @@ async def test_engine_kickoff_triage_error(tmp_path) -> None:
     spec.triage = boom
     e = new_engine(
         spec,
-        Deps(gh=FakeGH(), ci_timeout=timedelta(hours=1),
-             clone_url=lambda _o, _r: _seed_remote(tmp_path, "r2")),
+        Deps(
+            gh=FakeGH(),
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: _seed_remote(tmp_path, "r2"),
+        ),
     )
     with pytest.raises(RuntimeError):
         await e.kickoff(b'{"repo":"acme/api","report":"r"}')
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_kickoff_apply_failure_notifies(tmp_path) -> None:
@@ -277,7 +356,7 @@ async def test_engine_kickoff_apply_failure_notifies(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
     assert len(n.msgs) == 1 and "review" in n.msgs[0].title.lower()
-    assert e.driver.reg.len() == 0
+    assert await e.driver.parked_count() == 0
 
 
 async def test_engine_triage_cached_across_retries(tmp_path) -> None:
@@ -295,8 +374,13 @@ async def test_engine_triage_cached_across_retries(tmp_path) -> None:
     spec.triage = counting_triage
     e = new_engine(
         spec,
-        Deps(gh=gh, notify=n, max_iter=3, ci_timeout=timedelta(hours=1),
-             clone_url=lambda _o, _r: remote),
+        Deps(
+            gh=gh,
+            notify=n,
+            max_iter=3,
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: remote,
+        ),
     )
 
     await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
@@ -308,7 +392,7 @@ async def test_engine_triage_cached_across_retries(tmp_path) -> None:
     gh.existing = [PR(number=42, title="", branch="agent/fix", head_sha="", url="")]
     await e.resume(_check_body("failure", 42, "still failing"))
     assert triage_calls["n"] == 1  # not re-run on retry
-    assert e.driver.reg.len() == 1
+    assert await e.driver.parked_count() == 1
 
 
 def test_engine_label_and_check_name(tmp_path) -> None:

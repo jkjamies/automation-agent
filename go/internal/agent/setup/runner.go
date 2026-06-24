@@ -9,13 +9,20 @@ import (
 	"google.golang.org/adk/session"
 )
 
-// NewRunner builds an in-memory runner rooted at root, suitable for driving a
-// workflow agent to completion locally and in tests.
+// NewRunner builds an in-memory runner rooted at root, suitable for ephemeral one-shot
+// drives (explore/analyze/triage) that complete within a single invocation and never
+// need to survive a restart.
 func NewRunner(appName string, root agent.Agent) (*runner.Runner, error) {
+	return newRunner(appName, root, session.InMemoryService())
+}
+
+// newRunner builds a runner over the given session service. A durable service
+// (sqlite/firestore) lets a parked long-running run resume after a process restart.
+func newRunner(appName string, root agent.Agent, sess session.Service) (*runner.Runner, error) {
 	return runner.New(runner.Config{
 		AppName:           appName,
 		Agent:             root,
-		SessionService:    session.InMemoryService(),
+		SessionService:    sess,
 		AutoCreateSession: true,
 	})
 }

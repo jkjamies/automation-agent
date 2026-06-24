@@ -89,7 +89,12 @@ data class Config(
         }
 
         /** Load reads configuration from the process environment, applying defaults. */
-        fun load(): Config = loadFrom { key -> System.getenv(key) }
+        fun load(): Config {
+            val c = loadFrom { key -> System.getenv(key) }
+            // When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's
+            // gh CLI login so a local run authenticates to GitHub without a hand-set token.
+            return if (c.githubToken.isEmpty()) c.copy(githubToken = ghCliToken()) else c
+        }
 
         /**
          * loadFrom builds a Config from an arbitrary lookup, which keeps [load] testable
@@ -127,7 +132,7 @@ data class Config(
                 ollamaCodeModel = ollamaCodeModel,
                 geminiCodeModel = geminiCodeModel,
                 repos = splitList(getOr(get, "REPOS", "")),
-                githubToken = getOr(get, "GITHUB_TOKEN", ""),
+                githubToken = getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
                 notifyProvider = notifyProvider,
                 slackWebhookUrl = getOr(get, "SLACK_WEBHOOK_URL", ""),
                 teamsWebhookUrl = getOr(get, "TEAMS_WEBHOOK_URL", ""),
@@ -149,6 +154,34 @@ data class Config(
 private fun getOr(get: Config.Companion.Lookup, key: String, def: String): String {
     val v = get(key)
     return if (!v.isNullOrEmpty()) v else def
+}
+
+/**
+ * Returns the token from `gh auth token`, or "" if the gh CLI is missing, unauthenticated, or
+ * errors. This is the one place config shells out rather than reading the environment; it exists
+ * so local runs reuse an existing gh login. The short timeout guards against a hung subprocess
+ * stalling startup.
+ */
+private fun ghCliToken(): String {
+    return try {
+        val proc = ProcessBuilder("gh", "auth", "token")
+            .redirectErrorStream(false)
+            .start()
+        val out = proc.inputStream.bufferedReader().use { it.readText() }.trim()
+        val finished = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        if (!finished) {
+            proc.destroy()
+            ""
+        } else if (proc.exitValue() == 0) {
+            out
+        } else {
+            ""
+        }
+    } catch (_: java.io.IOException) {
+        ""
+    } catch (_: InterruptedException) {
+        ""
+    }
 }
 
 private fun splitList(s: String): List<String> {

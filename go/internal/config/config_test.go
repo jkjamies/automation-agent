@@ -32,6 +32,25 @@ func TestLoadDefaults(t *testing.T) {
 	if c.CITimeout.Minutes() != 90 {
 		t.Errorf("CITimeout = %v, want 90m", c.CITimeout)
 	}
+	if c.SessionBackend != SessionMemory {
+		t.Errorf("SessionBackend = %q, want memory", c.SessionBackend)
+	}
+}
+
+func TestInvalidSessionBackend(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"SESSION_BACKEND": "redis"})); err == nil {
+		t.Fatal("expected error for invalid SESSION_BACKEND")
+	}
+}
+
+func TestSessionBackendOverride(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{"SESSION_BACKEND": "sqlite"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.SessionBackend != SessionSQLite {
+		t.Errorf("SessionBackend = %q, want sqlite", c.SessionBackend)
+	}
 }
 
 func TestReposParsing(t *testing.T) {
@@ -60,6 +79,26 @@ func TestCodeModelOverride(t *testing.T) {
 	}
 	if c.OllamaModel != "gemma4:12b" {
 		t.Errorf("OllamaModel = %q, want gemma4:12b", c.OllamaModel)
+	}
+}
+
+func TestGitHubTokenEnvChain(t *testing.T) {
+	// GH_TOKEN is honoured when GITHUB_TOKEN is unset, so a local gh-style env works.
+	c, err := loadFrom(mapLookup(map[string]string{"GH_TOKEN": "gh_abc"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.GitHubToken != "gh_abc" {
+		t.Errorf("GitHubToken = %q, want gh_abc", c.GitHubToken)
+	}
+
+	// GITHUB_TOKEN takes precedence over GH_TOKEN.
+	c, err = loadFrom(mapLookup(map[string]string{"GITHUB_TOKEN": "primary", "GH_TOKEN": "fallback"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.GitHubToken != "primary" {
+		t.Errorf("GitHubToken = %q, want primary", c.GitHubToken)
 	}
 }
 

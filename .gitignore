@@ -9,7 +9,11 @@
 # Build / test artifacts
 /bin/
 coverage.out
+coverage.gate.out
 coverage.html
+*.db
+*.db-shm
+*.db-wal
 
 # Local durable state (only if a future phase adds it)
 *.db

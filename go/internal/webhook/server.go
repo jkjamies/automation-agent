@@ -18,12 +18,18 @@ const maxBodyBytes = 5 << 20 // 5 MiB
 // quickly; a returned error becomes a 500 to the caller.
 type IngestFunc func(ctx context.Context, e ingest.Envelope) error
 
+// SweepFunc resolves parked runs whose CI never reported (the durable timeout catch-all).
+// Driven by Cloud Scheduler via POST /internal/sweep.
+type SweepFunc func(ctx context.Context) error
+
 // Server routes webhook requests to an IngestFunc.
 type Server struct {
-	ingest IngestFunc
-	secret string
-	now    func() time.Time
-	mux    *http.ServeMux
+	ingest        IngestFunc
+	secret        string
+	internalToken string
+	sweep         SweepFunc
+	now           func() time.Time
+	mux           *http.ServeMux
 }
 
 // Option configures a Server.
@@ -33,6 +39,18 @@ type Option func(*Server)
 // When empty, verification is skipped (intended for local dev only).
 func WithGitHubSecret(secret string) Option {
 	return func(s *Server) { s.secret = secret }
+}
+
+// WithInternalToken enables the /internal/* endpoints (cron + sweep), authenticated with a
+// Bearer token (Cloud Scheduler attaches it). When empty, those endpoints return 404 — they
+// are disabled unless explicitly configured.
+func WithInternalToken(token string) Option {
+	return func(s *Server) { s.internalToken = token }
+}
+
+// WithSweep wires the timeout-sweep function invoked by POST /internal/sweep.
+func WithSweep(fn SweepFunc) Option {
+	return func(s *Server) { s.sweep = fn }
 }
 
 // WithClock injects a clock for deterministic ReceivedAt timestamps in tests.

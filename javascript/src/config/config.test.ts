@@ -28,6 +28,15 @@ describe('config', () => {
     expect(c.ollamaModel).toBe('gemma4:12b');
   });
 
+  it('falls back to GH_TOKEN, with GITHUB_TOKEN taking precedence', () => {
+    // GH_TOKEN is honoured when GITHUB_TOKEN is unset, so a local gh-style env works.
+    expect(loadFrom(mapLookup({ GH_TOKEN: 'gh_abc' })).githubToken).toBe('gh_abc');
+    // GITHUB_TOKEN wins over GH_TOKEN.
+    expect(loadFrom(mapLookup({ GITHUB_TOKEN: 'primary', GH_TOKEN: 'fallback' })).githubToken).toBe(
+      'primary',
+    );
+  });
+
   it('rejects an invalid LLM provider', () => {
     expect(() => loadFrom(mapLookup({ LLM_PROVIDER: 'openai' }))).toThrow();
   });

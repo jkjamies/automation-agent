@@ -9,6 +9,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
+	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
 
@@ -37,18 +38,32 @@ type DriveResult struct {
 // distinct session id, and the in-memory session service is keyed by session id, so
 // concurrent drives for different runs do not interfere.
 type LongRunDriver struct {
-	r      *runner.Runner
-	userID string
+	r       *runner.Runner
+	sess    session.Service
+	appName string
+	userID  string
 }
 
-// NewLongRunDriver builds a driver over root, sharing one in-memory session service so a
-// resume lands on the same suspended run a Start parked.
-func NewLongRunDriver(appName, userID string, root agent.Agent) (*LongRunDriver, error) {
-	r, err := NewRunner(appName, root)
+// NewLongRunDriver builds a driver over root, using sess as the session service so a
+// resume lands on the same suspended run a Start parked. A nil sess falls back to an
+// in-memory service (today's behavior); a durable sess (sqlite/firestore) makes the
+// parked run survive a process restart.
+func NewLongRunDriver(appName, userID string, root agent.Agent, sess session.Service) (*LongRunDriver, error) {
+	if sess == nil {
+		sess = session.InMemoryService()
+	}
+	r, err := newRunner(appName, root, sess)
 	if err != nil {
 		return nil, err
 	}
-	return &LongRunDriver{r: r, userID: userID}, nil
+	return &LongRunDriver{r: r, sess: sess, appName: appName, userID: userID}, nil
+}
+
+// DeleteSession removes a session's stored history. Terminal cleanup calls this so a
+// durable backend (sqlite/firestore) does not accumulate completed sessions; on the
+// in-memory backend it just frees the map entry. Deleting a missing session is a no-op.
+func (d *LongRunDriver) DeleteSession(ctx context.Context, sessionID string) error {
+	return d.sess.Delete(ctx, &session.DeleteRequest{AppName: d.appName, UserID: d.userID, SessionID: sessionID})
 }
 
 // Start seeds a fresh invocation on sessionID with input and drives until the agent

@@ -6,12 +6,20 @@ resume -> loop or finish — plus the apply mechanics. Each concrete agent suppl
 `Spec` (its own triage fn, analyze fn, and branch/label/check names) **and its own
 prompts**; nothing about the LLM prompting is shared here.
 
-The CI wait is a real ADK **IsLongRunning** suspend/resume on an **in-memory** session:
-the `Driver` runs a `fixer` agent that calls `apply_fix` then parks on `await_ci`. The
-parked run is tracked in an in-memory **registry** (keyed by `owner/repo#pr`); there is
-no durable store and no reconciler, so a process restart strands in-flight runs (an
-accepted trade). Attempts are counted in the registry — **not** from GitHub commits.
-A per-run `ci_timeout` timer frees a run whose CI never reports.
+The CI wait is a real ADK **IsLongRunning** suspend/resume: the `Driver` runs a `fixer`
+agent that calls `apply_fix` then parks on `await_ci`. Both the ADK session and the parked
+run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`): the run is
+recorded in the injected `setup.ParkStore` (a `ParkRecord` keyed by a UUID session id, with
+an `owner/repo#pr` `pr_key` index for CI resume). With a durable backend a process restart
+resumes in-flight runs; the default `memory` backend stays ephemeral (a restart strands
+them). Attempts are counted in the park record — **not** from GitHub commits. A run whose
+CI never reports is freed two ways: a soft per-run asyncio `ci_timeout` timer (in-process,
+lost on restart) and the durable `sweep_timeouts` catch-all (driven by `/internal/sweep`).
+`resolve_by_pr_key`/`sweep` claim a run atomically (single winner), so a late/duplicate
+webhook racing the timer/sweep resolves it at most once.
+
+Terminal resolution (`_clear`) deletes both the park record and the ADK session
+(`LongRunDriver.delete_session`) so durable backends don't accumulate finished runs.
 
 The outer loop is driven by a deterministic `setup.Sequencer` (a class extending
 `BaseLlm` that emits a fixed apply->await sequence), so retry/stop/timeout policy is all
@@ -27,19 +35,20 @@ flowchart TD
     KP --> DK["Driver.kickoff: run fixer agent"]
     DK --> AF["apply_fix -> attempt_once: triage -> open -> analyze -> commit (clone/branch/push/ensure PR)"]
     AF --> AW["await_ci (IsLongRunning)"]
-    AW --> PK["registry.park(owner/repo#pr, attempts) + ci_timeout timer"]
-    PK --> SUS(["suspend"])
+    AW --> PK["ParkStore.put(pr_key=owner/repo#pr, attempts) + ci_timeout timer"]
+    PK --> SUS(["suspend (durable: survives restart)"])
 
     SUS -->|"check_run (spec.check_name) completed"| R["resume(raw)"]
     R -->|"name != check_name"| NO["no-op (another engine may handle it)"]
-    R --> RES["registry.resolve(pr_key)"]
+    R --> RES["ParkStore.resolve_by_pr_key(pr_key) (atomic claim)"]
     RES -->|"late/dup/unknown"| NO2["no-op"]
     RES --> C{conclusion}
-    C -->|success| OK["notify success_title + free run"]
-    C -->|failure & attempts >= max_iter| HRV["notify review_title + free run"]
+    C -->|success| OK["status-aware summary (success_title) + clear (park + session)"]
+    C -->|failure & attempts >= max_iter| HRV["status-aware summary (review_title) + clear"]
     C -->|failure & attempts < max_iter| RT["resume run -> apply_fix again -> re-park (attempts+1)"]
     RT --> SUS
-    TO["ci_timeout fires"] -.-> TON["on_timeout: free run + notify review_title"]
+    TO["ci_timeout timer fires"] -.-> TON["on_timeout: claim + status-aware summary + clear"]
+    SW["/internal/sweep -> sweep_timeouts (durable catch-all)"] -.-> TON
 ```
 
 ## Files
@@ -47,10 +56,14 @@ flowchart TD
 - `engine.py` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`;
   `kickoff`/`resume` (delegate to the Driver) + `attempt_once` (one apply attempt).
 - `driver.py` — `Driver`: the `apply_fix`/`await_ci` tools, the `fixer` agent (on a
-  deterministic sequencer model), and the kickoff/resume/on_timeout lifecycle over the
-  registry.
-- `registry.py` — in-memory parked-run registry; atomic `resolve` (one of webhook/timer
-  wins).
+  deterministic sequencer model), the `RunParams` (serialized into the park record), and the
+  kickoff/resume/on_timeout/`sweep_timeouts` lifecycle over the injected `setup.ParkStore`
+  (the in-memory `RunRegistry` it replaced is gone). Terminal `_clear` deletes the park
+  record **and** the ADK session. The triage `work` cache is an in-process optimization
+  (not serialized), so a warm process skips re-triage while a restart simply re-triages.
+  Terminal paths build a status-aware summary via `summary.build_summary_text` + `gh.compare`.
+- `summary.py` — `build_summary_text`: the status-aware terminal summary (success / max-iter
+  / timeout framings) enriched with `gh.compare` (base...head diff) + the park record. Pure.
 - `applyfix.py` — clone -> branch (new/existing) -> commit -> push -> ensure labeled PR.
 - `analyze.py` — `parallel_analyze`: one ADK parallel agent per `FileWork`, distinct
   state keys so they never collide.

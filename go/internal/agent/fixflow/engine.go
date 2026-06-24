@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
 
+	"github.com/jkjamies/automation-agent/internal/agent/setup"
 	"github.com/jkjamies/automation-agent/internal/githubapi"
 	"github.com/jkjamies/automation-agent/internal/gitrepo"
 	"github.com/jkjamies/automation-agent/internal/notify"
@@ -88,14 +90,22 @@ type Deps struct {
 	CITimeout time.Duration
 	// Repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
 	// listed is rejected; empty imposes no restriction (restriction is opt-in).
-	Repos    []string
-	Author   gitrepo.Author
-	Log      *slog.Logger
-	CloneURL func(owner, repo string) string // overridable in tests
+	Repos  []string
+	Author gitrepo.Author
+	Log    *slog.Logger
+	// SessionService stores the durable suspend/resume history for the parked fix loop.
+	// Nil falls back to in-memory (a restart strands parked runs); a durable backend
+	// (sqlite/firestore) lets a parked run resume after a restart. Built once at startup.
+	SessionService session.Service
+	// ParkStore persists the park record (prKey→session, attempts, run params) so a resume
+	// — and, with a durable backend, a restart — can reconstruct it. Nil falls back to the
+	// in-memory store. Built once at startup, alongside SessionService.
+	ParkStore setup.ParkStore
+	CloneURL  func(owner, repo string) string // overridable in tests
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is
-// owned by the Driver (ADK IsLongRunning + an in-memory parked-run registry).
+// owned by the Driver (ADK IsLongRunning + an injected setup.ParkStore backend).
 type Engine struct {
 	spec   Spec
 	d      Deps
@@ -132,6 +142,13 @@ func NewEngine(spec Spec, d Deps) *Engine {
 
 // CheckName is the agent verify check this engine resumes on.
 func (e *Engine) CheckName() string { return e.spec.CheckName }
+
+// Name is the engine's workflow name ("lint" | "coverage"), used for logging.
+func (e *Engine) Name() string { return e.spec.Name }
+
+// SweepTimeouts resolves this engine's parked runs whose CI never reported — the durable
+// timeout catch-all driven by Cloud Scheduler via /internal/sweep.
+func (e *Engine) SweepTimeouts(ctx context.Context) error { return e.driver.SweepTimeouts(ctx) }
 
 // Kickoff handles a kickoff envelope: it starts a suspended fix run (apply → await CI).
 func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
