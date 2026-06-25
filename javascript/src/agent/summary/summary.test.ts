@@ -128,7 +128,7 @@ describe('summary workflow behavior', () => {
     expect(notifier.msgs[0]!.text).toBe('THE DIGEST');
   });
 
-  it('posts under a custom title (weekly)', async () => {
+  it('posts under a configured custom title', async () => {
     const gh = new FakeLister({ 'o/r': [commit('abc1234', 'do the thing', 'X')] });
     const notifier = new FakeNotifier();
     const a = buildSummaryAgent({
@@ -136,11 +136,11 @@ describe('summary workflow behavior', () => {
       gh,
       notify: notifier,
       repos: ['o/r'],
-      title: 'Weekly commit digest',
+      title: 'Custom digest title',
     });
     const runner = newRunner('summary-test', a);
     await drive(runner, 'u', 's', 'go');
-    expect(notifier.msgs[0]!.title).toBe('Weekly commit digest');
+    expect(notifier.msgs[0]!.title).toBe('Custom digest title');
   });
 
   it('surfaces a fetch error', async () => {

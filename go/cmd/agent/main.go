@@ -1,6 +1,6 @@
 // Command agent is the automation-agent service entrypoint. It wires configuration,
-// tooling, agents, the scheduler, and the webhook server together, then runs until
-// interrupted. Composition only — logic lives in internal/.
+// tooling, agents, and the webhook server together, then runs until interrupted.
+// Composition only — logic lives in internal/.
 package main
 
 import (
@@ -30,7 +30,6 @@ import (
 	"github.com/jkjamies/automation-agent/internal/githubapi"
 	"github.com/jkjamies/automation-agent/internal/ingest"
 	"github.com/jkjamies/automation-agent/internal/notify"
-	"github.com/jkjamies/automation-agent/internal/scheduler"
 	"github.com/jkjamies/automation-agent/internal/webhook"
 )
 
@@ -87,10 +86,13 @@ func run(logger *slog.Logger) error {
 		defer func() { _ = closer.Close() }()
 	}
 
-	// Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents
-	// so the weekly cron posts a real 7-day digest, not a copy of the daily one.
+	// Summary workflow (needs repos + a notifier). The daily Cloud Scheduler trigger fires it.
 	summaryDaily := buildSummaryAgent(logger, cfg, llm, gh, notifier, 24*time.Hour, "Daily commit digest")
-	summaryWeekly := buildSummaryAgent(logger, cfg, llm, gh, notifier, 7*24*time.Hour, "Weekly commit digest")
+	// /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+	// is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+	if summaryDaily != nil && cfg.InternalToken == "" {
+		logger.Warn("daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered")
+	}
 
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
@@ -105,7 +107,6 @@ func run(logger *slog.Logger) error {
 
 	dispatcher, err := root.BuildRootDispatcher(root.Deps{
 		SummaryDaily:    summaryDaily,
-		SummaryWeekly:   summaryWeekly,
 		LintKickoff:     payloadHandler(lintEngine.Kickoff),
 		CoverageKickoff: payloadHandler(covEngine.Kickoff),
 		CIResume:        ciResumeHandler(engines),
@@ -113,19 +114,6 @@ func run(logger *slog.Logger) error {
 	})
 	if err != nil {
 		return fmt.Errorf("build dispatcher: %w", err)
-	}
-
-	// Scheduler: cron → dispatch (cron runs each job in its own goroutine).
-	sched := scheduler.New(func(e ingest.Envelope) {
-		if err := dispatcher.Dispatch(context.Background(), e); err != nil {
-			logger.Error("scheduled dispatch failed", "kind", e.Kind, "err", err)
-		}
-	})
-	if err := sched.Add(cfg.CronDaily, ingest.KindCronDaily); err != nil {
-		return fmt.Errorf("schedule daily: %w", err)
-	}
-	if err := sched.Add(cfg.CronWeekly, ingest.KindCronWeekly); err != nil {
-		return fmt.Errorf("schedule weekly: %w", err)
 	}
 
 	// Webhooks enqueue asynchronously and return fast. Dispatches run on a bounded pool
@@ -173,8 +161,6 @@ func run(logger *slog.Logger) error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	sched.Start()
-
 	go func() {
 		logger.Info("automation-agent listening",
 			"port", cfg.Port,
@@ -195,25 +181,23 @@ func run(logger *slog.Logger) error {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown", "err", err)
 	}
-	drain(logger, sched.Stop(), &dispatchWG, drainTimeout)
+	drain(logger, &dispatchWG, drainTimeout)
 	return nil
 }
 
 // maxConcurrentDispatch bounds in-flight webhook dispatches; drainTimeout caps how long
-// shutdown waits for in-flight dispatches and scheduled jobs to finish.
+// shutdown waits for in-flight dispatches to finish.
 const (
 	maxConcurrentDispatch = 32
 	drainTimeout          = 15 * time.Second
 )
 
-// drain waits for in-flight webhook dispatches (wg) and running scheduled jobs (stopCtx,
-// from cron.Stop) to finish, bounded by timeout, so a clean SIGTERM completes work in
-// flight rather than abandoning it.
-func drain(logger *slog.Logger, stopCtx context.Context, wg *sync.WaitGroup, timeout time.Duration) {
+// drain waits for in-flight webhook dispatches (wg) to finish, bounded by timeout, so a
+// clean SIGTERM completes work in flight rather than abandoning it.
+func drain(logger *slog.Logger, wg *sync.WaitGroup, timeout time.Duration) {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
-		<-stopCtx.Done()
 		close(done)
 	}()
 	select {

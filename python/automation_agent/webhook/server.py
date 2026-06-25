@@ -104,9 +104,8 @@ class Server:
             return await self._dispatch(new(Kind.CI, "webhook:/github", body, self.now()))
 
         # Cloud Scheduler ingress (Bearer-token auth; disabled with a 404 unless
-        # internal_token is set). Lets the cron schedule live GCP-side so the instance can
-        # scale to zero. These emit the same envelopes the in-process scheduler would —
-        # use one or the other, not both (see DEPLOYMENT.md).
+        # internal_token is set). Lets the daily schedule live GCP-side so the instance can
+        # scale to zero.
         @app.post("/internal/cron/daily")
         async def cron_daily(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             denied = self._internal_authenticated(request)
@@ -114,15 +113,6 @@ class Server:
                 return denied
             return await self._dispatch(
                 new(Kind.CRON_DAILY, "internal:/cron/daily", b"", self.now())
-            )
-
-        @app.post("/internal/cron/weekly")
-        async def cron_weekly(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            denied = self._internal_authenticated(request)
-            if denied is not None:
-                return denied
-            return await self._dispatch(
-                new(Kind.CRON_WEEKLY, "internal:/cron/weekly", b"", self.now())
             )
 
         @app.post("/internal/sweep")

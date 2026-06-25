@@ -75,15 +75,14 @@ sequenceDiagram
 - `POST /webhooks/coverage` — coverage-fixer **kickoff** (coverage JSON) -> `KindCoverage`.
 - `POST /webhooks/github` — fix-engine **resume** (GitHub `check_run`) -> `KindCI`,
   HMAC-verified via `X-Hub-Signature-256` when a secret is configured.
-- `POST /internal/cron/{daily,weekly}` — Cloud Scheduler digests -> `KindCronDaily`/`KindCronWeekly`.
+- `POST /internal/cron/daily` — Cloud Scheduler daily digest -> `KindCronDaily`.
 - `POST /internal/sweep` — Cloud Scheduler-driven durable timeout catch-all -> the injected
   `SweepFunc` (each engine's `sweep_timeouts`); `501` if no sweep is wired.
 
 The `/internal/*` endpoints are Bearer-authenticated with `internal_token` (`INTERNAL_TOKEN`),
 constant-time-compared. With **no** token they are **disabled (404)** — never open by default.
-They emit the same envelopes the in-process scheduler would, so the cron schedule can live
-GCP-side and the instance can scale to zero; use one driver or the other, not both (see
-`DEPLOYMENT.md`).
+The daily schedule lives GCP-side (Cloud Scheduler), so the instance can scale to zero
+between fires (see `DEPLOYMENT.md`).
 
 FastAPI route methods give 405s for free. Each body is read with a 5 MiB cap: oversize
 bodies are **rejected with `413`**, not truncated — truncation would break HMAC-SHA256

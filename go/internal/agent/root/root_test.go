@@ -75,12 +75,12 @@ func trivialAgent(t *testing.T) agent.Agent {
 }
 
 func TestBuildRootDispatcherWithSummary(t *testing.T) {
-	d, err := BuildRootDispatcher(Deps{SummaryDaily: trivialAgent(t), SummaryWeekly: trivialAgent(t)})
+	d, err := BuildRootDispatcher(Deps{SummaryDaily: trivialAgent(t)})
 	if err != nil {
 		t.Fatalf("BuildRootDispatcher: %v", err)
 	}
-	if !d.Handles(ingest.KindCronDaily) || !d.Handles(ingest.KindCronWeekly) {
-		t.Error("cron kinds should route to the summary workflow")
+	if !d.Handles(ingest.KindCronDaily) {
+		t.Error("the daily cron kind should route to the summary workflow")
 	}
 	if err := d.Dispatch(context.Background(), env(ingest.KindCronDaily)); err != nil {
 		t.Fatalf("dispatch cron: %v", err)
@@ -114,7 +114,7 @@ func TestBuildRootDispatcherWithoutSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRootDispatcher: %v", err)
 	}
-	if d.Handles(ingest.KindCronDaily) || d.Handles(ingest.KindCronWeekly) {
-		t.Error("no summary agent -> cron kinds unhandled")
+	if d.Handles(ingest.KindCronDaily) {
+		t.Error("no summary agent -> the daily cron kind is unhandled")
 	}
 }

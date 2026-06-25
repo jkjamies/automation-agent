@@ -9,7 +9,6 @@ dependencies = [
     "litellm>=1.40.0",
     "PyGithub>=2.3.0",
     "GitPython>=3.1.43",
-    "APScheduler>=3.10.4",
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
     "httpx>=0.27.0",
@@ -59,7 +58,6 @@ show_missing = true
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["cmd"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

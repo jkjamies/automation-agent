@@ -17,7 +17,7 @@ flowchart TD
     FI --> T3["test_nothing_imports_cmd"]
     Root["os.walk(root) for AGENTS.md"] --> T4["test_every_dir_has_agents_doc"]
 
-    T1 --> C1{"under automation_agent/{githubapi,gitrepo,webhook,<br/>notify,scheduler} imports automation_agent.agent?"}
+    T1 --> C1{"under automation_agent/{githubapi,gitrepo,webhook,<br/>notify} imports automation_agent.agent?"}
     C1 -->|yes| F1["assert fails: tooling must not depend on agents"]
     C1 -->|no| OK1["pass"]
 
@@ -37,7 +37,7 @@ flowchart TD
 Current rules:
 
 - `test_tooling_does_not_import_agents` (`arch/test_arch.py`) —
-  `automation_agent/{githubapi,gitrepo,webhook,notify,scheduler}` must not
+  `automation_agent/{githubapi,gitrepo,webhook,notify}` must not
   import `automation_agent.agent...`.
 - `test_provider_sdks_only_in_setup` (`arch/test_arch.py`) — `litellm`/`lite_llm`/
   `google.adk.models.Gemini`/`google.genai` imports are confined to

@@ -66,14 +66,11 @@ async def test_build_root_dispatcher_with_summary() -> None:
     d = build_root_dispatcher(
         Deps(
             summary_daily=_TrivialAgent(name="daily"),
-            summary_weekly=_TrivialAgent(name="weekly"),
         )
     )
     assert d.handles(Kind.CRON_DAILY)
-    assert d.handles(Kind.CRON_WEEKLY)
-    # Drive both summary handlers through a real runner (no LLM).
+    # Drive the summary handler through a real runner (no LLM).
     await d.dispatch(env(Kind.CRON_DAILY))
-    await d.dispatch(env(Kind.CRON_WEEKLY))
 
 
 async def test_build_root_dispatcher_fix_handlers() -> None:
@@ -94,6 +91,5 @@ async def test_build_root_dispatcher_fix_handlers() -> None:
 
 
 async def test_build_root_dispatcher_without_summary() -> None:
-    d = build_root_dispatcher(Deps(summary_daily=None, summary_weekly=None))
+    d = build_root_dispatcher(Deps(summary_daily=None))
     assert not d.handles(Kind.CRON_DAILY)
-    assert not d.handles(Kind.CRON_WEEKLY)

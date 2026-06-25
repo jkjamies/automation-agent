@@ -33,7 +33,7 @@ flowchart TD
 - `loader.ts` — prompt loading over this dir's `prompts/`.
 - `prompts/{triage,analyze,summarize_result}.md`.
 
-Wiring: `root` registers `Lint`/`CI`; `cmd` builds the engine (via `newLintEngine`), the
-scheduler, and the webhook server. The kickoff/suspend/resume mechanics live in `fixflow`.
+Wiring: `root` registers `Lint`/`CI`; `cmd` builds the engine (via `newLintEngine`) and
+the webhook server. The kickoff/suspend/resume mechanics live in `fixflow`.
 Provider SDKs are kept out via `setup` helpers. Tests use a scripted LLM + fakes + a local
 seed repo. See `.agents/standards/architecture-design.md` §8.

@@ -79,10 +79,8 @@ data class Config(
     val notifyProvider: NotifyProvider,
     val slackWebhookUrl: String,
     val teamsWebhookUrl: String,
-    // Server / schedule
+    // Server
     val port: String,
-    val cronDaily: String,
-    val cronWeekly: String,
     // Lint-fixer
     val maxIterations: Int,
     // ciTimeout bounds how long a suspended fix run waits for its CI result before it is
@@ -175,8 +173,6 @@ data class Config(
                 slackWebhookUrl = getOr(get, "SLACK_WEBHOOK_URL", ""),
                 teamsWebhookUrl = getOr(get, "TEAMS_WEBHOOK_URL", ""),
                 port = getOr(get, "PORT", "8080"),
-                cronDaily = getOr(get, "CRON_DAILY", "0 9 * * *"),
-                cronWeekly = getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
                 maxIterations = maxIterations,
                 ciTimeout = ciTimeout,
                 githubWebhookSecret = getOr(get, "GITHUB_WEBHOOK_SECRET", ""),

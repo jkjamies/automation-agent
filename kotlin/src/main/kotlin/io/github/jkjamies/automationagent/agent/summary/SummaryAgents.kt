@@ -28,7 +28,7 @@ data class SummaryDeps(
     val notifier: Notifier,
     val repos: List<String>, // owner/repo entries; one parallel fetcher each
     val window: Duration = Duration.ofHours(24),
-    val title: String = "Daily commit digest", // notification heading; varies daily vs weekly
+    val title: String = "Daily commit digest", // notification heading
     val now: () -> Instant = { Instant.now() },
 )
 

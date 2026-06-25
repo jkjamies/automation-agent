@@ -10,7 +10,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/ollama/ollama v0.30.10
-	github.com/robfig/cron/v3 v3.0.1
 	google.golang.org/adk v1.4.0
 	google.golang.org/api v0.279.0
 	google.golang.org/genai v1.57.0

@@ -4,7 +4,7 @@ import { Kind, kindValid, newEnvelope } from './envelope';
 
 describe('ingest', () => {
   it('recognizes valid kinds', () => {
-    for (const k of [Kind.CronDaily, Kind.CronWeekly, Kind.Lint, Kind.Coverage, Kind.CI]) {
+    for (const k of [Kind.CronDaily, Kind.Lint, Kind.Coverage, Kind.CI]) {
       expect(kindValid(k)).toBe(true);
     }
     expect(kindValid('nope')).toBe(false);

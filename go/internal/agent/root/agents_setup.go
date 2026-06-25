@@ -14,11 +14,9 @@ import (
 
 // Deps wires the dispatcher. Each handler is optional. CIResume handles KindCI for
 // every fix workflow (lint, coverage) — each engine no-ops unless its check matches.
-// SummaryDaily and SummaryWeekly are distinct agents (different commit windows and
-// titles) so the Monday cron posts a real weekly digest, not a daily one.
+// SummaryDaily runs the daily commit digest fired by the daily Cloud Scheduler trigger.
 type Deps struct {
 	SummaryDaily    agent.Agent // KindCronDaily
-	SummaryWeekly   agent.Agent // KindCronWeekly
 	LintKickoff     Handler     // KindLint
 	CoverageKickoff Handler     // KindCoverage
 	CIResume        Handler     // KindCI (dispatched to all fix engines)
@@ -26,18 +24,13 @@ type Deps struct {
 }
 
 // BuildRootDispatcher builds the dispatcher and registers the available workflows:
-// cron kinds → summary; KindLint → lint-fixer; KindCoverage → coverage-fixer;
+// KindCronDaily → summary; KindLint → lint-fixer; KindCoverage → coverage-fixer;
 // KindCI → resume (all fix engines).
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	disp := NewDispatcher(d.Log)
 
 	if d.SummaryDaily != nil {
 		if err := registerSummary(disp, d.SummaryDaily, ingest.KindCronDaily, "Run the daily commit digest."); err != nil {
-			return nil, err
-		}
-	}
-	if d.SummaryWeekly != nil {
-		if err := registerSummary(disp, d.SummaryWeekly, ingest.KindCronWeekly, "Run the weekly commit digest."); err != nil {
 			return nil, err
 		}
 	}

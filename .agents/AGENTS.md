@@ -19,6 +19,7 @@ flowchart TD
     Std --> S5["local-development.md (run modes, env vars, container)"]
     Std --> S6["deployment.md (cloud architecture, GCP setup — source of truth)"]
     Std --> S7["language-parity.md · ci-integration.md · architecture-design.md"]
+    Std --> S8["documentation.md (AGENTS.md + diagram conventions; factual-docs rule)"]
     Std -->|enforced by| Enf["ARCH/, make ci, .golangci.yml"]
 
     Skl --> K1["add-workflow-agent.md"]
@@ -56,6 +57,8 @@ The rules of the codebase. Enforced where possible by `ARCH/`, `make ci`, and
 - `architecture.md` — import boundaries and the ingest→root→workflow flow.
 - `architecture-design.md` — the authoritative language-neutral design.
 - `language-parity.md` — the 1:1 cross-port contract (Go is the reference).
+- `documentation.md` — `AGENTS.md` + diagram conventions: docs/diagrams move with the code,
+  stay consistent across ports, and stay factual (not status trackers).
 
 The how-to-run docs document the design and how each port runs/tests/deploys; the ports
 are kept at 1:1 parity per `language-parity.md` (Go is the reference).

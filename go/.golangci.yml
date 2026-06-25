@@ -27,7 +27,6 @@ linters-settings:
           - "**/internal/gitrepo/**"
           - "**/internal/webhook/**"
           - "**/internal/notify/**"
-          - "**/internal/scheduler/**"
           - "**/internal/reconcile/**"
         deny:
           - pkg: "github.com/jkjamies/automation-agent/internal/agent"

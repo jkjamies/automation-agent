@@ -181,13 +181,13 @@ async def test_notifier_uses_configured_title(fake_llm) -> None:
     a = build_summary_agent(
         Deps(
             llm=fake_llm("D"), gh=gh, notify=notifier, repos=["o/r"],
-            title="Weekly commit digest",
+            title="Custom digest title",
         )
     )
     runner = setup.new_runner("summary-test", a)
     await setup.drive(runner, "u", "s", "go")
     assert len(notifier.msgs) == 1
-    assert notifier.msgs[0].title == "Weekly commit digest"
+    assert notifier.msgs[0].title == "Custom digest title"
 
 
 async def test_workflow_fetch_error(fake_llm) -> None:

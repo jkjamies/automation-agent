@@ -190,7 +190,7 @@ describe('webhook server', () => {
 
     it('404 when internal routes are disabled (no token configured)', async () => {
       const c = new Capture();
-      for (const path of ['/internal/cron/daily', '/internal/cron/weekly', '/internal/sweep']) {
+      for (const path of ['/internal/cron/daily', '/internal/sweep']) {
         const resp = await request(new Server(c.ingest).app).post(path).set('Authorization', bearer);
         expect(resp.status).toBe(404);
       }
@@ -220,15 +220,6 @@ describe('webhook server', () => {
       expect(resp.status).toBe(202);
       expect(c.env!.kind).toBe(Kind.CronDaily);
       expect(c.env!.source).toBe('internal:/cron/daily');
-    });
-
-    it('weekly cron -> 202 with KindCronWeekly', async () => {
-      const c = new Capture();
-      const resp = await request(new Server(c.ingest, { internalToken: TOKEN }).app)
-        .post('/internal/cron/weekly')
-        .set('Authorization', bearer);
-      expect(resp.status).toBe(202);
-      expect(c.env!.kind).toBe(Kind.CronWeekly);
     });
 
     it('sweep -> 200 when it succeeds', async () => {

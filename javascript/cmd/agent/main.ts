@@ -1,8 +1,8 @@
 /**
  * The automation-agent service entrypoint.
  *
- * Wires configuration, tooling, agents, the scheduler, and the webhook server together,
- * then runs until interrupted. Composition only — logic lives in `src/`.
+ * Wires configuration, tooling, agents, and the webhook server together, then runs until
+ * interrupted. Composition only — logic lives in `src/`.
  *
  * Run with `tsx cmd/agent/main.ts` (or `make run`).
  */
@@ -19,9 +19,8 @@ import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
 import { type Config, load } from '../../src/config/config';
 import { Client } from '../../src/githubapi/client';
-import { type Envelope, Kind } from '../../src/ingest/envelope';
+import { type Envelope } from '../../src/ingest/envelope';
 import { type Notifier, newNotifier } from '../../src/notify/notify';
-import { Scheduler } from '../../src/scheduler/scheduler';
 import { Server } from '../../src/webhook/server';
 
 const log = {
@@ -121,10 +120,15 @@ async function run(): Promise<void> {
   const sessionService = newSessionService(cfg);
   const parkStore = newParkStore(cfg);
 
-  // Summary workflow (needs repos + a notifier). Daily and weekly are distinct agents so
-  // the weekly cron posts a real 7-day digest, not a copy of the daily one.
+  // Summary workflow (needs repos + a notifier). The daily Cloud Scheduler trigger fires it.
   const summaryDaily = buildSummary(cfg, llm, gh, notifier, DAY_MS, 'Daily commit digest');
-  const summaryWeekly = buildSummary(cfg, llm, gh, notifier, 7 * DAY_MS, 'Weekly commit digest');
+  // /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+  // is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+  if (summaryDaily !== null && cfg.internalToken === '') {
+    log.warn(
+      'daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered',
+    );
+  }
 
   // Fix engines (event-driven; work without a notifier — they just won't post results).
   const fixDeps: FixDeps = {
@@ -147,7 +151,6 @@ async function run(): Promise<void> {
 
   const dispatcher = buildRootDispatcher({
     summaryDaily,
-    summaryWeekly,
     lintKickoff: payloadHandler((raw) => lintEngine.kickoff(raw)),
     coverageKickoff: payloadHandler((raw) => covEngine.kickoff(raw)),
     ciResume: ciResumeHandler(engines),
@@ -189,13 +192,6 @@ async function run(): Promise<void> {
     void p.finally(() => inFlight.delete(p));
   };
 
-  // Scheduler: croner fires on the event loop; dispatch in the background. Tracked for drain
-  // but not permit-bounded — cron is only the daily/weekly fires, and the Go reference
-  // likewise bounds only webhook dispatch (cmd/agent/main.go), not cron.
-  const sched = new Scheduler((e) => track(safeDispatch(e)));
-  sched.add(cfg.cronDaily, Kind.CronDaily);
-  sched.add(cfg.cronWeekly, Kind.CronWeekly);
-
   // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
   // parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
   // engine's failure must not stop the others — a stuck run on another engine still needs
@@ -231,7 +227,6 @@ async function run(): Promise<void> {
     { secret: cfg.githubWebhookSecret, internalToken: cfg.internalToken, sweep },
   );
 
-  sched.start();
   const httpServer = srv.app.listen(Number(cfg.port), '0.0.0.0', () => {
     log.info('automation-agent listening', {
       port: cfg.port,
@@ -272,7 +267,6 @@ async function run(): Promise<void> {
     }
     shuttingDown = true;
     log.info('shutting down');
-    sched.stop();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     await drain();
     // Release a durable park store's backing connection (a no-op for the memory backend).

@@ -185,7 +185,7 @@ class WebhookTest : BehaviorSpec({
                 val c = Capture()
                 testApplication {
                     application { webhookRoutes(c.ingest) }
-                    for (path in listOf("/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep")) {
+                    for (path in listOf("/internal/cron/daily", "/internal/sweep")) {
                         client.post(path) { header("Authorization", "Bearer x") }.status shouldBe HttpStatusCode.NotFound
                     }
                 }
@@ -221,19 +221,6 @@ class WebhookTest : BehaviorSpec({
                 val env = c.env.shouldNotBeNull()
                 env.kind shouldBe Kind.CRON_DAILY
                 env.source shouldBe "internal:/cron/daily"
-            }
-        }
-
-        When("POSTing the weekly cron with a valid bearer") {
-            Then("it accepts and emits a CRON_WEEKLY envelope") {
-                val c = Capture()
-                testApplication {
-                    application { webhookRoutes(c.ingest, internalToken = "sekret") }
-                    client.post("/internal/cron/weekly") {
-                        header("Authorization", "Bearer sekret")
-                    }.status shouldBe HttpStatusCode.Accepted
-                }
-                c.env.shouldNotBeNull().kind shouldBe Kind.CRON_WEEKLY
             }
         }
     }

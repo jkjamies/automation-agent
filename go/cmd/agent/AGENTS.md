@@ -16,18 +16,15 @@ flowchart TD
     Sess --> Notif["buildNotifier(cfg) -> notify.New (or nil)"]
     Notif --> SumA["buildSummaryAgent (nil if no repos/notifier)"]
     SumA --> Eng["lintfixer.NewEngine(fixflow.Deps{LLM, CodeLLM,<br/>GH, Notify, Token, MaxIter, CITimeout,<br/>SessionService, ParkStore})<br/>covfixer.NewEngine(same Deps)<br/>engines = [lint, cov]"]
-    Eng --> Disp["root.BuildRootDispatcher(Deps{<br/>SummaryAgent,<br/>LintKickoff=lintEngine.Kickoff,<br/>CoverageKickoff=covEngine.Kickoff,<br/>CIResume=resume to every engine})"]
+    Eng --> Disp["root.BuildRootDispatcher(Deps{<br/>SummaryDaily,<br/>LintKickoff=lintEngine.Kickoff,<br/>CoverageKickoff=covEngine.Kickoff,<br/>CIResume=resume to every engine})"]
     Disp -->|err| Fatal
 
-    Disp --> Sched["scheduler.New(emit -> dispatcher.Dispatch)"]
-    Sched --> AddCron["Add(CronDaily, KindCronDaily)<br/>Add(CronWeekly, KindCronWeekly)"]
-    AddCron --> Web["webhook.New(ingest -> go Dispatch,<br/>WithGitHubSecret, WithInternalToken,<br/>WithSweep -> engines.SweepTimeouts)"]
+    Disp --> Web["webhook.New(ingest -> go Dispatch,<br/>WithGitHubSecret, WithInternalToken,<br/>WithSweep -> engines.SweepTimeouts)"]
     Web --> HTTP["http.Server{Addr ':'+Port, ReadHeaderTimeout 10s}"]
 
-    HTTP --> Start["sched.Start()"]
-    Start --> Listen["go httpServer.ListenAndServe()"]
+    HTTP --> Listen["go httpServer.ListenAndServe()"]
     Listen --> Block["<-sigCtx.Done() (block until signal)"]
-    Block --> Shutdown["defer sched.Stop()<br/>httpServer.Shutdown(10s ctx)"]
+    Block --> Shutdown["httpServer.Shutdown(10s ctx)<br/>drain in-flight dispatches"]
 ```
 
 1. Load `config`.
@@ -37,9 +34,10 @@ flowchart TD
    agent, and the lint-fixer and coverage-fixer `fixflow` engines (sharing one
    `fixflow.Deps`, incl. `CITimeout`, `SessionService`, `ParkStore`).
 3. Build the root dispatcher (summary / lint kickoff / coverage kickoff / CI resume),
-   then start the scheduler (daily + weekly cron) and the webhook HTTP server
-   (`WithInternalToken` + `WithSweep` enabling the `/internal/*` cron + sweep hooks).
-4. Block until shutdown (SIGINT/SIGTERM), then stop the scheduler and shut the server.
+   then start the webhook HTTP server (`WithInternalToken` + `WithSweep` enabling the
+   `/internal/*` daily-cron + sweep hooks). The daily digest is driven by Cloud Scheduler
+   calling `POST /internal/cron/daily`; the service runs no internal timer.
+4. Block until shutdown (SIGINT/SIGTERM), then shut the server and drain in-flight dispatches.
 
 The fix loop's durability follows `SESSION_BACKEND`: suspend/resume runs on an ADK
 long-running `await_ci` tool + the injected `setup.ParkStore`, with a per-run

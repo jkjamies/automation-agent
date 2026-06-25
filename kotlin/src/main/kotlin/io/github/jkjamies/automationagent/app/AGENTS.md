@@ -15,13 +15,14 @@ flowchart TD
     GH --> FIX
     SUM --> DISP["buildRootDispatcher(RootDeps)"]
     FIX --> DISP
-    DISP --> SCH["Scheduler: cron -> dispatch"]
     DISP --> WH["webhookServer: enqueue -> dispatch"]
     WH --> RUN["server.start(wait = true)"]
 ```
 
-`main()` wires configuration → the model → tooling → the root/summary/fix agents → the scheduler and
-the webhook server, then blocks until interrupted (a shutdown hook stops the scheduler). The summary
+`main()` wires configuration → the model → tooling → the root/summary/fix agents → the
+webhook server, then blocks until interrupted (a shutdown hook drains in-flight dispatches).
+The daily digest is driven by Cloud Scheduler calling `POST /internal/cron/daily`; the service
+runs no internal timer. The summary
 workflow is enabled only when repositories and a notifier are configured; the fix engines run
 without a notifier (they just won't post results). A check_run webhook is handed to every fix engine
 — each no-ops unless its check name matches.

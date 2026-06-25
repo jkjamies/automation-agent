@@ -76,10 +76,8 @@ type Config struct {
 	SlackWebhookURL string
 	TeamsWebhookURL string
 
-	// Server / schedule
-	Port       string
-	CronDaily  string
-	CronWeekly string
+	// Server
+	Port string
 
 	// Lint-fixer
 	MaxIterations int
@@ -144,8 +142,6 @@ func loadFrom(get lookup) (Config, error) {
 		SlackWebhookURL:     getOr(get, "SLACK_WEBHOOK_URL", ""),
 		TeamsWebhookURL:     getOr(get, "TEAMS_WEBHOOK_URL", ""),
 		Port:                getOr(get, "PORT", "8080"),
-		CronDaily:           getOr(get, "CRON_DAILY", "0 9 * * *"),
-		CronWeekly:          getOr(get, "CRON_WEEKLY", "0 9 * * 1"),
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
 		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
 		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),

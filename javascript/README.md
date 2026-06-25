@@ -5,7 +5,7 @@ JavaScript](https://github.com/google/adk-js) (`@google/adk`). It ingests events
 (cron + webhooks), routes each through a **root dispatcher**, and runs three workflow
 agents:
 
-- **Summary** — a daily/weekly digest of recent commits across N repos, posted to
+- **Summary** — a daily digest of recent commits across N repos, posted to
   Slack or Teams.
 - **Lint-fixer** — consumes an agnostic lint payload, opens a PR with a fix, and loops
   on CI feedback (bounded by `MAX_ITERATIONS`) before posting a result.
@@ -35,7 +35,7 @@ make playground           # local ADK web UI at http://localhost:8080 (dev only)
 | `cmd/agent` | service entrypoint |
 | `cmd/playground` | local ADK web UI (dev only; never deployed) |
 | `src/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `src/{githubapi,gitrepo,webhook,notify,scheduler}` | deterministic tooling |
+| `src/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
 | `src/{config,ingest}` | configuration + normalized event envelope |
 | `arch/` | architecture-conformance tests |
 

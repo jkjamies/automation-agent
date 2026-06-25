@@ -22,7 +22,6 @@ Package root: `io.github.jkjamies.automationagent` under `src/main/kotlin/...`.
 | `notify` | `internal/notify` | Slack/Teams behind one `Notifier` |
 | `githubapi` | `internal/githubapi` | GitHub REST tooling |
 | `gitrepo` | `internal/gitrepo` | git working-tree tooling |
-| `scheduler` | `internal/scheduler` | cron → `Envelope` |
 | `webhook` | `internal/webhook` | HTTP ingress |
 | `agent.setup` | `internal/agent/setup` | LLM builder, Ollama adapter, prompt loader, runner |
 | `agent.root` | `internal/agent/root` | dispatcher |
@@ -36,7 +35,7 @@ Package root: `io.github.jkjamies.automationagent` under `src/main/kotlin/...`.
 - **Every package directory has an `AGENTS.md`.**
 - **Build-agent pattern:** pure wiring (a `build<Name>Agent` function) is split from
   testable logic. See `../.agents/standards/agent-build-pattern.md`.
-- **Import boundaries:** tooling (`githubapi`, `gitrepo`, `notify`, `scheduler`, `webhook`)
+- **Import boundaries:** tooling (`githubapi`, `gitrepo`, `notify`, `webhook`)
   must not import `agent.*`; provider SDKs (Ollama/Gemini) only in `agent.setup`; `config`
   is the only environment reader.
 - **Prompts are markdown** under `src/main/resources/prompts/<agent>/`, loaded from the

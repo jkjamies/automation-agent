@@ -28,9 +28,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
-    // Cron parsing for the scheduler (the robfig/cron analogue).
-    implementation("com.cronutils:cron-utils:9.2.1")
-
     // JGit for the working-tree operations the fixers need (the go-git analogue).
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.0.202606012155-r")
 

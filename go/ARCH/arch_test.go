@@ -106,7 +106,7 @@ func rel(root, p string) string {
 func TestToolingDoesNotImportAgents(t *testing.T) {
 	root := repoRoot(t)
 	agentPrefix := modulePath(t) + "/internal/agent"
-	tooling := []string{"githubapi", "gitrepo", "webhook", "notify", "scheduler"}
+	tooling := []string{"githubapi", "gitrepo", "webhook", "notify"}
 	for _, fi := range goFiles(t, filepath.Join(root, "internal")) {
 		if !under(root, filepath.Dir(fi.path), tooling...) {
 			continue

@@ -8,7 +8,7 @@ class EnvelopeTest : BehaviorSpec({
     Given("the recognized ingest kinds") {
         When("checking validity") {
             Then("each known kind is valid") {
-                listOf(Kind.CRON_DAILY, Kind.CRON_WEEKLY, Kind.LINT, Kind.COVERAGE, Kind.CI)
+                listOf(Kind.CRON_DAILY, Kind.LINT, Kind.COVERAGE, Kind.CI)
                     .forEach { Kind.valid(it.value) shouldBe true }
             }
             Then("an unknown kind is invalid") {

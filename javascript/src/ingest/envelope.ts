@@ -1,15 +1,14 @@
 /**
  * The normalized event envelope every ingress source is reduced to.
  *
- * Cron, webhooks, and future hooks (GitHub/Jira/Confluence) are all normalized to
- * an {@link Envelope} before being handed to the root agent. See
+ * Cloud Scheduler, webhooks, and future hooks (GitHub/Jira/Confluence) are all
+ * normalized to an {@link Envelope} before being handed to the root agent. See
  * .agents/standards/architecture-design.md §2.
  */
 
 /** Identifies what triggered an ingest, so the root agent can route it. */
 export const Kind = {
-  CronDaily: 'cron.daily', // 09:00 daily -> summary digest
-  CronWeekly: 'cron.weekly', // 09:00 Monday
+  CronDaily: 'cron.daily', // daily Cloud Scheduler trigger -> summary digest
   Lint: 'lint', // agnostic lint payload -> lint-fixer
   Coverage: 'coverage', // agnostic coverage payload -> coverage-fixer
   CI: 'ci', // GitHub check_run -> resume lint/coverage fixer
@@ -31,7 +30,7 @@ export function kindValid(k: string): k is Kind {
  */
 export interface Envelope {
   kind: Kind;
-  source: string; // human-readable origin, e.g. "scheduler", "webhook:/lint"
+  source: string; // human-readable origin, e.g. "internal:/cron/daily", "webhook:/lint"
   receivedAt: Date;
   payload: Buffer;
 }

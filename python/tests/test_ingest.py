@@ -8,7 +8,7 @@ from automation_agent.ingest import Kind, new
 
 
 def test_kind_valid() -> None:
-    for k in (Kind.CRON_DAILY, Kind.CRON_WEEKLY, Kind.LINT, Kind.COVERAGE, Kind.CI):
+    for k in (Kind.CRON_DAILY, Kind.LINT, Kind.COVERAGE, Kind.CI):
         assert k.valid()
 
 

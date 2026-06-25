@@ -33,12 +33,16 @@ exceptions vs `error` returns, data classes vs structs). What must match across 
    idiomatic way in the port — but with the same inputs, outputs, and error conditions.
 3. **Configuration.** Identical env var names, defaults, validation rules, and precedence.
 4. **External contracts.** Same HTTP routes, request/response shapes, webhook signature
-   verification, Slack/Teams payloads, GitHub API calls, cron expressions, labels, and
-   check names. Anything another system observes must be byte-compatible where it matters.
+   verification, Slack/Teams payloads, GitHub API calls, labels, and check names. Anything
+   another system observes must be byte-compatible where it matters.
 5. **Conventions.** Per-directory `AGENTS.md`; the build-agent pattern (pure wiring split
    from testable logic); prompts as markdown loaded from resources; ≥80% test coverage;
    never assert on LLM output content; provider SDKs confined to the `agent/setup` layer;
    tooling never imports agents.
+6. **Docs + diagrams.** The root and `agent/root` `AGENTS.md` diagrams (and the
+   `architecture-design.md`/`deployment.md` topology diagrams) must stay consistent across
+   ports — when an agent, ingest `Kind`, or ingress route changes, update the parallel
+   diagrams in every port in the same change. See [`documentation.md`](documentation.md).
 
 ## What may differ
 

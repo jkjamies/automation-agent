@@ -1,7 +1,7 @@
 """The automation-agent service entrypoint.
 
-Wires configuration, tooling, agents, the scheduler, and the webhook server together,
-then runs until interrupted. Composition only — logic lives in ``automation_agent/``.
+Wires configuration, tooling, agents, and the webhook server together, then runs until
+interrupted. Composition only — logic lives in ``automation_agent/``.
 
 Run with ``python cmd/agent/main.py`` (it is intentionally NOT an importable package:
 a top-level ``cmd`` package would shadow the stdlib ``cmd`` module).
@@ -10,6 +10,7 @@ a top-level ``cmd`` package would shadow the stdlib ``cmd`` module).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -23,11 +24,10 @@ from automation_agent.agent import covfixer, lintfixer, root, summary
 from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
-from automation_agent.config import Config, NotifyProvider, load
+from automation_agent.config import Config, load
 from automation_agent.githubapi import Client
-from automation_agent.ingest import Envelope, Kind
+from automation_agent.ingest import Envelope
 from automation_agent.notify import Notifier, new_notifier
-from automation_agent.scheduler import Scheduler
 from automation_agent.webhook import Server
 
 log = logging.getLogger("automation_agent")
@@ -115,14 +115,17 @@ async def run() -> None:
     session_service = agent_setup.new_session_service(cfg)
     park_store = agent_setup.new_park_store(cfg)
 
-    # Daily and weekly are distinct agents so the weekly cron posts a real 7-day digest,
-    # not a copy of the daily one.
+    # The daily Cloud Scheduler trigger fires this summary agent.
     summary_daily = build_summary_agent(
         cfg, llm, gh, notifier, timedelta(hours=24), "Daily commit digest"
     )
-    summary_weekly = build_summary_agent(
-        cfg, llm, gh, notifier, timedelta(days=7), "Weekly commit digest"
-    )
+    # /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+    # is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+    if summary_daily is not None and not cfg.internal_token:
+        log.warning(
+            "daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is "
+            "disabled (404), so the digest cannot be triggered",
+        )
 
     # Fix engines (event-driven; work without a notifier — they just won't post results).
     fix_deps = FixDeps(
@@ -146,7 +149,6 @@ async def run() -> None:
     dispatcher = root.build_root_dispatcher(
         root.Deps(
             summary_daily=summary_daily,
-            summary_weekly=summary_weekly,
             lint_kickoff=_payload_handler(lint_engine.kickoff),
             coverage_kickoff=_payload_handler(cov_engine.kickoff),
             ci_resume=_ci_resume_handler(engines),
@@ -181,19 +183,9 @@ async def run() -> None:
         finally:
             dispatch_sem.release()
 
-    # Scheduler: cron fires on a background thread → marshal the coroutine onto the loop.
-    # run_coroutine_threadsafe keeps the coroutine alive via the returned future, so this
-    # path is not a GC hazard.
-    def _emit(e: Envelope) -> None:
-        asyncio.run_coroutine_threadsafe(_safe_dispatch(e), loop)
-
-    sched = Scheduler(_emit)
-    sched.add(cfg.cron_daily, Kind.CRON_DAILY)
-    sched.add(cfg.cron_weekly, Kind.CRON_WEEKLY)
-
     # Webhooks enqueue asynchronously. Acquiring the bound-concurrency slot here (before
     # spawning) means a burst applies backpressure to the handler instead of spawning
-    # unbounded tasks. The cron path (_emit) stays unbounded, like Go's per-job goroutines.
+    # unbounded tasks.
     async def _ingest(e: Envelope) -> None:
         # When every slot is held, acquire() blocks here — the intended backpressure. Surface
         # it so sustained saturation is observable rather than silent (delayed webhook ACKs).
@@ -240,20 +232,18 @@ async def run() -> None:
         uvicorn.Config(srv.app, host="0.0.0.0", port=int(cfg.port), log_level="info")
     )
 
-    sched.start()
     log.info(
         "automation-agent listening: port=%s llm_provider=%s repos=%d notify=%s summary_enabled=%s",
         cfg.port,
         cfg.llm_provider.value,
         len(cfg.repos),
         cfg.notify_provider.value,
-        summary_daily is not None or summary_weekly is not None,
+        summary_daily is not None,
     )
     try:
         await server.serve()
     finally:
         log.info("shutting down")
-        sched.stop()
         # Drain in-flight webhook dispatches so a clean SIGTERM finishes outstanding
         # work instead of dropping it. Bounded so a stuck dispatch can't hang exit.
         if pending:
@@ -268,10 +258,8 @@ async def run() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    try:
+    with contextlib.suppress(KeyboardInterrupt, SystemExit):
         asyncio.run(run())
-    except (KeyboardInterrupt, SystemExit):
-        pass
 
 
 if __name__ == "__main__":

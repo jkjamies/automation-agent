@@ -1,7 +1,7 @@
 """The normalized event envelope every ingress source is reduced to.
 
-Cron, webhooks, and future hooks (GitHub/Jira/Confluence) are all normalized to
-an :class:`Envelope` before being handed to the root agent. See
+Cloud Scheduler, webhooks, and future hooks (GitHub/Jira/Confluence) are all
+normalized to an :class:`Envelope` before being handed to the root agent. See
 ``.agents/standards/architecture-design.md`` §2.
 """
 
@@ -15,8 +15,7 @@ from enum import StrEnum
 class Kind(StrEnum):
     """Identifies what triggered an ingest, so the root agent can route it."""
 
-    CRON_DAILY = "cron.daily"  # 09:00 daily -> summary digest
-    CRON_WEEKLY = "cron.weekly"  # 09:00 Monday
+    CRON_DAILY = "cron.daily"  # daily Cloud Scheduler trigger -> summary digest
     LINT = "lint"  # agnostic lint payload -> lint-fixer
     COVERAGE = "coverage"  # agnostic coverage payload -> coverage-fixer
     CI = "ci"  # GitHub check_run -> resume lint/coverage fixer
@@ -25,7 +24,6 @@ class Kind(StrEnum):
         """Report whether this is a recognized ingest kind."""
         return self in (
             Kind.CRON_DAILY,
-            Kind.CRON_WEEKLY,
             Kind.LINT,
             Kind.COVERAGE,
             Kind.CI,
@@ -41,7 +39,7 @@ class Envelope:
     """
 
     kind: Kind
-    source: str  # human-readable origin, e.g. "scheduler", "webhook:/lint"
+    source: str  # human-readable origin, e.g. "internal:/cron/daily", "webhook:/lint"
     received_at: datetime
     payload: bytes
 

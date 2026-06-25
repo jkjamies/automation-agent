@@ -125,21 +125,14 @@ export class Server {
       });
     });
 
-    // Internal ingress (Cloud Scheduler): cron triggers + the durable timeout sweep, guarded
-    // by a Bearer token. Disabled (404) until INTERNAL_TOKEN is set. The cron routes mirror
-    // the in-process scheduler so a scaled-to-zero deployment can drive the digests externally.
+    // Internal ingress (Cloud Scheduler): the daily digest trigger + the durable timeout
+    // sweep, guarded by a Bearer token. Disabled (404) until INTERNAL_TOKEN is set. Driving
+    // the daily digest GCP-side lets a scaled-to-zero deployment fire it without an internal timer.
     app.post('/internal/cron/daily', (req: Request, res: Response) => {
       if (!this.internalAuthenticated(req, res)) {
         return;
       }
       void this.dispatch(res, newEnvelope(Kind.CronDaily, 'internal:/cron/daily', EMPTY_BODY, this.now()));
-    });
-
-    app.post('/internal/cron/weekly', (req: Request, res: Response) => {
-      if (!this.internalAuthenticated(req, res)) {
-        return;
-      }
-      void this.dispatch(res, newEnvelope(Kind.CronWeekly, 'internal:/cron/weekly', EMPTY_BODY, this.now()));
     });
 
     app.post('/internal/sweep', (req: Request, res: Response) => {

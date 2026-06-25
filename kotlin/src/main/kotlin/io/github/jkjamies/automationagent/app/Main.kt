@@ -1,6 +1,6 @@
 /*
- * The automation-agent service entrypoint. It wires configuration, tooling, agents, the scheduler,
- * and the webhook server together, then runs until interrupted. Composition only — logic lives in
+ * The automation-agent service entrypoint. It wires configuration, tooling, agents, and the
+ * webhook server together, then runs until interrupted. Composition only — logic lives in
  * the feature packages.
  */
 package io.github.jkjamies.automationagent.app
@@ -25,10 +25,8 @@ import io.github.jkjamies.automationagent.agent.summary.buildSummaryAgent
 import io.github.jkjamies.automationagent.config.Config
 import io.github.jkjamies.automationagent.githubapi.Client
 import io.github.jkjamies.automationagent.githubapi.PrInput
-import io.github.jkjamies.automationagent.ingest.Kind
 import io.github.jkjamies.automationagent.notify.Notifier
 import io.github.jkjamies.automationagent.notify.newNotifier
-import io.github.jkjamies.automationagent.scheduler.Scheduler
 import io.github.jkjamies.automationagent.webhook.SweepFunc
 import io.github.jkjamies.automationagent.webhook.webhookServer
 import kotlinx.coroutines.CancellationException
@@ -78,7 +76,14 @@ private fun run() {
     val notifier = buildNotifier(cfg)
 
     val summaryDaily = buildSummary(cfg, llm, commitLister, notifier, Duration.ofHours(24), "Daily commit digest")
-    val summaryWeekly = buildSummary(cfg, llm, commitLister, notifier, Duration.ofDays(7), "Weekly commit digest")
+    // /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+    // is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+    if (summaryDaily != null && cfg.internalToken.isEmpty()) {
+        log.log(
+            Level.WARNING,
+            "daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered",
+        )
+    }
 
     // One session service + park store, shared by both fix engines. memory (the default) keeps
     // today's behavior; the durable backends persist parked runs across restarts.
@@ -129,30 +134,12 @@ private fun run() {
         buildRootDispatcher(
             RootDeps(
                 summaryDaily = summaryDaily,
-                summaryWeekly = summaryWeekly,
                 lintKickoff = payloadHandler { lintEngine.kickoff(it) },
                 coverageKickoff = payloadHandler { coverageEngine.kickoff(it) },
                 ciResume = ciResumeHandler(engines),
                 log = log,
             ),
         )
-
-    // Scheduler: cron fires dispatch on the background scope.
-    val scheduler =
-        Scheduler({ envelope ->
-            scope.launch {
-                try {
-                    dispatcher.dispatch(envelope)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    log.log(Level.WARNING, "scheduled dispatch failed kind=${envelope.kind}", e)
-                }
-            }
-        })
-    scheduler.add(cfg.cronDaily, Kind.CRON_DAILY)
-    scheduler.add(cfg.cronWeekly, Kind.CRON_WEEKLY)
-    scheduler.start()
 
     if (cfg.githubWebhookSecret.isEmpty()) {
         log.log(
@@ -187,7 +174,6 @@ private fun run() {
     Runtime.getRuntime().addShutdownHook(
         Thread {
             log.log(Level.INFO, "shutting down: draining in-flight dispatches")
-            scheduler.stop()
             server.stop(gracePeriodMillis = SERVER_GRACE_MS, timeoutMillis = SERVER_TIMEOUT_MS)
             runBlocking {
                 withTimeoutOrNull(DRAIN_TIMEOUT_MS) { scope.coroutineContext.job.children.toList().joinAll() }
@@ -217,8 +203,7 @@ private fun buildNotifier(cfg: Config): Notifier? =
 
 /**
  * Returns a summary workflow agent for the given look-back [window] and digest [title], or null if
- * it can't be fully configured (no repos / notifier). Daily and weekly each get their own agent so
- * the weekly cron produces a 7-day, "Weekly"-titled digest rather than a daily one.
+ * it can't be fully configured (no repos / notifier). The daily Cloud Scheduler trigger fires it.
  */
 private fun buildSummary(cfg: Config, llm: Model, gh: CommitLister, notifier: Notifier?, window: Duration, title: String): BaseAgent? {
     if (cfg.repos.isEmpty()) {
