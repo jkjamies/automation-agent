@@ -151,14 +151,17 @@ export class SqliteParkStore implements ParkStore {
 
   /** Claim every row parked before the cutoff (each via its own CAS) for the timeout backstop. */
   sweep(cutoff: Date): Promise<ParkRecord[]> {
+    const cutoffMs = cutoff.getTime();
     const rows = this.db
       .prepare("SELECT * FROM parked_runs WHERE pr_key <> '' AND parked_at IS NOT NULL AND parked_at < ?;")
-      .all(cutoff.getTime()) as unknown as Row[];
+      .all(cutoffMs) as unknown as Row[];
     const claimed: ParkRecord[] = [];
     for (const row of rows) {
+      // CAS also requires parked_at < cutoff (mirrors Go's claimStale), so a run resolved and
+      // re-parked (fresh) after the scan is left alone rather than cleared with a false timeout.
       const res = this.db
-        .prepare("UPDATE parked_runs SET pr_key = '' WHERE session_id = ? AND pr_key = ?;")
-        .run(row.session_id, row.pr_key);
+        .prepare("UPDATE parked_runs SET pr_key = '' WHERE session_id = ? AND pr_key = ? AND parked_at < ?;")
+        .run(row.session_id, row.pr_key, cutoffMs);
       if (Number(res.changes) === 1) {
         const rec = rowToRecord(row);
         rec.prKey = row.pr_key; // keep the key for logging/cleanup

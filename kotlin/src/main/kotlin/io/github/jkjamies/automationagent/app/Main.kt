@@ -38,6 +38,8 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.System.Logger.Level
 import java.time.Duration
@@ -45,8 +47,13 @@ import kotlin.system.exitProcess
 
 private val log: System.Logger = System.getLogger("automation-agent")
 
-/** Caps how many webhook/cron dispatches run concurrently, so a burst can't spawn unbounded work. */
-private const val MAX_CONCURRENT_DISPATCH = 16
+/**
+ * Caps how many webhook/cron dispatches run concurrently. A permit is acquired in the ingest path
+ * BEFORE a dispatch coroutine is launched (admission backpressure: a burst blocks the ingest caller
+ * rather than piling up unbounded coroutines), and released when the dispatch finishes. Matches the
+ * Go reference's 32-permit dispatchSem (and Python/JS MAX_CONCURRENT_DISPATCH=32).
+ */
+private const val MAX_CONCURRENT_DISPATCH = 32
 
 /** On SIGTERM: stop accepting requests within this grace, then this hard timeout, then drain. */
 private const val SERVER_GRACE_MS = 5_000L
@@ -126,9 +133,16 @@ private fun run() {
             }
         }
 
-    // Background scope for async dispatch from cron fires and webhook deliveries. Parallelism is
-    // bounded so a burst of deliveries can't spawn unbounded coroutines.
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(MAX_CONCURRENT_DISPATCH))
+    // Background scope for async dispatch from cron fires and webhook deliveries. In-flight
+    // dispatches are bounded by a semaphore (see ingest below), not the dispatcher's parallelism —
+    // the dispatch work hops onto Dispatchers.IO anyway, so a parallelism cap is not backpressure.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // Bounds in-flight dispatches. The permit is acquired in the ingest path (both the webhook and
+    // the scheduler/cron deliveries flow through this single boundary) BEFORE the coroutine is
+    // launched, so a burst applies backpressure to the ingest caller instead of spawning unbounded
+    // coroutines; it is released when the dispatch finishes. Mirrors Go's dispatchSem.
+    val dispatchSem = Semaphore(MAX_CONCURRENT_DISPATCH)
 
     val dispatcher =
         buildRootDispatcher(
@@ -153,6 +167,19 @@ private fun run() {
         webhookServer(
             port = cfg.port.toInt(),
             ingest = { envelope ->
+                // When every permit is held, acquire() suspends the ingest caller here — the intended
+                // backpressure. Surface it (like Python) so sustained saturation is observable rather
+                // than a silently delayed webhook ACK.
+                if (dispatchSem.availablePermits == 0) {
+                    log.log(
+                        Level.WARNING,
+                        "dispatch concurrency saturated ($MAX_CONCURRENT_DISPATCH in flight); " +
+                            "webhook ingest is applying backpressure until a slot frees",
+                    )
+                }
+                // Acquire BEFORE launching so a burst blocks here instead of piling up coroutines;
+                // the launched coroutine releases the permit when the dispatch finishes.
+                dispatchSem.acquire()
                 scope.launch {
                     try {
                         dispatcher.dispatch(envelope)
@@ -160,6 +187,8 @@ private fun run() {
                         throw e
                     } catch (e: Exception) {
                         log.log(Level.WARNING, "webhook dispatch failed kind=${envelope.kind}", e)
+                    } finally {
+                        dispatchSem.release()
                     }
                 }
             },

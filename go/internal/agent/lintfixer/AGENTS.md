@@ -16,7 +16,8 @@ catch-all (which survives a restart).
 flowchart TD
     K["KindLint -> Kickoff(raw)"] --> KP["ParseKickoff{repo, base, report}"]
     KP --> T["Triage(LLM): report -> []FileProblems"]
-    T --> FF["GH.GetFileContent per file (base)"]
+    T --> OP["fixflow.Open: clone + checkout"]
+    OP --> FF["fixflow.ReadFile(RepoDir, path) per file (local checkout)"]
     FF --> AN["RunAnalyze: ParallelAgent[analyze_<file>] -> []FileEdit"]
     AN --> AF["ApplyFix: clone -> new branch -> commit -> push -> CreatePR + label"]
     AF --> SUS(["suspend: PR open, await CI"])
@@ -35,9 +36,10 @@ flowchart TD
 ```
 
 - **Kickoff** (`KindLint`) → `Engine.Kickoff`: parse the trusted `{repo, base, report}`
-  envelope → `Triage` (LLM normalizes the arbitrary report) → fetch file contents →
-  analyze (one parallel agent per file) → `apply_fix` (branch, commit, push,
-  labeled PR) → suspend on `await_ci`.
+  envelope → `Triage` (LLM normalizes the arbitrary report) → clone + checkout →
+  read each affected file from the local checkout (`fixflow.ReadFile`) → analyze (one
+  parallel agent per file) → `apply_fix` (branch, commit, push, labeled PR) → suspend on
+  `await_ci`.
 - **Resume** (`KindCI`) → `Engine.Resume` (the `fixflow` Driver): on the agent verify
   check completing — success → notify; failure & attempts < max → re-analyze with CI
   feedback and push onto the same branch; failure & attempts ≥ max → notify "needs

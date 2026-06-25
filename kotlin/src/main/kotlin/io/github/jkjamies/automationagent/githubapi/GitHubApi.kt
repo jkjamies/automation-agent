@@ -164,7 +164,12 @@ class Client(
 
     /** Returns the named check's state for ref, or found=false if absent. */
     suspend fun agentCheck(owner: String, repo: String, ref: String, checkName: String): CheckResult {
-        val resp = http.get(url("repos/$owner/$repo/commits/$ref/check-runs", "check_name" to checkName)).orThrow()
+        val resp =
+            http.get(
+                // filter=latest: on a re-run, return only the most recent run per check name, so we
+                // never read a stale prior run (matches the Go reference's Filter: ptr("latest")).
+                url("repos/$owner/$repo/commits/$ref/check-runs", "check_name" to checkName, "filter" to "latest"),
+            ).orThrow()
         val dto = resp.body<CheckRunsDto>()
         if (dto.totalCount == 0 || dto.checkRuns.isEmpty()) return CheckResult(found = false)
         val cr = dto.checkRuns[0]

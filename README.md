@@ -32,7 +32,7 @@ contract; a behavior change lands in Go first and is mirrored into every existin
 the same change (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
 - **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
-  (`com.google.adk:google-adk-kotlin-core:0.2.0`). A functional 1:1 port (`gradle build`
+  (`com.google.adk:google-adk-kotlin-core:0.4.0`). A functional 1:1 port (`./gradlew build`
   green).
 - **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
   port (`make ci` green).
@@ -68,51 +68,51 @@ scale-to-zero). Cloud Scheduler drives the daily digest and the timeout sweep vi
 `INTERNAL_TOKEN`). With a durable backend a process restart resumes parked runs cleanly,
 which is what lets Cloud Run scale toward zero.
 
-## Status & TODO
+## What's here
 
-Phases 1–5, plus the **durable-sessions migration** (spike + Phases A–D: `SESSION_BACKEND`
-switch, the `ParkStore` seam replacing the in-memory registry, Firestore session/park
-backends, status-aware summaries, and Cloud Scheduler `/internal` ingress) are implemented
-**in Go** and `make ci` is green (≥80% coverage; Firestore validated against the emulator).
-The core service runs locally; the LLM steps are verified against real Gemma. Remaining
-work to reach a fully production-validated system:
+The full service is implemented in Go and `make ci` is green (≥80% coverage; Firestore
+validated against the emulator): the summary, lint-fixer, and coverage-fixer workflows, the
+root dispatcher, the deterministic tooling, and the durable-sessions design (the
+`SESSION_BACKEND` switch, the `ParkStore` seam, Firestore session/park backends,
+status-aware summaries, and the Cloud Scheduler `/internal` ingress). The core service runs
+locally and the LLM steps are verified against real Gemma. The Kotlin, Python, and
+TypeScript ports mirror it (each port's `ci` gate green).
 
-- [ ] **Add the `agent-lint-verify` GitHub Action** to each target repo (label-triggered
-      check that reports lint results back to `/webhooks/github`). Template in
-      [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md). *Without this, the lint-fixer
-      opens a PR but the loop never resumes.*
-- [ ] **Set `GITHUB_TOKEN`** (repo scope) in `.env` so the lint-fixer can push/PR and
-      private repos (e.g. `omnivore`) can be read.
-- [ ] **Configure a notifier** (`SLACK_WEBHOOK_URL` or `TEAMS_WEBHOOK_URL`) so the
-      summary digest and lint-fix results actually post.
-- [ ] **Real end-to-end lint-fix run** against a live repo (needs the three items above)
-      to validate kickoff → PR → CI → resume → success/needs-review.
-- [ ] **Cloud deploy**: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager,
-      `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). With durable sessions a restart
-      resumes cleanly, so Cloud Run can scale toward zero (Cloud Scheduler drives the daily
-      digest + sweep). Full step-by-step + remaining infra TODOs in [`DEPLOYMENT.md`](DEPLOYMENT.md).
-- [ ] **Cross-port parity**: keep the ports in lockstep on the durable-session design
-      (sessions + park store + `/internal` ingress + status-aware summaries); current
-      per-port drift is tracked in `specs/parity-status.md`.
+To run against live repos and cloud infrastructure you supply the surrounding pieces:
 
-Nice-to-haves:
+- An **`agent-lint-verify` GitHub Action** in each target repo (a label-triggered check that
+  reports lint results back to `/webhooks/github`; template in
+  [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md)). The
+  lint-fixer opens a PR but the loop only resumes once this check reports.
+- `GITHUB_TOKEN` (repo scope) so the lint-fixer can push/PR and read private repos.
+- A notifier (`SLACK_WEBHOOK_URL` or `TEAMS_WEBHOOK_URL`) so the digest and fix results post.
+- For cloud: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager, and
+  `LLM_PROVIDER=gemini` (or Ollama on a GPU VM). Durable sessions let a restart resume
+  cleanly, so Cloud Run can scale toward zero with Cloud Scheduler driving the daily digest
+  and sweep. Full step-by-step in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
-- [ ] Summary repo **org auto-discovery** (`GITHUB_ORG`) instead of a static `REPOS` list.
-- [ ] **Eval** for lint-fix quality (the wiring is proven; fix quality depends on
-      model/prompt — bigger Gemma models or Gemini improve it).
-- [ ] **Orphan-session GC** + IaC/Terraform + OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md) TODOs).
+Not yet implemented: summary repo org auto-discovery (`GITHUB_ORG`) in place of a static
+`REPOS` list, an eval harness for lint-fix quality, orphan-session GC, IaC/Terraform, and
+OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `cmd/agent` | service entrypoint |
-| `cmd/playground` | local ADK web UI (dev only; never deployed) |
-| `internal/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `internal/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
-| `internal/{config,ingest}` | configuration + normalized event envelope |
-| `ARCH/` | architecture-conformance tests |
+| `go/` | the canonical Go implementation (`cmd/`, `internal/`, `ARCH/`, `Makefile`) |
+| `kotlin/` · `python/` · `javascript/` | the sibling ports, each mirroring `go/` |
 | `.agents/` | standards, skills, and spec templates |
 | `specs/` | developer memory (gitignored) — created from `.agents/templates` |
+
+Inside `go/` (mirrored by each port):
+
+| Path | Purpose |
+|---|---|
+| `go/cmd/agent` | service entrypoint |
+| `go/cmd/playground` | local ADK web UI (dev only; never deployed) |
+| `go/internal/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
+| `go/internal/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
+| `go/internal/{config,ingest}` | configuration + normalized event envelope |
+| `go/ARCH/` | architecture-conformance tests |
 
 Every directory carries an `AGENTS.md`; the ARCH suite enforces it.

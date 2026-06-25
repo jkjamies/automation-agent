@@ -7,8 +7,7 @@ back here (no environment is stood up yet — the repo is code only).
 
 > **Scope:** the GCP walkthrough below uses the **Go** reference (`go/`) as the worked
 > example; the same design, HTTP surface, and `SESSION_BACKEND` switch apply to every port
-> (see [Other ports](#other-ports) for the per-port backend stacks). Per-port drift:
-> `specs/parity-status.md`.
+> (see [Other ports](#other-ports) for the per-port backend stacks).
 >
 > Related: [`local-development.md`](local-development.md) (run it on your machine) ·
 > [`testing.md`](testing.md) (Firestore emulator) · [`ci-integration.md`](ci-integration.md)
@@ -67,7 +66,7 @@ Blast radius is modest: `/internal/sweep` only resolves runs *already past `CI_T
 the cron endpoints only trigger digests. **Decision: bearer now, OIDC later** — the
 cleanest upgrade is *app-validated OIDC* (verify the Google ID token in the handler,
 audience-checked), keeping a single service and dropping the shared secret. Tracked under
-[TODO](#todo--not-yet-implemented).
+[Planned hardening](#planned-hardening).
 
 > For a deployment that must stay off the public internet, the [Private
 > ingress](#private-ingress) architecture fronts a **private** Cloud Run with a **self-hosted
@@ -134,23 +133,25 @@ double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
 
 ### CI/CD
 
-GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is a
-[TODO](#todo--not-yet-implemented); the setup steps above are manual today.)
+GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is
+[planned hardening](#planned-hardening); the setup steps above are manual today.)
 
-### TODO (not yet implemented)
+### Planned hardening
 
-- [ ] **Orphan-session GC.** The `/internal/sweep` business timeout only sees runs in
-      `parked_runs`. A session created but **never parked** (a crash between session-create
-      and park) has no park record and leaks (firestore especially). Add a cleanup hook
-      that deletes sessions whose `updated_at` is older than a stale threshold
-      (≈ `CI_TIMEOUT × MAX_ITERATIONS` + margin, ~6–24h). Works for firestore + sqlite; can
-      ride `/internal/sweep` or a Firestore native TTL policy on `_sessions`.
-- [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
-- [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds back into measured
-      coverage (see [`testing.md`](testing.md)).
-- [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
-      current per-port drift is tracked in `specs/parity-status.md`.
-- [ ] **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
+These pieces are not yet built; they harden a deployment but are not required to stand one up:
+
+- **Orphan-session GC.** The `/internal/sweep` business timeout only sees runs in
+  `parked_runs`. A session created but **never parked** (a crash between session-create
+  and park) has no park record and leaks (firestore especially). A cleanup hook would
+  delete sessions whose `updated_at` is older than a stale threshold
+  (≈ `CI_TIMEOUT × MAX_ITERATIONS` + margin, ~6–24h), working for firestore + sqlite, riding
+  `/internal/sweep` or a Firestore native TTL policy on `_sessions`.
+- **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
+- **CI running the Firestore emulator** so `*_firestore.go` folds back into measured
+  coverage (see [`testing.md`](testing.md)).
+- **Cross-port parity** on the durable-session design — kept in lockstep per the parity
+  contract; any deliberate gap is recorded in the PR that introduces it.
+- **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
 
 ---
 
@@ -259,7 +260,7 @@ Cron and the sweep are **always** GCP-internal regardless of GitHub flavor; only
 The defaults reproduce the public-URL behavior, so this posture is selected entirely through
 config + infra. The agent logic (`fixflow`, sessions, park store, `REPOS`) is unchanged; the
 architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`), which
-lands Go-first and mirrors per the parity contract. Per-port drift: `specs/parity-status.md`.
+lands Go-first and mirrors per the parity contract.
 
 ---
 
@@ -275,5 +276,5 @@ per-port difference is only the backend SDKs sitting behind the same interfaces:
 | Python `python/` | adk `SqliteSessionService` | adk **native** `FirestoreSessionService` | custom on `google-cloud-firestore` |
 
 Each port builds its own container (`cd <port> && make docker`, building that port's
-`cmd/agent`). Where a port's backend SDKs or coverage differ, `specs/parity-status.md` is
-the record.
+`cmd/agent`). Any deliberate difference in a port's backend SDKs or coverage is recorded in
+the PR that introduces it.

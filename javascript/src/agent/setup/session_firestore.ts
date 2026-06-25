@@ -52,7 +52,7 @@ interface EventDoc {
   blob: string; // JSON-encoded Event
 }
 
-const KEY_DELIM = '';
+const KEY_DELIM = '\x1f';
 
 /** A Firestore-safe document id: base64url of the delimiter-joined parts. */
 function encodeKey(...parts: string[]): string {

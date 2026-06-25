@@ -23,13 +23,17 @@ data class Author(val name: String, val email: String)
 /** Raised by [Repo.commitAll] when the working tree is clean. */
 class NoChangesException : Exception("gitrepo: no changes to commit")
 
-/** A cloned working tree. */
+/**
+ * A cloned working tree. The underlying JGit [Git] owns a [org.eclipse.jgit.lib.Repository] with
+ * open file handles / pack locks, so [Repo] is [AutoCloseable]: a long-running service doing
+ * repeated fix loops must close each clone (via `use {}` or a `finally`) to avoid an fd/lock leak.
+ */
 class Repo internal constructor(
     private val git: Git,
     private val dir: File,
     private val cred: CredentialsProvider?,
     private val now: () -> Instant,
-) {
+) : AutoCloseable {
     /** The working-tree directory; callers write file edits under it. */
     fun dir(): String = dir.path
 
@@ -82,6 +86,9 @@ class Repo internal constructor(
     suspend fun head(): String = withContext(Dispatchers.IO) {
         git.repository.resolve(Constants.HEAD)?.name ?: error("head: no HEAD")
     }
+
+    /** Releases the JGit handles (open files / pack locks). Idempotent; safe to call from `use {}`. */
+    override fun close() = git.close()
 
     companion object {
         /**

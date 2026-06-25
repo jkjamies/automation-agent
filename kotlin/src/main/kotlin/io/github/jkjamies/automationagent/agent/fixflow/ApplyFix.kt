@@ -85,6 +85,8 @@ suspend fun applyFix(gh: GitHub, cfg: ApplyConfig, edits: List<FileEdit>): Apply
     return try {
         commit(gh, repo, cfg, edits)
     } finally {
+        // Release the JGit handles before deleting the checkout (see Engine.attemptOnce).
+        repo.close()
         withContext(Dispatchers.IO) { File(repo.dir()).deleteRecursively() }
     }
 }

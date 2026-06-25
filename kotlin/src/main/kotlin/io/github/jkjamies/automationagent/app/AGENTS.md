@@ -20,11 +20,21 @@ flowchart TD
 ```
 
 `main()` wires configuration → the model → tooling → the root/summary/fix agents → the
-webhook server, then blocks until interrupted (a shutdown hook drains in-flight dispatches).
-The daily digest is driven by Cloud Scheduler calling `POST /internal/cron/daily`; the service
-runs no internal timer. The summary
+webhook server, then blocks until interrupted. One `newSessionService` + `newParkStore` pair
+(selected by `SESSION_BACKEND`: memory/sqlite/firestore) is built here and shared by both fix
+engines, giving them durable suspend/resume. `POST /internal/sweep` is wired to a `SweepFunc` that
+calls every engine's `sweepTimeouts` (collect-and-continue across all engines, then rethrow the first
+failure so Cloud Scheduler retries). The daily digest is driven by Cloud Scheduler calling
+`POST /internal/cron/daily`; the service runs no internal timer. The summary
 workflow is enabled only when repositories and a notifier are configured; the fix engines run
 without a notifier (they just won't post results). A check_run webhook is handed to every fix engine
 — each no-ops unless its check name matches.
+
+Webhook/cron deliveries are dispatched asynchronously under a 32-permit dispatch semaphore: a permit
+is acquired at ingest before the dispatch coroutine launches (admission backpressure — a burst blocks
+at the boundary instead of spawning unbounded coroutines) and released when the dispatch finishes. A
+shutdown hook drains those in-flight dispatches, then closes the park store's backing connection
+(`parkStore.close()` — a no-op for the memory backend). With the memory backend, parked CI-wait runs
+are abandoned on restart; the durable backends persist them.
 
 The interactive local REPL lives in the separate [`playground`](../playground/AGENTS.md) entrypoint.

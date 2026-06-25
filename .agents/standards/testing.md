@@ -4,8 +4,7 @@ How to run **every** kind of test for each port, plus the rules they must obey. 
 is the source of truth — read it and you can run the suite without asking anyone.
 
 > **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same test
-> kinds and `make` targets apply to every port — run them from that port's directory. Per-port
-> drift is tracked in `specs/parity-status.md`.
+> kinds and equivalent commands apply to every port — run them from that port's directory.
 
 ---
 
@@ -135,15 +134,16 @@ go test ./internal/agent/setup/ -run TestParkStoreConformance/sqlite -count=1
 
 ## Other ports
 
-Each port has the same `make` targets as Go (`make test`, `make cover`, `make arch`,
-`make ci`), run from its own directory. The frameworks differ:
+Go, Python, and TypeScript expose the same `make` targets (`make test`, `make cover`,
+`make arch`, `make ci`), run from their own directory. Kotlin has no Makefile — it drives
+the equivalent steps through Gradle. The frameworks differ:
 
 | Port | Framework | Coverage tool | Run the suite |
 |---|---|---|---|
 | Go `go/` | `go test` | `go tool cover` | `cd go && make ci` |
 | Python `python/` | pytest (`pytest-asyncio`) | coverage.py (`pytest --cov`) | `cd python && make ci` |
 | TypeScript `javascript/` | the port's runner | the port's coverage | `cd javascript && make ci` |
-| Kotlin `kotlin/` | Kotest / JUnit | Kover | `cd kotlin && make ci` (or `./gradlew check`) |
+| Kotlin `kotlin/` | Kotest / JUnit | Kover | `cd kotlin && ./gradlew test arch koverVerify` |
 
 ### Python (`python/`)
 

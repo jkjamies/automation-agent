@@ -89,7 +89,7 @@ data class Deps(
 
 /**
  * Runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is owned by the
- * [Driver] (ADK resumability + an in-memory parked-run registry). Effective dependency values
+ * [Driver] (ADK resumability + the injected `ParkStore`). Effective dependency values
  * (defaults applied) are exposed for the Driver.
  */
 class Engine(val spec: Spec, val deps: Deps) {
@@ -155,6 +155,10 @@ class Engine(val spec: Spec, val deps: Deps) {
             val edits = spec.analyze(AnalyzeInput(llm = deps.llm, codeLlm = codeLlm, repoDir = repo.dir(), work = work, feedback = rp.feedback))
             commit(deps.gh, repo, cfg, edits)
         } finally {
+            // Release the JGit handles before deleting the checkout — an unclosed clone leaks file
+            // descriptors / pack locks across the service's repeated fix loops (and can block the
+            // delete on Windows). Then remove the temp working tree.
+            repo.close()
             withContext(Dispatchers.IO) { File(repo.dir()).deleteRecursively() }
         }
     }

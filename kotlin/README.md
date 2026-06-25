@@ -4,14 +4,13 @@ Kotlin port of [`automation-agent`](../README.md), built on
 [ADK for Kotlin](https://github.com/google/adk-kotlin). The Go implementation at the repo
 root is the canonical reference; this port tracks it **1:1 in functionality**
 (see [`../.agents/standards/language-parity.md`](../.agents/standards/language-parity.md)).
-
-> **Status:** complete. Every package is ported with tests, architecture conformance checks
-> (`./gradlew arch`), and an 80% coverage floor (`./gradlew koverVerify`).
+Every package mirrors the Go reference, with tests, architecture conformance checks
+(`./gradlew arch`), and an 80% coverage floor (`./gradlew koverVerify`).
 
 ## Requirements
 
 - JDK 17+
-- The Gradle wrapper (`./gradlew`) downloads Gradle 8.12 and all dependencies on first run.
+- The Gradle wrapper (`./gradlew`) downloads Gradle 9.6.0 and all dependencies on first run.
 
 ## Quick start
 

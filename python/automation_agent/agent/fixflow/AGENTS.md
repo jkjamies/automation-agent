@@ -57,8 +57,8 @@ flowchart TD
   `kickoff`/`resume` (delegate to the Driver) + `attempt_once` (one apply attempt).
 - `driver.py` — `Driver`: the `apply_fix`/`await_ci` tools, the `fixer` agent (on a
   deterministic sequencer model), the `RunParams` (serialized into the park record), and the
-  kickoff/resume/on_timeout/`sweep_timeouts` lifecycle over the injected `setup.ParkStore`
-  (the in-memory `RunRegistry` it replaced is gone). Terminal `_clear` deletes the park
+  kickoff/resume/on_timeout/`sweep_timeouts` lifecycle over the injected `setup.ParkStore`.
+  Terminal `_clear` deletes the park
   record **and** the ADK session. Triage re-runs on every attempt (no cache): a retry resumes
   on a fresh process — under scale-to-zero, a new instance — so a cache would miss anyway.
   Terminal paths build a status-aware summary via `summary.build_summary_text` + `gh.compare`.

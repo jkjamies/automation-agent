@@ -3,10 +3,12 @@
 The autonomous lint-remediation workflow. It is a configuration of the shared
 `fixflow` engine: its own triage/analyze functions and prompts, on `fixflow`'s
 deterministic kickoff -> suspend -> CI resume -> loop or finish loop. The wait is a real
-ADK long-running suspend/resume because CI takes 20–40 min. The parked run is tracked in
-`fixflow`'s **in-memory** registry (keyed by `owner/repo#pr`); there is no durable
-store, so a process restart strands in-flight runs, and a per-run `CI_TIMEOUT` timer
-bounds each wait.
+ADK long-running suspend/resume because CI takes 20–40 min. The ADK session and the parked
+run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`) via the
+injected `setup.ParkStore` (a `ParkRecord` keyed by a UUID session id, with an
+`owner/repo#pr` `pr_key` index for CI resume). With a durable backend a process restart
+resumes in-flight runs; the default `memory` backend stays ephemeral. Each wait is freed two
+ways: a soft per-run `CI_TIMEOUT` timer and the durable `/internal/sweep` catch-all.
 
 ## Flow
 
@@ -17,14 +19,15 @@ flowchart TD
     T --> FF["gh.get_file_content per file (base)"]
     FF --> AN["run_analyze: ParallelAgent[analyze_<file>] -> [FileEdit]"]
     AN --> AF["apply_fix: clone -> new branch -> commit -> push -> create_pr + label"]
-    AF --> SUS(["suspend: PR open, await CI"])
+    AF --> SUS(["suspend: PR open, await CI (durable: survives restart)"])
 
     SUS -->|"agent-lint-verify check_run"| CI["KindCI -> resume(raw)"]
-    TO["CI_TIMEOUT timer (in-memory)"] -.->|"CI never reports"| HR
+    TO["CI_TIMEOUT timer"] -.->|"CI never reports"| HR
+    SW["/internal/sweep (durable catch-all)"] -.->|"CI never reports"| HR
     CI --> RH["Engine.resume(ResumeInput)"]
     RH --> C{conclusion}
     C -->|success| OK["notify success + PR link"]
-    C -->|failure| AT{"registry attempts >= max_iter?"}
+    C -->|failure| AT{"park-record attempts >= max_iter?"}
     AT -->|yes| HR["notify needs human review + PR link"]
     AT -->|no| RT["attempt(retry): re-triage from check output, read branch files, analyze w/ feedback, apply_fix(new_branch=False)"]
     RT --> SUS
@@ -39,9 +42,10 @@ flowchart TD
 - **Resume** (`KindCI`) -> `Engine.resume` (the `fixflow` Driver): on the agent verify
   check completing — success -> notify; failure & attempts < max -> re-analyze with CI
   feedback and push onto the same branch; failure & attempts >= max -> notify "needs
-  human review" + PR link. Attempts are counted in `fixflow`'s in-memory registry, not
-  from GitHub commits. There is no reconcile loop: a parked run whose CI never reports
-  is freed by its per-run `CI_TIMEOUT` timer (-> "needs human review").
+  human review" + PR link. Attempts are counted in the `setup.ParkStore` park record, not
+  from GitHub commits. A parked run whose CI never reports is freed two ways: a per-run
+  `CI_TIMEOUT` timer and the durable `/internal/sweep` catch-all (both -> "needs human
+  review").
 
 ## Files
 

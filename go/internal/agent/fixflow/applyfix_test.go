@@ -144,6 +144,33 @@ func TestApplyFixRetryReusesBranch(t *testing.T) {
 	}
 }
 
+// A re-apply of already-correct content (the LLM re-emits a file that matches the branch)
+// is a benign no-op: it resolves as a successful apply (PR ensured, HEAD reused), not a
+// failed fix. Regression guard for the G1 ErrNoChanges branch in Commit.
+func TestApplyFixNoOpEditSucceeds(t *testing.T) {
+	remote := seedRemote(t)
+	edits := []FileEdit{{Path: "a.go", Content: "package a\n"}}
+	first, err := ApplyFix(context.Background(), &fakeGH{}, applyCfg(remote), edits)
+	if err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+
+	// Re-apply identical content on the existing branch: CommitAll has nothing to commit.
+	retry := applyCfg(remote)
+	retry.NewBranch = false
+	gh := &fakeGH{existing: []githubapi.PR{{Number: 7, Branch: "agent/fix"}}}
+	res, err := ApplyFix(context.Background(), gh, retry, edits)
+	if err != nil {
+		t.Fatalf("no-op re-apply should succeed, got: %v", err)
+	}
+	if res.PR.Number != 7 {
+		t.Errorf("no-op apply should reuse PR #7, got %d", res.PR.Number)
+	}
+	if res.HeadSHA != first.HeadSHA {
+		t.Errorf("no-op apply HeadSHA = %q, want unchanged %q", res.HeadSHA, first.HeadSHA)
+	}
+}
+
 func TestApplyFixNoEdits(t *testing.T) {
 	if _, err := ApplyFix(context.Background(), &fakeGH{}, applyCfg("x"), nil); err == nil {
 		t.Fatal("expected error with no edits")
