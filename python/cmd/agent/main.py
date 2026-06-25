@@ -195,6 +195,14 @@ async def run() -> None:
     # spawning) means a burst applies backpressure to the handler instead of spawning
     # unbounded tasks. The cron path (_emit) stays unbounded, like Go's per-job goroutines.
     async def _ingest(e: Envelope) -> None:
+        # When every slot is held, acquire() blocks here — the intended backpressure. Surface
+        # it so sustained saturation is observable rather than silent (delayed webhook ACKs).
+        if dispatch_sem.locked():
+            log.warning(
+                "dispatch concurrency saturated (%d in flight); webhook ingest is applying "
+                "backpressure until a slot frees",
+                MAX_CONCURRENT_DISPATCH,
+            )
         await dispatch_sem.acquire()
         task = loop.create_task(_dispatch_and_release(e))
         pending.add(task)
