@@ -85,7 +85,7 @@ func (d *LongRunDriver) Resume(ctx context.Context, sessionID, callID, toolName 
 func (d *LongRunDriver) drive(ctx context.Context, sessionID string, input *genai.Content) (DriveResult, error) {
 	res := DriveResult{ToolResponses: map[string]map[string]any{}}
 	var sb strings.Builder
-	for ev, err := range d.r.Run(ctx, d.userID, sessionID, input, agent.RunConfig{}) {
+	for ev, err := range d.r.Run(ctx, d.userID, sessionID, input, streamingRunConfig()) {
 		if err != nil {
 			return DriveResult{}, err
 		}

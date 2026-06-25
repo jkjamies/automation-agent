@@ -21,6 +21,7 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from automation_agent.agent.setup.events import assistant_text, content_text
+from automation_agent.agent.setup.runner import STREAMING_RUN_CONFIG
 
 
 @dataclass
@@ -110,7 +111,10 @@ class LongRunDriver:
         res = DriveResult()
         parts: list[str] = []
         async for ev in self._runner.run_async(
-            user_id=self._user_id, session_id=session_id, new_message=msg
+            user_id=self._user_id,
+            session_id=session_id,
+            new_message=msg,
+            run_config=STREAMING_RUN_CONFIG,
         ):
             if ev.long_running_tool_ids:
                 res.parked_call_id = next(iter(ev.long_running_tool_ids))

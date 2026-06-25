@@ -23,6 +23,7 @@ import {
 import type { Content, FunctionResponse } from '@google/genai';
 
 import { assistantText, contentText } from './events';
+import { STREAMING_RUN_CONFIG } from './runconfig';
 
 /** The outcome of driving a long-running agent through one cycle. */
 export interface DriveResult {
@@ -137,6 +138,7 @@ export class LongRunDriver {
       userId: this.userId,
       sessionId,
       newMessage: msg,
+      runConfig: STREAMING_RUN_CONFIG,
     })) {
       if (ev.longRunningToolIds && ev.longRunningToolIds.length > 0) {
         res.parkedCallId = ev.longRunningToolIds[0]!;

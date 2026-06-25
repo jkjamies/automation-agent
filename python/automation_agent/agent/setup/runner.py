@@ -10,11 +10,20 @@ from __future__ import annotations
 from typing import Any
 
 from google.adk.agents import BaseAgent
+from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.apps import App
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
 from automation_agent.agent.setup.events import content_text, user_text
+
+# Stream model output over SSE at every runner call site (the single source of truth for
+# this port). A long Ollama generation then streams token-by-token over a long-lived body
+# instead of blocking on one buffered response whose header/read timeout would cap the whole
+# decode. Every event loop here (and in longrun) filters partial events via ``not ev.partial``,
+# so streaming is transparent: tool calls and final text still surface only on the final,
+# non-partial events. The default ``RunConfig()`` is ``StreamingMode.NONE`` (no streaming).
+STREAMING_RUN_CONFIG = RunConfig(streaming_mode=StreamingMode.SSE)
 
 
 def new_runner(app_name: str, root: BaseAgent) -> Runner:
@@ -33,7 +42,10 @@ async def drive(runner: Runner, user_id: str, session_id: str, text: str) -> Non
     Side-effecting agents (e.g. a notifier) perform their work as they run.
     """
     async for _ in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=user_text(text)
+        user_id=user_id,
+        session_id=session_id,
+        new_message=user_text(text),
+        run_config=STREAMING_RUN_CONFIG,
     ):
         pass
 
@@ -46,7 +58,10 @@ async def drive_text(runner: Runner, user_id: str, session_id: str, text: str) -
     """
     parts: list[str] = []
     async for ev in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=user_text(text)
+        user_id=user_id,
+        session_id=session_id,
+        new_message=user_text(text),
+        run_config=STREAMING_RUN_CONFIG,
     ):
         if ev.content is not None and not ev.partial:
             parts.append(content_text(ev.content))
@@ -63,7 +78,10 @@ async def drive_collect_state(
     """
     state: dict[str, Any] = {}
     async for ev in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=user_text(text)
+        user_id=user_id,
+        session_id=session_id,
+        new_message=user_text(text),
+        run_config=STREAMING_RUN_CONFIG,
     ):
         if ev.actions and ev.actions.state_delta:
             state.update(ev.actions.state_delta)

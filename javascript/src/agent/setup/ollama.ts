@@ -35,6 +35,13 @@ interface OllamaMessage {
   tool_name?: string;
 }
 
+/** One newline-delimited chunk of an Ollama `/api/chat` response. */
+interface OllamaChatChunk {
+  model?: string;
+  message?: { content?: string; tool_calls?: OllamaToolCall[] };
+  done?: boolean;
+}
+
 /**
  * Adapts a local Ollama server to the ADK `BaseLlm` interface so agents can run
  * against Gemma locally.
@@ -60,18 +67,31 @@ export class OllamaLlm extends BaseLlm {
 
   /**
    * Implements `BaseLlm.generateContentAsync`. Forwards generation options and
-   * tools, then yields one final response carrying the text plus any tool calls
-   * as genai function-call parts so the runner can execute the tools.
+   * tools, aggregates the response chunks, and yields a final response carrying
+   * the full text plus any tool calls as genai function-call parts so the runner
+   * can execute the tools.
+   *
+   * When `stream` is set (the runner uses `StreamingMode.SSE`), Ollama is asked to
+   * stream: headers + the first chunk arrive after model-load + prefill and the
+   * long token-by-token decode then streams over the body, so no first-byte timeout
+   * can cap the whole generation. Non-empty text chunks are yielded as `partial`
+   * responses (the drive loops ignore them and collect only the final text); the
+   * full text and tool calls are aggregated and emitted on the terminal chunk.
+   *
+   * Timeouts: no overall request timeout is imposed — a long decode must be
+   * unbounded — and the request inherits Node/undici's default 300s headers timeout,
+   * the cold-start cushion (model-load + prefill) for the first streamed chunk. Only
+   * `abortSignal` (cancellation from the runner) can interrupt the request.
    */
   override async *generateContentAsync(
     req: LlmRequest,
-    _stream = false,
+    stream = false,
     abortSignal?: AbortSignal,
   ): AsyncGenerator<LlmResponse, void> {
     const body: Record<string, unknown> = {
       model: this.modelName(req),
       messages: toOllamaMessages(req),
-      stream: false,
+      stream,
       options: generationOptions(req.config),
       truncate: false, // fail loudly rather than silently truncate an oversized prompt
     };
@@ -93,14 +113,36 @@ export class OllamaLlm extends BaseLlm {
       const text = await resp.text().catch(() => '');
       throw new Error(`ollama chat: ${resp.status} ${resp.statusText}: ${text.slice(0, 512)}`);
     }
-    const data = (await resp.json()) as {
-      model?: string;
-      message?: { content?: string; tool_calls?: OllamaToolCall[] };
-    };
-    yield finalResponse(
-      data.message?.content ?? '',
-      data.message?.tool_calls ?? [],
-    );
+
+    // Both modes are parsed as newline-delimited JSON: a non-streaming reply is a
+    // single chunk, a streaming reply is many. Aggregate text + tool calls across
+    // chunks so the final response is complete regardless of mode.
+    let full = '';
+    const toolCalls: OllamaToolCall[] = [];
+    let model = '';
+    let emittedFinal = false;
+    for await (const chunk of iterChatChunks(resp)) {
+      const content = chunk.message?.content ?? '';
+      full += content;
+      if (chunk.message?.tool_calls) {
+        toolCalls.push(...chunk.message.tool_calls);
+      }
+      if (chunk.model) {
+        model = chunk.model;
+      }
+      if (stream && !chunk.done && content.trim() !== '') {
+        yield partialResponse(content, model);
+      }
+      if (chunk.done) {
+        yield finalResponse(full, toolCalls, model);
+        emittedFinal = true;
+      }
+    }
+    // Non-streaming replies (and any stream that ends without an explicit `done`)
+    // still need their terminal response emitted.
+    if (!emittedFinal) {
+      yield finalResponse(full, toolCalls, model);
+    }
   }
 
   /** Live connections are not supported by the local adapter. */
@@ -139,7 +181,60 @@ function wantsJson(config?: GenerateContentConfig): boolean {
   return (config?.responseMimeType ?? '').toLowerCase().includes('json');
 }
 
-function finalResponse(text: string, toolCalls: OllamaToolCall[]): LlmResponse {
+/**
+ * Iterate the newline-delimited JSON chunks of an Ollama `/api/chat` response.
+ *
+ * A non-streaming reply is a single JSON object; a streaming reply is one object
+ * per line. Only complete lines are parsed mid-stream — the trailing partial line is
+ * buffered and parsed once the body ends. Blank lines are skipped; a malformed line
+ * surfaces as a JSON parse error rather than being silently dropped (matching the Go
+ * port, which propagates the official client's decode error).
+ */
+async function* iterChatChunks(resp: Response): AsyncGenerator<OllamaChatChunk, void> {
+  if (!resp.body) {
+    const text = await resp.text();
+    yield* parseChunkLines(text);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buf += decoder.decode(value, { stream: true });
+    const nl = buf.lastIndexOf('\n');
+    if (nl >= 0) {
+      yield* parseChunkLines(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+    }
+  }
+  buf += decoder.decode();
+  yield* parseChunkLines(buf);
+}
+
+/** Parse each non-blank line of `text` as one Ollama chat chunk. */
+function* parseChunkLines(text: string): Generator<OllamaChatChunk, void> {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    yield JSON.parse(trimmed) as OllamaChatChunk;
+  }
+}
+
+function partialResponse(text: string, model: string): LlmResponse {
+  return {
+    content: { role: 'model', parts: [{ text }] },
+    partial: true,
+    modelVersion: model,
+  };
+}
+
+function finalResponse(text: string, toolCalls: OllamaToolCall[], model: string): LlmResponse {
   const parts: Part[] = [];
   if (text.trim() !== '') {
     parts.push({ text });
@@ -150,6 +245,7 @@ function finalResponse(text: string, toolCalls: OllamaToolCall[]): LlmResponse {
   return {
     content: { role: 'model', parts },
     turnComplete: true,
+    modelVersion: model,
   };
 }
 

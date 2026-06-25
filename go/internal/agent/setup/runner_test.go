@@ -31,6 +31,16 @@ func TestNewRunnerAndDrive(t *testing.T) {
 	}
 }
 
+// SSE streaming is required: without it Ollama buffers the whole answer before sending
+// any bytes, turning the transport's first-chunk timeout into a cap on total generation
+// (a long code change on slow hardware then times out). Guard the invariant so a future
+// edit can't silently drop back to non-streaming.
+func TestStreamingRunConfigUsesSSE(t *testing.T) {
+	if got := streamingRunConfig().StreamingMode; got != agent.StreamingModeSSE {
+		t.Errorf("streamingRunConfig StreamingMode = %q, want %q", got, agent.StreamingModeSSE)
+	}
+}
+
 func TestDrivePropagatesError(t *testing.T) {
 	boom, _ := agent.New(agent.Config{
 		Name: "boom",

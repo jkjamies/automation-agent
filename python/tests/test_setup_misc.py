@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from google.adk.agents import LlmAgent
+from google.adk.agents.run_config import StreamingMode
 from google.adk.models.lite_llm import LiteLlm
 
 from automation_agent.agent.setup.events import (
@@ -17,7 +19,12 @@ from automation_agent.agent.setup.events import (
 from automation_agent.agent.setup.generate import generate_text
 from automation_agent.agent.setup.llm import build_code_llm, build_llm
 from automation_agent.agent.setup.prompt import Prompts
-from automation_agent.agent.setup.runner import drive_collect_state, drive_text, new_runner
+from automation_agent.agent.setup.runner import (
+    STREAMING_RUN_CONFIG,
+    drive_collect_state,
+    drive_text,
+    new_runner,
+)
 from automation_agent.config import Config, Provider
 
 # ---- prompt -----------------------------------------------------------------
@@ -87,6 +94,12 @@ async def test_drive_text(fake_llm) -> None:
     assert "final answer" in out
 
 
+def test_streaming_run_config_is_sse() -> None:
+    # Every runner call site shares this config so a long Ollama generation streams over a
+    # long-lived body instead of being capped by a single buffered-response timeout.
+    assert STREAMING_RUN_CONFIG.streaming_mode == StreamingMode.SSE
+
+
 async def test_drive_collect_state() -> None:
     from google.adk.agents import BaseAgent
     from google.adk.events import Event, EventActions
@@ -111,6 +124,16 @@ def test_build_llm_ollama() -> None:
     assert isinstance(base, LiteLlm)
     assert base.model == "ollama_chat/gemma4:12b"
     assert code.model == "ollama_chat/gemma4:26b"
+
+
+def test_build_llm_ollama_timeout() -> None:
+    # The Ollama path sets a generous first-chunk (read) cushion with no overall/total cap,
+    # so a long streaming generation is never truncated. read is the max gap between chunks.
+    cfg = Config(llm_provider=Provider.OLLAMA, ollama_model="gemma4:12b")
+    timeout = build_llm(cfg)._additional_args["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 300.0
+    assert timeout.connect == 10.0
 
 
 def test_build_llm_gemini_requires_model() -> None:
