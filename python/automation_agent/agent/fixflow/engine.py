@@ -2,8 +2,8 @@
 
 It owns the event-driven loop — kickoff -> suspend ->
 CI resume -> loop or finish — plus the apply mechanics and attempt counting. Each
-concrete agent supplies a :class:`Spec` (triage fn, analyze fn, branch/label/check
-names). The durable artifacts live on GitHub; the CI-wait suspend/resume itself is owned
+concrete agent supplies a :class:`Spec` (triage fn, analyze fn, branch + check
+name). The durable artifacts live on GitHub; the CI-wait suspend/resume itself is owned
 by the :class:`Driver` (ADK long-running + an injected setup.ParkStore backend).
 """
 
@@ -73,7 +73,6 @@ class Spec:
 
     name: str  # "lint" | "coverage"
     branch: str  # e.g. automation-agent/lint-fix
-    label: str  # e.g. automation-agent
     check_name: str  # e.g. agent-lint-verify
     commit_message: str
     pr_title: str
@@ -98,6 +97,9 @@ class Deps:
     gh: GitHub | None = None
     notify: Notifier | None = None
     token: str = ""
+    # pr_label is the single human-facing label applied to every agent PR on creation
+    # (AGENT_PR_LABEL). Write-only — PR lookup is by branch, so it never gates behavior.
+    pr_label: str = "automation-agent"
     # repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
     # listed is rejected; empty imposes no restriction (restriction is opt-in).
     repos: list[str] = field(default_factory=list)
@@ -145,8 +147,9 @@ class Engine:
         self.driver = Driver(self)
 
     def label(self) -> str:
-        """The PR label this engine's workflow uses."""
-        return self.spec.label
+        """The human-facing label applied to this engine's PRs (AGENT_PR_LABEL). Same for
+        every workflow and write-only — PR lookup is by branch, not label."""
+        return self.d.pr_label
 
     def check_name(self) -> str:
         """The agent verify check this engine resumes on."""
@@ -211,7 +214,7 @@ class Engine:
             base=rp.base,
             branch=self.spec.branch,
             new_branch=rp.new_branch,
-            label=self.spec.label,
+            label=self.d.pr_label,
             commit_message=self.spec.commit_message,
             pr_title=self.spec.pr_title,
             pr_body=_pr_body(self.spec, work),

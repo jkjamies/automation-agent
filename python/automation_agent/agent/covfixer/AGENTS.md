@@ -25,7 +25,7 @@ flowchart TD
     Exec --> Read["fixflow.read_file(checkout, source)"]
     Exec -->|"prompts/analyze.md: write test from brief"| Gen["generate -> test content"]
     Gen --> FE["FileEdit{plan.test_path, content}"]
-    FE --> Commit["fixflow.commit -> branch automation-agent/test-coverage, label automation-agent-coverage"]
+    FE --> Commit["fixflow.commit -> branch automation-agent/test-coverage, label automation-agent"]
     Commit --> Loop["suspend -> agent-coverage-verify (runs tests + coverage) -> resume: success / retry-with-feedback / needs-review"]
 ```
 

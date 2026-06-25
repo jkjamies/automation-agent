@@ -67,7 +67,6 @@ type AnalyzeFunc func(ctx context.Context, in AnalyzeInput) ([]FileEdit, error)
 type Spec struct {
 	Name          string // "lint" | "coverage"
 	Branch        string // e.g. automation-agent/lint-fix
-	Label         string // e.g. automation-agent
 	CheckName     string // e.g. agent-lint-verify
 	CommitMessage string
 	PRTitle       string
@@ -88,6 +87,9 @@ type Deps struct {
 	Token     string
 	MaxIter   int
 	CITimeout time.Duration
+	// PRLabel is the single human-facing label applied to every agent PR on creation
+	// (AGENT_PR_LABEL). Write-only — PR lookup is by branch, so it never gates behavior.
+	PRLabel string
 	// Repos is the kickoff allowlist (REPOS). When non-empty, a kickoff whose repo is not
 	// listed is rejected; empty imposes no restriction (restriction is opt-in).
 	Repos  []string
@@ -210,7 +212,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 
 	cfg := ApplyConfig{
 		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Token: e.d.Token,
-		Base: rp.base, Branch: e.spec.Branch, NewBranch: rp.newBranch, Label: e.spec.Label,
+		Base: rp.base, Branch: e.spec.Branch, NewBranch: rp.newBranch, Label: e.d.PRLabel,
 		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work),
 		Author: e.d.Author,
 	}

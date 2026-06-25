@@ -51,4 +51,3 @@ async def test_analyze(tmp_path, fake_llm) -> None:
 def test_new_engine() -> None:
     e = new_engine(Deps())
     assert e.check_name() == "agent-lint-verify"
-    assert e.label() == "automation-agent"

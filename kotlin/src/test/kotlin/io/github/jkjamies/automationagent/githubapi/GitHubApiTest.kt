@@ -15,10 +15,17 @@ import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.Base64
 
-private fun mockClient(routes: Map<String, String>, hits: MutableSet<String>): HttpClient {
+private fun mockClient(
+    routes: Map<String, String>,
+    hits: MutableSet<String>,
+    queries: MutableMap<String, String>,
+): HttpClient {
     val engine = MockEngine { request ->
         val key = "${request.method.value} ${request.url.encodedPath}"
         hits += key
+        request.url.parameters.names().forEach { name ->
+            request.url.parameters[name]?.let { queries[name] = it }
+        }
         val body = routes[key]
         if (body == null) {
             respond("", HttpStatusCode.NotFound)
@@ -31,8 +38,12 @@ private fun mockClient(routes: Map<String, String>, hits: MutableSet<String>): H
     }
 }
 
-private fun client(routes: Map<String, String>, hits: MutableSet<String> = mutableSetOf()): Client =
-    Client(baseUrl = "https://api.github.test/", httpClient = mockClient(routes, hits))
+private fun client(
+    routes: Map<String, String>,
+    hits: MutableSet<String> = mutableSetOf(),
+    queries: MutableMap<String, String> = mutableMapOf(),
+): Client =
+    Client(baseUrl = "https://api.github.test/", httpClient = mockClient(routes, hits, queries))
 
 class GitHubApiTest : BehaviorSpec({
     Given("a repo with one recent commit") {
@@ -78,18 +89,28 @@ class GitHubApiTest : BehaviorSpec({
         }
     }
 
-    Given("open PRs with mixed labels") {
-        When("finding agent PRs") {
-            Then("only the labeled PR is returned") {
+    Given("an open PR for a branch") {
+        When("finding the open PR by branch") {
+            Then("it returns the matching PR and filters by state=open + head=owner:branch") {
+                val queries = mutableMapOf<String, String>()
                 val c = client(
                     mapOf(
                         "GET /repos/o/r/pulls" to
-                            """[{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]},{"number":6,"head":{"ref":"feature","sha":"s6"},"labels":[{"name":"enhancement"}]}]""",
+                            """[{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]}]""",
                     ),
+                    queries = queries,
                 )
-                val prs = c.findAgentPrs("o", "r", "automation-agent")
-                prs.size shouldBe 1
-                prs[0].number shouldBe 5
+                c.findOpenPrByBranch("o", "r", "agent/fix")?.number shouldBe 5
+                // Assert the branch filter, not just the response mapping: a regression to an
+                // unfiltered pulls list must fail here (mirrors the Python client test).
+                queries["state"] shouldBe "open"
+                queries["head"] shouldBe "o:agent/fix"
+            }
+        }
+        When("no open PR exists for the branch") {
+            Then("it returns null") {
+                val c = client(mapOf("GET /repos/o/r/pulls" to "[]"))
+                c.findOpenPrByBranch("o", "r", "nope") shouldBe null
             }
         }
     }

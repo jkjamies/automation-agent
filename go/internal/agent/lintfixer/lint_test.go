@@ -76,7 +76,7 @@ func TestAnalyze(t *testing.T) {
 
 func TestNewEngine(t *testing.T) {
 	e := NewEngine(fixflow.Deps{})
-	if e.CheckName() != "agent-lint-verify" || e.Label() != "automation-agent" {
-		t.Errorf("check=%q label=%q", e.CheckName(), e.Label())
+	if e.CheckName() != "agent-lint-verify" {
+		t.Errorf("check=%q", e.CheckName())
 	}
 }

@@ -96,6 +96,7 @@ func run(logger *slog.Logger) error {
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
+		PRLabel:        cfg.AgentPRLabel,
 		SessionService: sessions, ParkStore: parkStore,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)

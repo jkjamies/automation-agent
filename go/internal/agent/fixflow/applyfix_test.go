@@ -34,8 +34,16 @@ func (f *fakeGH) Compare(_ context.Context, _, _, _, _ string) (githubapi.Compar
 	return f.comparison, f.compareErr
 }
 
-func (f *fakeGH) FindAgentPRs(context.Context, string, string, string) ([]githubapi.PR, error) {
-	return f.existing, f.findErr
+func (f *fakeGH) FindOpenPRByBranch(_ context.Context, _, _, branch string) (githubapi.PR, bool, error) {
+	if f.findErr != nil {
+		return githubapi.PR{}, false, f.findErr
+	}
+	for _, pr := range f.existing {
+		if pr.Branch == branch {
+			return pr, true, nil
+		}
+	}
+	return githubapi.PR{}, false, nil
 }
 
 func (f *fakeGH) CreatePR(_ context.Context, _, _ string, in githubapi.PRInput) (githubapi.PR, error) {

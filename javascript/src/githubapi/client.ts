@@ -122,6 +122,7 @@ export interface OctokitLike {
         owner: string;
         repo: string;
         state: 'open';
+        head?: string;
         per_page: number;
       }): Promise<{ data: unknown[] }>;
     };
@@ -230,25 +231,23 @@ export class Client {
     }
   }
 
-  /** List open PRs carrying the given label. */
-  async findAgentPrs(owner: string, repo: string, label: string): Promise<PR[]> {
+  /**
+   * Return the open PR whose head is the given branch, or null. Lookup is by branch (the
+   * GitHub `head=owner:branch` filter), not the agent label — the label is write-only,
+   * applied on creation for humans to filter on.
+   */
+  async findOpenPrByBranch(owner: string, repo: string, branch: string): Promise<PR | null> {
     try {
-      const data = await this.gh.paginate(this.gh.rest.pulls.list, {
+      const { data } = await this.gh.rest.pulls.list({
         owner,
         repo,
         state: 'open',
-        per_page: 100,
+        head: `${owner}:${branch}`,
+        per_page: 1,
       });
-      const out: PR[] = [];
-      for (const raw of data) {
-        const p = toPr(raw);
-        if (p.labels.includes(label)) {
-          out.push(p);
-        }
-      }
-      return out;
+      return data.length > 0 ? toPr(data[0]) : null;
     } catch (err) {
-      throw new Error(`list PRs ${owner}/${repo}: ${errMsg(err)}`);
+      throw new Error(`list PRs ${owner}/${repo} head ${branch}: ${errMsg(err)}`);
     }
   }
 

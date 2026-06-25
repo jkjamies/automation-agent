@@ -12,7 +12,7 @@ import java.nio.file.Files
 
 /** The slice of `githubapi` the apply step needs (consumer-defined, fakeable). */
 interface GitHub {
-    suspend fun findAgentPrs(owner: String, repo: String, label: String): List<Pr>
+    suspend fun findOpenPrByBranch(owner: String, repo: String, branch: String): Pr?
     suspend fun createPr(owner: String, repo: String, input: PrInput): Pr
     suspend fun addLabels(owner: String, repo: String, number: Int, labels: List<String>)
 
@@ -103,9 +103,12 @@ private suspend fun writeEdits(repo: Repo, edits: List<FileEdit>) = withContext(
     }
 }
 
-/** Returns the existing agent PR for the branch, or creates and labels one. */
+/**
+ * Returns the existing open PR for the branch, or creates and labels one. Lookup is by head branch
+ * (not the agent label, which is write-only and never read back).
+ */
 private suspend fun ensurePR(gh: GitHub, cfg: ApplyConfig): Pr {
-    gh.findAgentPrs(cfg.owner, cfg.repo, cfg.label).firstOrNull { it.branch == cfg.branch }?.let { return it }
+    gh.findOpenPrByBranch(cfg.owner, cfg.repo, cfg.branch)?.let { return it }
     val pr = gh.createPr(cfg.owner, cfg.repo, PrInput(title = cfg.prTitle, head = cfg.branch, base = cfg.base, body = cfg.prBody))
     gh.addLabels(cfg.owner, cfg.repo, pr.number, listOf(cfg.label))
     return pr.copy(labels = pr.labels + cfg.label)

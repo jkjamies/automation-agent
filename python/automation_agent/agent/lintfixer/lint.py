@@ -18,7 +18,6 @@ def new_lint_engine(d: Deps) -> Engine:
         Spec(
             name="lint",
             branch="automation-agent/lint-fix",
-            label="automation-agent",
             check_name="agent-lint-verify",
             commit_message="automation-agent: fix lint problems",
             pr_title="automation-agent: fix lint problems",

@@ -16,7 +16,7 @@ flowchart TD
     C --> M1["listCommitsSince(owner, repo, since)"]
     C --> M2["createPr(owner, repo, PRInput)"]
     C --> M3["addLabels(owner, repo, number, ...labels)"]
-    C --> M4["findAgentPrs(owner, repo, label)"]
+    C --> M4["findOpenPrByBranch(owner, repo, branch)"]
     C --> M6["agentCheck(owner, repo, ref, checkName)"]
     C --> M7["getFileContent(owner, repo, path, ref)"]
     PCE["parseCheckRunEvent(body)"] -->|"JSON.parse -> CheckEvent"| WH[webhook handler]
@@ -24,13 +24,13 @@ flowchart TD
     M1 -->|"paginate(repos.listCommits, since)"| GH[(GitHub REST API)]
     M2 -->|pulls.create| GH
     M3 -->|issues.addLabels| GH
-    M4 -->|"paginate(pulls.list, state='open')"| GH
+    M4 -->|"pulls.list(head='owner:branch', state='open')"| GH
     M6 -->|"checks.listForRef(filter: latest)"| GH
     M7 -->|repos.getContent| GH
 
     M1 -->|"toCommit()"| R1["Commit[]"]
     M2 -->|"toPr()"| R2[PR]
-    M4 -->|"toPr + labels.includes(label)"| R3["PR[] with label"]
+    M4 -->|"toPr (first match)"| R3["PR | null"]
     M6 -->|total===0| R5["CheckResult{found: false}"]
     M6 -->|"checkRuns[0]"| R6["CheckResult{status, conclusion, outputText}"]
     M7 -->|"base64 decode"| R7[decoded file string]
@@ -38,8 +38,8 @@ flowchart TD
 
 - `listCommitsSince` — last-24h commit digests (summary workflow).
 - `createPr` / `addLabels` — open and label the agent's fix PR.
-- `findAgentPrs` — open PRs with the agent label (used by `applyFix` to reuse an
-  existing labeled PR instead of opening a duplicate).
+- `findOpenPrByBranch` — the open PR for a head branch (used by `applyFix` to reuse an
+  existing agent PR instead of opening a duplicate). Lookup is by branch, not label.
 - `agentCheck` — the agent verify check's status/conclusion for a ref (`filter: latest`,
   re-run-safe). Available for a future resume/timeout re-query; not yet wired in.
 - `getFileContent` — decoded file contents at a ref (`""` = default branch).

@@ -12,7 +12,7 @@ import (
 
 // GitHub is the slice of githubapi the apply step needs (consumer-defined, fakeable).
 type GitHub interface {
-	FindAgentPRs(ctx context.Context, owner, repo, label string) ([]githubapi.PR, error)
+	FindOpenPRByBranch(ctx context.Context, owner, repo, branch string) (githubapi.PR, bool, error)
 	CreatePR(ctx context.Context, owner, repo string, in githubapi.PRInput) (githubapi.PR, error)
 	AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error
 	Compare(ctx context.Context, owner, repo, base, head string) (githubapi.Comparison, error)
@@ -123,16 +123,15 @@ func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
 	return nil
 }
 
-// ensurePR returns the existing agent PR for the branch, or creates and labels one.
+// ensurePR returns the existing open PR for the branch, or creates and labels one. The
+// lookup is by head branch (not the agent label, which is write-only and never read back).
 func ensurePR(ctx context.Context, gh GitHub, cfg ApplyConfig) (githubapi.PR, error) {
-	existing, err := gh.FindAgentPRs(ctx, cfg.Owner, cfg.Repo, cfg.Label)
+	existing, found, err := gh.FindOpenPRByBranch(ctx, cfg.Owner, cfg.Repo, cfg.Branch)
 	if err != nil {
 		return githubapi.PR{}, err
 	}
-	for _, pr := range existing {
-		if pr.Branch == cfg.Branch {
-			return pr, nil
-		}
+	if found {
+		return existing, nil
 	}
 	pr, err := gh.CreatePR(ctx, cfg.Owner, cfg.Repo, githubapi.PRInput{
 		Title: cfg.PRTitle, Head: cfg.Branch, Base: cfg.Base, Body: cfg.PRBody,

@@ -21,8 +21,8 @@ class FakeGH:
         self.labeled: list[str] = []
         self.create_err = create_err
 
-    def find_agent_prs(self, owner: str, repo: str, label: str) -> list[PR]:
-        return self.existing
+    def find_open_pr_by_branch(self, owner: str, repo: str, branch: str) -> PR | None:
+        return next((pr for pr in self.existing if pr.branch == branch), None)
 
     def create_pr(self, owner: str, repo: str, in_: PRInput) -> PR:
         if self.create_err is not None:

@@ -15,7 +15,6 @@ export function newLintEngine(d: Deps): Engine {
     {
       name: 'lint',
       branch: 'automation-agent/lint-fix',
-      label: 'automation-agent',
       checkName: 'agent-lint-verify',
       commitMessage: 'automation-agent: fix lint problems',
       prTitle: 'automation-agent: fix lint problems',

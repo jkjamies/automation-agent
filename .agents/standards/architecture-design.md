@@ -356,10 +356,10 @@ fan-out is built from config at setup time. Fetchers use go-github `ListCommits`
 over the shared `fixflow` engine. A deterministic **Sequencer** model drives a "fixer"
 `LlmAgent` to emit a fixed `apply_fix → await_ci` sequence; `await_ci` is a long-running
 (`IsLongRunning`) tool, so the run suspends and resumes on a GitHub `check_run` webhook.
-See the dedicated section below — this is the complex one. Lint uses branch
-`automation-agent/lint-fix`, label `automation-agent`, check `agent-lint-verify`; coverage
-uses branch `automation-agent/test-coverage`, label `automation-agent-coverage`, check
-`agent-coverage-verify`.
+See the dedicated section below — this is the complex one. Both workflows share the single
+`AGENT_PR_LABEL` (`automation-agent`, write-only) and are told apart by branch + verify
+check: lint uses branch `automation-agent/lint-fix`, check `agent-lint-verify`; coverage
+uses branch `automation-agent/test-coverage`, check `agent-coverage-verify`.
 
 ---
 
@@ -466,8 +466,10 @@ that runs the *same* lint the kickoff payload came from and asserts: (a) every t
 finding is gone, and (b) no new findings were introduced. Its single pass/fail is the
 unambiguous resume signal.
 
-**How it's triggered:** when the agent opens the PR it adds a label (default
-`automation-agent`). The repo hosts one workflow:
+**How it's triggered:** when the agent opens the PR it adds the `AGENT_PR_LABEL` label
+(default `automation-agent`) and pushes to a per-workflow branch. The repo hosts one
+workflow per fixer, each gated on its **branch** (the shared label can't tell lint from
+coverage apart):
 
 ```yaml
 on:
@@ -475,13 +477,14 @@ on:
     types: [labeled, synchronize]   # labeled = first run; synchronize = each iteration's push
 jobs:
   agent-lint-verify:
-    if: contains(github.event.pull_request.labels.*.name, 'automation-agent')
+    if: github.event.pull_request.head.ref == 'automation-agent/lint-fix'
     # runs full lint, compares against the targeted findings, reports the check conclusion
 ```
 
 `synchronize` means the check re-runs automatically on every iteration's push, so we get a
-fresh conclusion each loop with no extra orchestration. We listen only for *this check's
-name* (`AGENT_CHECK_NAME`) completing; the repo's other checks are ignored.
+fresh conclusion each loop with no extra orchestration. We listen only for *this workflow's
+verify check* (e.g. `agent-lint-verify`, hardcoded per workflow) completing; the repo's
+other checks are ignored.
 
 ### Ingress endpoints
 
@@ -667,8 +670,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `CI_TIMEOUT` | how long a suspended fix run waits for its CI result before the timer/sweep frees it ("needs review") | `90m` |
 | `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/*` | — |
 | `INTERNAL_TOKEN` | Bearer token for `/internal/*` (Cloud Scheduler cron + sweep); empty disables them (404) | — |
-| `AGENT_PR_LABEL` | label that triggers the agent verify check | `automation-agent` |
-| `AGENT_CHECK_NAME` | check name we resume on | `agent-lint-verify` |
+| `AGENT_PR_LABEL` | label applied to every agent PR on creation (write-only — PR lookup is by branch) | `automation-agent` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
 [`DEPLOYMENT.md`](../../DEPLOYMENT.md).

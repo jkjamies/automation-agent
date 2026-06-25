@@ -25,7 +25,6 @@ def test_load_defaults() -> None:
     assert c.max_iterations == 3
     assert c.ci_timeout.total_seconds() == 90 * 60
     assert c.agent_pr_label == "automation-agent"
-    assert c.agent_check_name == "agent-lint-verify"
     # Sessions default to in-process (memory); a restart strands parked runs.
     assert c.session_backend == SessionBackend.MEMORY
     assert c.sqlite_dsn == "automation-agent.db"

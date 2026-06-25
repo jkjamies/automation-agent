@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// Label is the PR label this engine's workflow uses.
-func (e *Engine) Label() string { return e.spec.Label }
+// Label is the human-facing label applied to this engine's PRs (AGENT_PR_LABEL). It is
+// the same for every workflow and write-only — PR lookup is by branch, not label.
+func (e *Engine) Label() string { return e.d.PRLabel }
 
 // ExtractJSONArray returns the first complete JSON array in model output (which may add
 // prose or code fences), scanning from the first '[' and decoding a single value — so

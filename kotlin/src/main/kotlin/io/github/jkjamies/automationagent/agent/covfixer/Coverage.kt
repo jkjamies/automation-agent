@@ -19,7 +19,6 @@ fun newEngine(deps: Deps): Engine =
         Spec(
             name = "coverage",
             branch = "automation-agent/test-coverage",
-            label = "automation-agent-coverage",
             checkName = "agent-coverage-verify",
             commitMessage = "automation-agent: add test coverage",
             prTitle = "automation-agent: add test coverage",

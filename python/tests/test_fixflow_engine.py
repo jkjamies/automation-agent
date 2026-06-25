@@ -63,8 +63,8 @@ class FakeGH:
         self.created: PRInput | None = None
         self.labeled: list[str] = []
 
-    def find_agent_prs(self, owner: str, repo: str, label: str) -> list[PR]:
-        return self.existing
+    def find_open_pr_by_branch(self, owner: str, repo: str, branch: str) -> PR | None:
+        return next((pr for pr in self.existing if pr.branch == branch), None)
 
     def create_pr(self, owner: str, repo: str, in_: PRInput) -> PR:
         self.created = in_
@@ -110,7 +110,6 @@ def _spec() -> Spec:
     return Spec(
         name="test",
         branch="agent/fix",
-        label="automation-agent",
         check_name="agent-test-verify",
         commit_message="fix",
         pr_title="Fix",
@@ -127,6 +126,7 @@ def _new_engine(remote: str, gh: FakeGH, n: FakeNotifier) -> Engine:
         Deps(
             gh=gh,
             notify=n,
+            pr_label="automation-agent",
             max_iter=3,
             ci_timeout=timedelta(hours=1),
             clone_url=lambda _o, _r: remote,
@@ -256,6 +256,7 @@ async def test_engine_full_loop_exhausts(tmp_path) -> None:
         Deps(
             gh=gh,
             notify=n,
+            pr_label="automation-agent",
             max_iter=3,
             ci_timeout=timedelta(hours=1),
             clone_url=lambda _o, _r: remote,
@@ -377,6 +378,7 @@ async def test_engine_triage_cached_across_retries(tmp_path) -> None:
         Deps(
             gh=gh,
             notify=n,
+            pr_label="automation-agent",
             max_iter=3,
             ci_timeout=timedelta(hours=1),
             clone_url=lambda _o, _r: remote,

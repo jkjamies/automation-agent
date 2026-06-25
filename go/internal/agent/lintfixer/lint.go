@@ -21,7 +21,6 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 	return fixflow.NewEngine(fixflow.Spec{
 		Name:          "lint",
 		Branch:        "automation-agent/lint-fix",
-		Label:         "automation-agent",
 		CheckName:     "agent-lint-verify",
 		CommitMessage: "automation-agent: fix lint problems",
 		PRTitle:       "automation-agent: fix lint problems",

@@ -20,8 +20,8 @@ class FakeGH implements GitHub {
   constructor(existing: PR[] = []) {
     this.existing = existing;
   }
-  async findAgentPrs(): Promise<PR[]> {
-    return this.existing;
+  async findOpenPrByBranch(_o: string, _r: string, branch: string): Promise<PR | null> {
+    return this.existing.find((pr) => pr.branch === branch) ?? null;
   }
   async createPr(_o: string, _r: string, input: PRInput): Promise<PR> {
     this.created = input;
@@ -70,7 +70,6 @@ function spec(): Spec {
   return {
     name: 'test',
     branch: 'agent/fix',
-    label: 'automation-agent',
     checkName: 'agent-test-verify',
     commitMessage: 'fix',
     prTitle: 'Fix',

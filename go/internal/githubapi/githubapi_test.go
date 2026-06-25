@@ -74,22 +74,43 @@ func TestCreatePRAndLabels(t *testing.T) {
 	}
 }
 
-func TestFindAgentPRs(t *testing.T) {
+func TestFindOpenPRByBranch(t *testing.T) {
+	var gotHead, gotState string
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /repos/o/r/pulls", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /repos/o/r/pulls", func(w http.ResponseWriter, r *http.Request) {
+		gotHead = r.URL.Query().Get("head")
+		gotState = r.URL.Query().Get("state")
 		_, _ = w.Write([]byte(`[
-			{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]},
-			{"number":6,"head":{"ref":"feature","sha":"s6"},"labels":[{"name":"enhancement"}]}
+			{"number":5,"head":{"ref":"agent/fix","sha":"s5"},"labels":[{"name":"automation-agent"}]}
 		]`))
 	})
 	c := testClient(t, mux)
 
-	prs, err := c.FindAgentPRs(context.Background(), "o", "r", "automation-agent")
+	pr, found, err := c.FindOpenPRByBranch(context.Background(), "o", "r", "agent/fix")
 	if err != nil {
-		t.Fatalf("FindAgentPRs: %v", err)
+		t.Fatalf("FindOpenPRByBranch: %v", err)
 	}
-	if len(prs) != 1 || prs[0].Number != 5 {
-		t.Fatalf("agent PRs = %+v, want only #5", prs)
+	if !found || pr.Number != 5 {
+		t.Fatalf("pr = %+v found=%v, want #5", pr, found)
+	}
+	if gotHead != "o:agent/fix" || gotState != "open" {
+		t.Fatalf("query head=%q state=%q, want head=o:agent/fix state=open", gotHead, gotState)
+	}
+}
+
+func TestFindOpenPRByBranchNone(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	c := testClient(t, mux)
+
+	_, found, err := c.FindOpenPRByBranch(context.Background(), "o", "r", "nope")
+	if err != nil {
+		t.Fatalf("FindOpenPRByBranch: %v", err)
+	}
+	if found {
+		t.Fatal("found = true, want false for no open PR")
 	}
 }
 

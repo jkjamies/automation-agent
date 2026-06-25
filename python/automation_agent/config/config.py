@@ -93,8 +93,9 @@ class Config:
     # internal_token is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
     # cron + sweep). Empty disables those endpoints (404).
     internal_token: str = ""
+    # agent_pr_label is the single human-facing label applied to every agent PR on creation
+    # (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
     agent_pr_label: str = "automation-agent"
-    agent_check_name: str = "agent-lint-verify"
 
     def validate(self) -> None:
         """Check invariants that defaults alone cannot guarantee.
@@ -207,7 +208,6 @@ def load_from(get: Lookup) -> Config:
         github_webhook_secret=_get_or(get, "GITHUB_WEBHOOK_SECRET", ""),
         internal_token=_get_or(get, "INTERNAL_TOKEN", ""),
         agent_pr_label=_get_or(get, "AGENT_PR_LABEL", "automation-agent"),
-        agent_check_name=_get_or(get, "AGENT_CHECK_NAME", "agent-lint-verify"),
     )
 
     # Code models default to the base models when unset.

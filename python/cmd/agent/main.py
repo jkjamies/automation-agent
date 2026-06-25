@@ -126,6 +126,7 @@ async def run() -> None:
         gh=gh,
         notify=notifier,
         token=cfg.github_token,
+        pr_label=cfg.agent_pr_label,
         max_iter=cfg.max_iterations,
         ci_timeout=cfg.ci_timeout,
         repos=cfg.repos,
