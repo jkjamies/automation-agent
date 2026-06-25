@@ -84,7 +84,13 @@ To run against live repos and cloud infrastructure you supply the surrounding pi
   reports lint results back to `/webhooks/github`; template in
   [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md)). The
   lint-fixer opens a PR but the loop only resumes once this check reports.
-- `GITHUB_TOKEN` (repo scope) so the lint-fixer can push/PR and read private repos.
+- `GITHUB_TOKEN` (repo scope) so the lint-fixer can open/label PRs and read private repos.
+  This is the **GitHub REST API** credential — it is always required, even over SSH. For
+  local dev you can clone/push over SSH instead of an https token by setting
+  `GIT_TRANSPORT=ssh` (uses your ssh-agent / `~/.ssh` keys, with `GIT_SSH_KEY` to pin a
+  specific key) — but SSH only authenticates the git transport, so you **still** need a
+  token or `gh auth login` for the PR operations. See
+  [`local-development.md`](.agents/standards/local-development.md).
 - A notifier (`SLACK_WEBHOOK_URL` or `TEAMS_WEBHOOK_URL`) so the digest and fix results post.
 - For cloud: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager, and
   `LLM_PROVIDER=gemini` (or Ollama on a GPU VM). Durable sessions let a restart resume
