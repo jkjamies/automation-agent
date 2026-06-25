@@ -69,6 +69,22 @@ describe('config', () => {
     );
   });
 
+  it('defaults the git transport to https', () => {
+    const c = loadFrom(mapLookup({}));
+    expect(c.gitTransport).toBe('https');
+    expect(c.gitSshKey).toBe('');
+  });
+
+  it('reads the ssh git transport and an explicit key', () => {
+    const c = loadFrom(mapLookup({ GIT_TRANSPORT: 'ssh', GIT_SSH_KEY: '/home/dev/.ssh/id_ed25519' }));
+    expect(c.gitTransport).toBe('ssh');
+    expect(c.gitSshKey).toBe('/home/dev/.ssh/id_ed25519');
+  });
+
+  it('rejects an invalid git transport', () => {
+    expect(() => loadFrom(mapLookup({ GIT_TRANSPORT: 'rsync' }))).toThrow();
+  });
+
   it('rejects an invalid LLM provider', () => {
     expect(() => loadFrom(mapLookup({ LLM_PROVIDER: 'openai' }))).toThrow();
   });

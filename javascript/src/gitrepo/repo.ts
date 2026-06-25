@@ -52,6 +52,36 @@ export function authUrl(url: string, token: string): string {
   return parsed.toString();
 }
 
+/**
+ * Build the `GIT_SSH_COMMAND` value that pins git's ssh transport to an explicit private
+ * key (`GIT_SSH_KEY`). `IdentitiesOnly=yes` stops ssh from also offering agent/default
+ * keys, so the chosen key is the one used. Returns '' when no key is set — git then uses
+ * the ssh binary's own resolution (ssh-agent, default identity files, `known_hosts`),
+ * which is exactly what an https clone never touches.
+ *
+ * The composition root exports this as the `GIT_SSH_COMMAND` environment variable (rather
+ * than simple-git's per-call `.env()`, which would *replace* the child environment and drop
+ * `PATH`/`HOME`, breaking git's lookup of the `ssh` binary). Inheriting it via the process
+ * environment keeps the full environment intact and obeys the "only config reads env"
+ * boundary — this layer never reads the ambient environment directly.
+ *
+ * git word-splits `GIT_SSH_COMMAND` like a shell, so the key path is single-quoted (with any
+ * embedded single quotes escaped) — a path with spaces or shell metacharacters is passed
+ * through literally, never re-interpreted.
+ */
+export function sshCommand(sshKey: string): string {
+  if (!sshKey) {
+    return '';
+  }
+  return `ssh -i ${shellQuote(sshKey)} -o IdentitiesOnly=yes`;
+}
+
+/** POSIX single-quote a value so a shell (git parses GIT_SSH_COMMAND as one) treats it
+ * literally: wrap in single quotes and replace each embedded `'` with `'\''`. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 /** A cloned working tree. */
 export class Repo {
   private readonly git: SimpleGit;
@@ -63,8 +93,12 @@ export class Repo {
   }
 
   /**
-   * Clone url into dir (which must not already exist). A non-empty token is
-   * embedded as GitHub HTTP auth for https URLs.
+   * Clone url into dir (which must not already exist). Auth is chosen by the URL scheme,
+   * not the caller: a non-empty token is embedded as GitHub HTTP auth for https URLs;
+   * an ssh URL (`git@…`/`ssh://…`) passes through {@link authUrl} untouched to the system
+   * git, which uses ssh-agent, the default identity files and `known_hosts` (and the
+   * ambient `GIT_SSH_COMMAND` when `GIT_SSH_KEY` pins an explicit key — see
+   * {@link sshCommand}).
    *
    * @throws Error if the clone fails.
    */

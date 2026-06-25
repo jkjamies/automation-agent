@@ -31,6 +31,9 @@ def test_load_defaults() -> None:
     assert c.firestore_project == ""
     assert c.firestore_collection == "automation_agent"
     assert c.internal_token == ""
+    # Git transport defaults to https (token / GitHub App); ssh is opt-in for local dev.
+    assert c.git_transport == "https"
+    assert c.git_ssh_key == ""
 
 
 def test_session_backend_override() -> None:
@@ -74,6 +77,19 @@ def test_github_token_env_chain() -> None:
     # GITHUB_TOKEN takes precedence over GH_TOKEN.
     c = load_from(map_lookup({"GITHUB_TOKEN": "primary", "GH_TOKEN": "fallback"}))
     assert c.github_token == "primary"
+
+
+def test_git_transport_ssh() -> None:
+    c = load_from(
+        map_lookup({"GIT_TRANSPORT": "ssh", "GIT_SSH_KEY": "/home/dev/.ssh/id_ed25519"})
+    )
+    assert c.git_transport == "ssh"
+    assert c.git_ssh_key == "/home/dev/.ssh/id_ed25519"
+
+
+def test_invalid_git_transport() -> None:
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"GIT_TRANSPORT": "scp"}))
 
 
 def test_invalid_provider() -> None:

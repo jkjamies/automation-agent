@@ -11,6 +11,7 @@ parameter to plumb through.
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
@@ -35,7 +36,8 @@ class NoChangesError(Exception):
 
 def _auth_url(url: str, token: str) -> str:
     """Embed ``x-access-token:<token>@`` into https URLs for basic auth. Non-https
-    (local path/file) remotes used in tests are returned unchanged.
+    (ssh / local path / file) remotes are returned unchanged — an ssh remote carries no
+    in-URL credential; system ``git`` authenticates it via ssh-agent / default keys.
     """
     if not token:
         return url
@@ -49,6 +51,26 @@ def _auth_url(url: str, token: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def _is_ssh_url(url: str) -> bool:
+    """Whether url is an scp-style (``git@host:path``) or ``ssh://`` remote, as opposed to
+    an https remote. The agent only ever builds these two forms (selected by GIT_TRANSPORT).
+    """
+    return url.startswith("ssh://") or url.startswith("git@")
+
+
+def _ssh_env(ssh_key: str) -> dict[str, str] | None:
+    """Build the git environment that pins ssh transport to an explicit private key via
+    ``GIT_SSH_COMMAND``, or None when no key is configured.
+
+    With no override, system ``git`` resolves ssh credentials itself (ssh-agent, then the
+    default identity files), with ``known_hosts`` verification on. ``IdentitiesOnly=yes``
+    stops ssh from also offering agent/other keys when an explicit key is given.
+    """
+    if not ssh_key:
+        return None
+    return {"GIT_SSH_COMMAND": f"ssh -i {shlex.quote(ssh_key)} -o IdentitiesOnly=yes"}
+
+
 class Repo:
     """A cloned working tree."""
 
@@ -57,15 +79,27 @@ class Repo:
         self._dir = dir_
 
     @staticmethod
-    def clone(url: str, dir: str, token: str = "") -> Repo:
-        """Clone url into dir (which must not already exist). A non-empty token is
-        embedded as GitHub HTTP auth for https URLs.
+    def clone(url: str, dir: str, token: str = "", ssh_key: str = "") -> Repo:
+        """Clone url into dir (which must not already exist). Auth is chosen by the URL
+        scheme: a non-empty token is embedded as GitHub HTTP auth for https URLs; an ssh
+        URL (``git@…``/``ssh://…``) is left untouched so system ``git`` authenticates it
+        via ssh-agent / default keys. A non-empty ``ssh_key`` pins ssh to that private key
+        (via ``GIT_SSH_COMMAND``); it is ignored for https URLs.
+
+        ``clone_from(env=...)`` scopes the ssh environment to the clone subprocess only, so
+        it is persisted onto the returned repo's Git instance — a later :meth:`push` over
+        ssh then reuses the same key (mirroring Go's per-repo auth).
         """
         clone_url = _auth_url(url, token)
+        env = _ssh_env(ssh_key) if _is_ssh_url(url) else None
         try:
-            repo = GitRepo.clone_from(clone_url, dir)
+            repo = GitRepo.clone_from(clone_url, dir, env=env)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"clone {url}: {exc}") from exc
+        if env:
+            # GitPython does NOT carry the clone env onto the returned Repo; set it
+            # explicitly so push() (and any later ssh op) keeps using GIT_SSH_COMMAND.
+            repo.git.update_environment(**env)
         return Repo(repo, dir)
 
     def dir(self) -> str:

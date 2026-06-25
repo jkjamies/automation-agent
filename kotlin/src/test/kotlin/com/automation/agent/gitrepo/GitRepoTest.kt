@@ -96,4 +96,33 @@ class GitRepoTest : BehaviorSpec({
             }
         }
     }
+
+    Given("clone URLs of each scheme") {
+        When("classifying them") {
+            Then("scp-style and ssh:// are ssh; https is not") {
+                isSshUrl("git@github.com:acme/api.git") shouldBe true
+                isSshUrl("ssh://git@github.com/acme/api.git") shouldBe true
+                isSshUrl("https://github.com/acme/api.git") shouldBe false
+            }
+        }
+    }
+
+    Given("an ssh session factory") {
+        When("built with an explicit key path") {
+            Then("it is rooted at the user's home and ~/.ssh (known_hosts verification on)") {
+                val home = File(System.getProperty("user.home"))
+                buildSshFactory("/home/dev/.ssh/id_ed25519").use { f ->
+                    f.homeDirectory shouldBe home
+                    f.sshDirectory shouldBe File(home, ".ssh")
+                }
+            }
+        }
+        When("built with no explicit key (ssh-agent + default identities)") {
+            Then("it still produces a usable factory") {
+                buildSshFactory("").use { f ->
+                    f.sshDirectory shouldBe File(File(System.getProperty("user.home")), ".ssh")
+                }
+            }
+        }
+    }
 })

@@ -104,3 +104,74 @@ def test_auth_url_embeds_token(tmp_path) -> None:
     local = os.path.join(str(tmp_path), "repo")
     assert _auth_url(local, "tok") == local
     assert _auth_url("https://github.com/o/r.git", "") == "https://github.com/o/r.git"
+    # An ssh remote carries no in-URL credential — returned unchanged even with a token.
+    assert _auth_url("git@github.com:o/r.git", "tok") == "git@github.com:o/r.git"
+
+
+def test_is_ssh_url() -> None:
+    from automation_agent.gitrepo.repo import _is_ssh_url
+
+    assert _is_ssh_url("git@github.com:acme/api.git")
+    assert _is_ssh_url("ssh://git@github.com/acme/api.git")
+    assert not _is_ssh_url("https://github.com/acme/api.git")
+    assert not _is_ssh_url("/local/path/repo")
+
+
+def test_ssh_env() -> None:
+    from automation_agent.gitrepo.repo import _ssh_env
+
+    assert _ssh_env("") is None
+    assert _ssh_env("/home/dev/.ssh/id_ed25519") == {
+        "GIT_SSH_COMMAND": "ssh -i /home/dev/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+    }
+    # A path with spaces is shell-quoted so git invokes ssh with the intended key.
+    env = _ssh_env("/home/my key/id")
+    assert env is not None
+    assert "'/home/my key/id'" in env["GIT_SSH_COMMAND"]
+
+
+def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
+    # An ssh URL with GIT_SSH_KEY pins ssh to that key via GIT_SSH_COMMAND; an https or local
+    # URL passes no ssh env. Captured without touching the network by stubbing clone_from.
+    import automation_agent.gitrepo.repo as repomod
+
+    captured: dict[str, object] = {}
+
+    class FakeGit:
+        def __init__(self) -> None:
+            self.persisted: dict[str, str] = {}
+
+        def update_environment(self, **env: str) -> None:
+            self.persisted.update(env)
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self.git = FakeGit()
+
+    def fake_clone_from(url, dir, env=None):
+        captured["url"] = url
+        captured["env"] = env
+        repo = FakeRepo()
+        captured["repo"] = repo
+        return repo
+
+    monkeypatch.setattr(repomod.GitRepo, "clone_from", fake_clone_from)
+
+    Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w1"), "", "/k/id_ed25519")
+    assert captured["env"] == {
+        "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
+    }
+    # clone_from's env is subprocess-scoped, so the same command must be persisted onto the
+    # returned repo's Git instance — otherwise a later push() over ssh would drop the key.
+    assert captured["repo"].git.persisted == {
+        "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
+    }
+
+    # An https URL ignores ssh_key (no ssh env) and keeps the token-embedded URL.
+    Repo.clone("https://github.com/acme/api.git", str(tmp_path / "w2"), "tok", "/k/id")
+    assert captured["env"] is None
+    assert captured["url"] == "https://x-access-token:tok@github.com/acme/api.git"
+
+    # An ssh URL with no explicit key: no env, so system git resolves creds (ssh-agent etc).
+    Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w3"), "", "")
+    assert captured["env"] is None

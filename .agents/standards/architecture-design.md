@@ -664,7 +664,9 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `FIRESTORE_PROJECT` | GCP project (used when `=firestore`); blank = detect from ADC / `GOOGLE_CLOUD_PROJECT` | — |
 | `FIRESTORE_COLLECTION` | collection-name prefix (`_sessions`, `_app_state`, `_user_state`, `_parked_runs`) | `automation_agent` |
 | `REPOS` | comma-separated `owner/repo`; also the kickoff allowlist — when non-empty, the fix-loop only acts on listed repos (empty = no restriction) | — |
-| `GITHUB_TOKEN` | go-github auth (PR create/label/compare) | — |
+| `GITHUB_TOKEN` | go-github auth (PR create/label/compare); also `https` git transport (x-access-token) | — |
+| `GIT_TRANSPORT` | git clone/push transport: `https` (token / GitHub App) \| `ssh` (local dev — ssh-agent/keys). SSH covers only the git transport; the REST API still needs `GITHUB_TOKEN`/`gh` login (an `ssh` run without one warns at startup) | `https` |
+| `GIT_SSH_KEY` | `GIT_TRANSPORT=ssh`: explicit private-key path; blank = ssh-agent then `~/.ssh/id_ed25519\|id_rsa\|id_ecdsa` | — |
 | `NOTIFY_PROVIDER` | `slack` \| `teams` | `slack` |
 | `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` | notify targets | — |
 | `PORT` | webhook server port | `8080` |

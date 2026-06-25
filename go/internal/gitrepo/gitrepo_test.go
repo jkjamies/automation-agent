@@ -10,7 +10,50 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
+
+func TestIsSSHURL(t *testing.T) {
+	cases := map[string]bool{
+		"git@github.com:acme/api.git":       true,
+		"ssh://git@github.com/acme/api.git": true,
+		"https://github.com/acme/api.git":   false,
+		"http://example.com/acme/api.git":   false,
+		"/local/path/repo":                  false,
+	}
+	for url, want := range cases {
+		if got := isSSHURL(url); got != want {
+			t.Errorf("isSSHURL(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+func TestAuthForHTTPS(t *testing.T) {
+	// A token yields x-access-token basic auth; an empty token is anonymous (nil).
+	m, err := authFor("https://github.com/acme/api.git", Auth{Token: "tok"})
+	if err != nil {
+		t.Fatalf("authFor https+token: %v", err)
+	}
+	ba, ok := m.(*githttp.BasicAuth)
+	if !ok {
+		t.Fatalf("auth = %T, want *http.BasicAuth", m)
+	}
+	if ba.Username != "x-access-token" || ba.Password != "tok" {
+		t.Errorf("basic auth = %s/%s, want x-access-token/tok", ba.Username, ba.Password)
+	}
+	if m, err := authFor("https://github.com/acme/api.git", Auth{}); err != nil || m != nil {
+		t.Errorf("authFor https anonymous = (%v, %v), want (nil, nil)", m, err)
+	}
+}
+
+func TestAuthForSSHExplicitKeyMissing(t *testing.T) {
+	// An ssh URL routes to ssh auth; a non-existent explicit key path is a clear error
+	// rather than a silent fallthrough to token auth.
+	_, err := authFor("git@github.com:acme/api.git", Auth{SSHKey: filepath.Join(t.TempDir(), "absent_key")})
+	if err == nil {
+		t.Fatal("expected an error for a missing ssh key file")
+	}
+}
 
 // seedRemote creates a local repo with one commit to act as the clone source.
 func seedRemote(t *testing.T) string {
@@ -43,7 +86,7 @@ func TestCloneBranchCommitPush(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
 	ctx := context.Background()
 
-	r, err := Clone(ctx, remote, work, "")
+	r, err := Clone(ctx, remote, work, Auth{})
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
@@ -95,7 +138,7 @@ func TestCheckoutRemote(t *testing.T) {
 	ctx := context.Background()
 
 	// First clone: create and push a branch.
-	r1, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w1"), "")
+	r1, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w1"), Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +157,7 @@ func TestCheckoutRemote(t *testing.T) {
 	}
 
 	// Second clone: check out the existing remote branch.
-	r2, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w2"), "")
+	r2, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w2"), Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +174,7 @@ func TestCheckoutRemote(t *testing.T) {
 }
 
 func TestCheckoutMissingBranch(t *testing.T) {
-	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "")
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +184,7 @@ func TestCheckoutMissingBranch(t *testing.T) {
 }
 
 func TestCommitNothing(t *testing.T) {
-	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "")
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +195,7 @@ func TestCommitNothing(t *testing.T) {
 
 func TestCloneBadURL(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "nope")
-	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, ""); err == nil {
+	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, Auth{}); err == nil {
 		t.Fatal("expected clone error for nonexistent source")
 	}
 }

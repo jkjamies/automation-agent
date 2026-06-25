@@ -30,6 +30,10 @@ dependencies {
 
     // JGit for the working-tree operations the fixers need (the go-git analogue).
     implementation("org.eclipse.jgit:org.eclipse.jgit:7.7.0.202606012155-r")
+    // JGit's Apache MINA sshd transport — gives an ssh-agent / ~/.ssh / known_hosts SshSessionFactory
+    // for GIT_TRANSPORT=ssh local-dev clone+push. Same JGit version train as the core lib above.
+    // (Unlike the shell-out ports, pure-JVM JGit needs explicit SSH wiring.)
+    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache:7.7.0.202606012155-r")
 
     // SQLite JDBC driver for the durable SESSION_BACKEND=sqlite park store + session service.
     // adk-kotlin ships no database session service (unlike adk-go/adk-js), so both are hand-rolled

@@ -70,6 +70,18 @@ data class Deps(
     val notifier: Notifier? = null,
     val token: String = "",
     /**
+     * Git clone/push transport: "https" (default — token / GitHub App) or "ssh" (local dev —
+     * ssh-agent/keys). It only changes the URL the default [cloneUrl] builds; the test-injected
+     * [cloneUrl] override bypasses it. SSH covers the git transport only — the REST API still needs
+     * [token].
+     */
+    val gitTransport: String = "https",
+    /**
+     * Explicit private-key path used when [gitTransport] is "ssh" (GIT_SSH_KEY); empty falls back to
+     * ssh-agent then the default identity files. Ignored for https.
+     */
+    val sshKey: String = "",
+    /**
      * Single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL). Write-only
      * — PR lookup is by branch, so it never gates behavior. Same for every workflow.
      */
@@ -147,6 +159,7 @@ class Engine(val spec: Spec, val deps: Deps) {
         val cfg =
             ApplyConfig(
                 owner = rp.owner, repo = rp.repo, cloneUrl = cloneUrl(rp.owner, rp.repo), token = deps.token,
+                sshKey = deps.sshKey,
                 base = rp.base, branch = spec.branch, newBranch = rp.newBranch, label = deps.prLabel,
                 commitMessage = spec.commitMessage, prTitle = spec.prTitle, prBody = prBody(spec, work), author = author,
             )
@@ -167,8 +180,14 @@ class Engine(val spec: Spec, val deps: Deps) {
         deps.notifier?.notify(Message(title = title, text = text, link = link))
     }
 
-    internal fun cloneUrl(owner: String, repo: String): String =
-        deps.cloneUrl?.invoke(owner, repo) ?: "https://github.com/$owner/$repo.git"
+    internal fun cloneUrl(owner: String, repo: String): String {
+        deps.cloneUrl?.let { return it(owner, repo) } // test-injected override wins
+        return if (deps.gitTransport == "ssh") {
+            "git@github.com:$owner/$repo.git"
+        } else {
+            "https://github.com/$owner/$repo.git"
+        }
+    }
 }
 
 internal fun pullUrl(fullRepo: String, number: Int): String = "https://github.com/$fullRepo/pull/$number"

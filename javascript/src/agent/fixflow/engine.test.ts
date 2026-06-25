@@ -289,4 +289,14 @@ describe('Engine', () => {
     expect(e.label()).toBe('automation-agent');
     expect(e.checkName()).toBe('agent-test-verify');
   });
+
+  it('builds an https clone URL by default and a git@ URL under ssh transport', () => {
+    // No injected cloneUrl, so the default builder picks the scheme from gitTransport.
+    const base: Deps = { llm: new FakeLlm(), gh: new FakeGH() };
+    const https = newEngine(spec(), base);
+    expect(https.d.cloneUrl('acme', 'api')).toBe('https://github.com/acme/api.git');
+
+    const ssh = newEngine(spec(), { ...base, gitTransport: 'ssh' });
+    expect(ssh.d.cloneUrl('acme', 'api')).toBe('git@github.com:acme/api.git');
+  });
 });

@@ -70,6 +70,14 @@ type Config struct {
 	// GitHub / repos
 	Repos       []string
 	GitHubToken string
+	// GitTransport selects the git clone/push transport: "https" (default — uses GitHubToken)
+	// or "ssh" (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub
+	// REST API (open/label PR, read CI) still needs a token, so an ssh run without a token
+	// warns at startup.
+	GitTransport string
+	// GitSSHKey is an explicit private-key path for GitTransport=ssh (GIT_SSH_KEY); empty
+	// falls back to ssh-agent then the default identity files.
+	GitSSHKey string
 
 	// Notifications
 	NotifyProvider  NotifyProvider
@@ -138,6 +146,8 @@ func loadFrom(get lookup) (Config, error) {
 		FirestoreCollection: getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
 		Repos:               splitList(getOr(get, "REPOS", "")),
 		GitHubToken:         getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
+		GitTransport:        getOr(get, "GIT_TRANSPORT", "https"),
+		GitSSHKey:           getOr(get, "GIT_SSH_KEY", ""),
 		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
 		SlackWebhookURL:     getOr(get, "SLACK_WEBHOOK_URL", ""),
 		TeamsWebhookURL:     getOr(get, "TEAMS_WEBHOOK_URL", ""),
@@ -185,6 +195,11 @@ func (c Config) Validate() error {
 	case SessionMemory, SessionSQLite, SessionFirestore:
 	default:
 		return fmt.Errorf("invalid SESSION_BACKEND %q (want memory|sqlite|firestore)", c.SessionBackend)
+	}
+	switch c.GitTransport {
+	case "https", "ssh":
+	default:
+		return fmt.Errorf("invalid GIT_TRANSPORT %q (want https|ssh)", c.GitTransport)
 	}
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)

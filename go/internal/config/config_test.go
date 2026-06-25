@@ -35,6 +35,28 @@ func TestLoadDefaults(t *testing.T) {
 	if c.SessionBackend != SessionMemory {
 		t.Errorf("SessionBackend = %q, want memory", c.SessionBackend)
 	}
+	if c.GitTransport != "https" {
+		t.Errorf("GitTransport = %q, want https", c.GitTransport)
+	}
+}
+
+func TestGitTransportSSH(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{"GIT_TRANSPORT": "ssh", "GIT_SSH_KEY": "/home/dev/.ssh/id_ed25519"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.GitTransport != "ssh" {
+		t.Errorf("GitTransport = %q, want ssh", c.GitTransport)
+	}
+	if c.GitSSHKey != "/home/dev/.ssh/id_ed25519" {
+		t.Errorf("GitSSHKey = %q, want the configured path", c.GitSSHKey)
+	}
+}
+
+func TestInvalidGitTransport(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"GIT_TRANSPORT": "scp"})); err == nil {
+		t.Fatal("expected error for invalid GIT_TRANSPORT")
+	}
 }
 
 func TestInvalidSessionBackend(t *testing.T) {

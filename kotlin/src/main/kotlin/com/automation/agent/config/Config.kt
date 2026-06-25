@@ -75,6 +75,13 @@ data class Config(
     // GitHub / repos
     val repos: List<String>,
     val githubToken: String,
+    // gitTransport selects the git clone/push transport: "https" (default — uses githubToken) or
+    // "ssh" (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub REST API
+    // (open/label PR, read CI) still needs a token, so an ssh run without a token warns at startup.
+    val gitTransport: String,
+    // gitSshKey is an explicit private-key path for gitTransport=ssh (GIT_SSH_KEY); empty falls
+    // back to ssh-agent then the default identity files.
+    val gitSshKey: String,
     // Notifications
     val notifyProvider: NotifyProvider,
     val slackWebhookUrl: String,
@@ -108,6 +115,9 @@ data class Config(
      * covers the remaining numeric invariants (MAX_ITERATIONS, PORT).
      */
     fun validate() {
+        require(gitTransport == "https" || gitTransport == "ssh") {
+            "invalid GIT_TRANSPORT \"$gitTransport\" (want https|ssh)"
+        }
         require(maxIterations >= 1) { "MAX_ITERATIONS must be >= 1, got $maxIterations" }
         val portNum = port.toIntOrNull()
             ?: throw IllegalArgumentException("PORT must be numeric, got \"$port\"")
@@ -169,6 +179,8 @@ data class Config(
                 geminiCodeModel = geminiCodeModel,
                 repos = splitList(getOr(get, "REPOS", "")),
                 githubToken = getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
+                gitTransport = getOr(get, "GIT_TRANSPORT", "https"),
+                gitSshKey = getOr(get, "GIT_SSH_KEY", ""),
                 notifyProvider = notifyProvider,
                 slackWebhookUrl = getOr(get, "SLACK_WEBHOOK_URL", ""),
                 teamsWebhookUrl = getOr(get, "TEAMS_WEBHOOK_URL", ""),

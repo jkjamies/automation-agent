@@ -54,6 +54,14 @@ export interface Config {
   // GitHub / repos
   repos: string[];
   githubToken: string;
+  // gitTransport selects the git clone/push transport: 'https' (default — uses githubToken)
+  // or 'ssh' (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub
+  // REST API (open/label PR, read CI) still needs a token, so an ssh run without a token
+  // warns at startup.
+  gitTransport: string;
+  // gitSshKey is an explicit private-key path for gitTransport=ssh (GIT_SSH_KEY); empty
+  // falls back to ssh-agent then the default identity files.
+  gitSshKey: string;
 
   // Notifications
   notifyProvider: NotifyProvider;
@@ -143,6 +151,8 @@ export function loadFrom(get: Lookup): Config {
     geminiCodeModel: getOr(get, 'GEMINI_CODE_MODEL', ''),
     repos: splitList(getOr(get, 'REPOS', '')),
     githubToken: getOr(get, 'GITHUB_TOKEN', getOr(get, 'GH_TOKEN', '')),
+    gitTransport: getOr(get, 'GIT_TRANSPORT', 'https'),
+    gitSshKey: getOr(get, 'GIT_SSH_KEY', ''),
     notifyProvider: getOr(get, 'NOTIFY_PROVIDER', NotifyProvider.Slack) as NotifyProvider,
     slackWebhookUrl: getOr(get, 'SLACK_WEBHOOK_URL', ''),
     teamsWebhookUrl: getOr(get, 'TEAMS_WEBHOOK_URL', ''),
@@ -195,6 +205,9 @@ export function validate(c: Config): void {
     throw new Error(
       `invalid SESSION_BACKEND ${JSON.stringify(c.sessionBackend)} (want memory|sqlite|firestore)`,
     );
+  }
+  if (c.gitTransport !== 'https' && c.gitTransport !== 'ssh') {
+    throw new Error(`invalid GIT_TRANSPORT ${JSON.stringify(c.gitTransport)} (want https|ssh)`);
   }
   const port = Number.parseInt(c.port, 10);
   if (!/^[+-]?\d+$/.test(c.port.trim()) || Number.isNaN(port)) {

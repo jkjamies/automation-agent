@@ -97,10 +97,23 @@ private fun run() {
     val sessionService = newSessionService(cfg)
     val parkStore = newParkStore(cfg)
 
+    // SSH only covers the git transport; the GitHub REST API (open/label PR, read CI) still needs a
+    // token. Warn rather than fail when ssh is selected without one — read-only/dry-run flows may not
+    // hit the API, but any PR operation will fail.
+    if (cfg.gitTransport == "ssh" && cfg.githubToken.isEmpty()) {
+        log.log(
+            Level.WARNING,
+            "GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); " +
+                "git clone+push will use ssh, but PR operations against the REST API will fail — " +
+                "run `gh auth login` or set a token",
+        )
+    }
+
     // Fix engines are event-driven and work without a notifier — they just won't post results.
     val fixDeps =
         Deps(
             gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier, token = cfg.githubToken,
+            gitTransport = cfg.gitTransport, sshKey = cfg.gitSshKey,
             maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout, repos = cfg.repos,
             prLabel = cfg.agentPrLabel,
             sessionService = sessionService, parkStore = parkStore,
