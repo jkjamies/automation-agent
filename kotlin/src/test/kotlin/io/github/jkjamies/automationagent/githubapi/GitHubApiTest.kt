@@ -183,6 +183,7 @@ class GitHubApiTest : BehaviorSpec({
     Given("a ref with a completed agent check and a ref without one") {
         When("reading the agent check") {
             Then("present returns the result and absent returns found=false") {
+                val queries = mutableMapOf<String, String>()
                 val c = client(
                     mapOf(
                         "GET /repos/o/r/commits/sha1/check-runs" to
@@ -190,12 +191,18 @@ class GitHubApiTest : BehaviorSpec({
                         "GET /repos/o/r/commits/sha2/check-runs" to
                             """{"total_count":0,"check_runs":[]}""",
                     ),
+                    queries = queries,
                 )
                 val res = c.agentCheck("o", "r", "sha1", "agent-lint-verify")
                 res.found shouldBe true
                 res.status shouldBe "completed"
                 res.conclusion shouldBe "success"
                 res.outputText shouldBe "all checks passed"
+                // Assert the request filters by name AND filter=latest: without filter=latest GitHub
+                // returns every historical run per name and we could read a stale prior run (mirrors
+                // the Go reference's Filter: ptr("latest")).
+                queries["check_name"] shouldBe "agent-lint-verify"
+                queries["filter"] shouldBe "latest"
 
                 val missing = c.agentCheck("o", "r", "sha2", "agent-lint-verify")
                 missing.found shouldBe false

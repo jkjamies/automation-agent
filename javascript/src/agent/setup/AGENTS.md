@@ -16,6 +16,8 @@ flowchart TD
     Runner["newRunner + drive / driveText / driveCollectState"] --> Agents
     Events["userText / assistantText / textEvent / stateString"] --> Agents
     LongRun["LongRunDriver + Sequencer (suspend/resume)"] --> Agents
+    Sess["newSessionService(cfg): memory | sqlite | firestore"] --> Store
+    Park["newParkStore(cfg): memory | sqlite | firestore"] --> Store[("Durable sessions + parked runs")]
 ```
 
 - `llm.ts` — `buildLLM(cfg)` / `buildCodeLLM(cfg)`: the provider switch returning a
@@ -34,7 +36,17 @@ flowchart TD
   (`start`/`resume` returning a plain `DriveResult`) and the `Sequencer` class, a
   deterministic Action->Wait `BaseLlm` for two-phase wait loops. Lives here because it
   touches `genai`; callers (e.g. `fixflow`) stay genai-free.
-- `generate.ts` — text-generation helpers over the configured `BaseLlm`.
+- `generate.ts` — `generateText`: one single-shot, non-streaming completion over the
+  configured `BaseLlm` (system + user), for callers outside `setup` that must avoid genai.
+- `names.ts` — `safeName`: maps a repo or file path to an ADK-agent-name-safe string
+  (non-alphanumerics → `_`); shared by the path-derived sub-agent names.
+- `session.ts` / `session_firestore.ts` — `newSessionService(cfg)`: the ADK session
+  service for the configured backend (`InMemorySessionService` | `DatabaseSessionService`
+  sqlite | `FirestoreSessionService`).
+- `parkstore.ts` / `parkstore_sqlite.ts` / `parkstore_firestore.ts` — the `ParkStore`
+  interface plus `newParkStore(cfg)` and its three backends (memory | sqlite | firestore):
+  per-run suspend/resume state with single-winner claim semantics, the durable seam behind
+  `fixflow`.
 
 Tests stub the Ollama HTTP endpoint (`fetch`) and use a temp dir for prompts — no real
 network, no live model. Never assert on LLM output content.

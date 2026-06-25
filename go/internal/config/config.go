@@ -189,6 +189,9 @@ func (c Config) Validate() error {
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)
 	}
+	if c.CITimeout <= 0 {
+		return fmt.Errorf("CI_TIMEOUT must be > 0, got %s", c.CITimeout)
+	}
 	port, err := strconv.Atoi(c.Port)
 	if err != nil {
 		return fmt.Errorf("PORT must be numeric, got %q", c.Port)

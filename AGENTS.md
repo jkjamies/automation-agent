@@ -12,12 +12,12 @@ This service is maintained as parallel ports that **must all stay 1:1 in functio
 | Language | Location | ADK | Status |
 |---|---|---|---|
 | Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
-| Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | functional 1:1 port — `gradle build` green |
+| Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | functional 1:1 port — `gradle build` green |
 | Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green |
 | TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | functional 1:1 port — `make ci` green |
 
 Each language uses its own native ADK; parity is **functional, not version-matched**
-(adk-go is v1.x, adk-kotlin is 0.2.x, adk-js is v1.x).
+(adk-go is v1.x, adk-kotlin is 0.4.x, adk-js is v1.x).
 
 **The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
@@ -27,8 +27,9 @@ Each language uses its own native ADK; parity is **functional, not version-match
   same public surface, same config keys, env vars, defaults, routes, and payloads.
 - Each port keeps the same conventions (per-directory `AGENTS.md`, build-agent pattern,
   prompts-as-markdown, ≥80% coverage, no asserting on LLM output).
-- When you touch any port, check the others and update them or record the gap in the
-  central parity record, [`specs/parity-status.md`](specs/parity-status.md).
+- When you touch any port, check the others and update them, or record the gap in the
+  PR description — parity is tracked per-PR (see
+  [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)).
 
 ## System flow
 
@@ -75,8 +76,7 @@ remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sh
 the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
 plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
-no longer strands in-flight runs; `memory` keeps the old ephemeral behavior. (Per-port
-backend coverage: [`specs/parity-status.md`](specs/parity-status.md).)
+no longer strands in-flight runs; `memory` keeps the old ephemeral behavior.
 Deterministic, agent-free tooling lives under `internal/` and is called by
 agents but never imports them. Env vars + local run modes:
 [`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,
@@ -87,8 +87,11 @@ the `/internal/*` hooks, and GCP setup:
 
 - **Every directory has an `AGENTS.md`.** Agent directories use one shared doc
   covering both `agents_setup.go` and `<name>.go`.
-- **Build-agent pattern:** `agents_setup.go` is pure wiring (`Build<Name>Agent`);
-  `<name>.go` holds testable logic. See `.agents/standards/agent-build-pattern.md`.
+- **Build-agent pattern:** `root` and `summary` split into `agents_setup.go` (pure
+  wiring — `BuildRootDispatcher` / `BuildSummaryAgent`) and `<name>.go` (testable logic).
+  The `lintfixer`/`covfixer` fixers instead build a `fixflow.Spec` and expose
+  `NewEngine(fixflow.Deps)`, sharing the generic `fixflow` engine. See
+  `.agents/standards/agent-build-pattern.md`.
 - **Import boundaries:** tooling must not import `internal/agent/...`; provider
   SDKs (Ollama/Gemini) only in `internal/agent/setup`; nothing imports `cmd`.
 - **Prompts are markdown** under each agent's `prompts/` dir, loaded via `embed.FS`.

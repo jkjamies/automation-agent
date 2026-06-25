@@ -32,9 +32,11 @@ flowchart TD
    Cloud Scheduler calling `POST /internal/cron/daily`; the service runs no internal timer.
 4. Block until interrupted, then drain in-flight webhook dispatches.
 
-The fix loop is non-durable and in-memory (ADK long-running suspend/resume + `fixflow`'s
-in-memory parked-run registry, with a per-run `CI_TIMEOUT` bounding each wait); there is
-no reconcile loop, so a restart strands parked runs.
+The fix loop suspends across the CI wait (ADK long-running suspend/resume). Both the ADK
+session and the parked run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` |
+`firestore`) via `setup.ParkStore`, so a durable backend resumes in-flight runs after a
+restart (the default `memory` backend stays ephemeral). Each wait is freed by a per-run
+`CI_TIMEOUT` timer and the durable `/internal/sweep` catch-all (driven by Cloud Scheduler).
 
 Keep this module thin — it is composition only. Anything testable belongs in
 `automation_agent/`.

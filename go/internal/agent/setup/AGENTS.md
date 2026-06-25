@@ -5,9 +5,10 @@ provider / infrastructure SDKs** — the LLM providers (Ollama, Gemini, genai) *
 durable session/park backends (`adk/session/database`, `glebarez/sqlite`, `gorm`,
 `cloud.google.com/go/firestore`) — enforced by `ARCH/`.
 
-It owns two provider-switched seams, both selected by `SESSION_BACKEND` and built once at
-startup: the LLM (`BuildLLM`), the ADK `session.Service` (`NewSessionService`), and the
-`ParkStore` (`NewParkStore`) — `memory` | `sqlite` | `firestore`.
+It owns three provider-switched seams, each built once at startup: the LLM (`BuildLLM`),
+selected by `LLM_PROVIDER` (`ollama` | `gemini`); and the ADK `session.Service`
+(`NewSessionService`) plus the `ParkStore` (`NewParkStore`), both selected by
+`SESSION_BACKEND` (`memory` | `sqlite` | `firestore`).
 
 ## Flow
 

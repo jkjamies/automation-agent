@@ -12,7 +12,7 @@ flowchart TD
     Notif --> SumA["buildSummary daily (null if no repos/notifier)"]
     SumA --> Eng["newLintEngine(FixDeps)\nnewCoverageEngine(FixDeps)\nengines = [lint, cov]"]
     Eng --> Disp["buildRootDispatcher(Deps{summaryDaily,\nlintKickoff, coverageKickoff,\nciResume -> every engine})"]
-    Disp --> Web["new Server(ingest -> bounded+tracked safeDispatch, secret)"]
+    Disp --> Web["new Server(ingest -> bounded+tracked safeDispatch,\nsecret, internalToken, sweep)"]
     Web --> Listen["app.listen(port) + HTTP timeouts"]
     Listen --> Block["run until SIGINT/SIGTERM"]
     Block --> Shutdown["server.close(); drain in-flight"]
@@ -28,8 +28,9 @@ flowchart TD
 4. Run until interrupted, then close the server and drain in-flight dispatches (bounded by
    a 15s deadline) before exiting.
 
-The fix loop is non-durable and in-memory (ADK long-running suspend/resume + `fixflow`'s
-in-memory parked-run registry, with a per-run `CI_TIMEOUT` bounding each wait); there is
-no reconcile loop, so a restart strands parked runs.
+The fix loop suspends/resumes on ADK long-running tools backed by an injected `ParkStore`
+(`SESSION_BACKEND`: memory | sqlite | firestore), with a per-run `CI_TIMEOUT` bounding each
+wait. Cloud Scheduler also calls `POST /internal/sweep`, the durable timeout backstop that
+reconciles parked runs whose soft timer was lost to a restart.
 
 Keep this module thin — it is composition only. Anything testable belongs in `src/`.

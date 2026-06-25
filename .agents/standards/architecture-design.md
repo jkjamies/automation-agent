@@ -1,11 +1,10 @@
 # Automation Agent — Architecture & Build Plan
 
-> Status: **Implemented.** This is the living design doc; the design below is built —
-> Phases 1–5 are implemented and `make ci` is green. The CI feedback loop now runs on
+> This is the living design doc for the system. The CI feedback loop runs on
 > **durable sessions** (§8): one `SESSION_BACKEND` env selects an in-memory (default),
 > sqlite (durable local), or firestore (cloud) backend, so a parked run survives a process
-> restart — the change that unlocks Cloud Run scale-to-zero. Per-port drift is tracked in
-> `specs/parity-status.md`. Last updated: 2026-06-23.
+> restart — the change that unlocks Cloud Run scale-to-zero. Per-port parity is tracked
+> per-PR (see [`language-parity.md`](language-parity.md)).
 
 A single long-running Go service that ingests events from many sources, routes every
 ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
@@ -33,7 +32,7 @@ persistent GCP deployment — both behind one `model.LLM` builder.
 11. [Testing & coverage](#11-testing--coverage)
 12. [Configuration](#12-configuration)
 13. [Deployment](#13-deployment)
-14. [Phased roadmap](#14-phased-roadmap)
+14. [System composition](#14-system-composition)
 15. [Open questions](#15-open-questions)
 16. [Verified ADK-Go API reference](#16-verified-adk-go-api-reference)
 
@@ -162,115 +161,121 @@ unit tests against a stubbed Ollama HTTP server (`httptest`). Default local mode
 automation-agent/
 ├── AGENTS.md                      # repo root: what this is, how to navigate
 ├── README.md
-├── Makefile
-├── go.mod / go.sum
-├── .gitignore                     # contains: /specs/  .env  /tmp/
+├── DEPLOYMENT.md                  # deployment status + setup checklist
+├── .gitignore                     # ignores: /specs/* (keep .gitkeep), .env, *.db, build/test artifacts
 ├── .env.example
-├── .golangci.yml
 │
-├── cmd/agent/
-│   ├── main.go                    # wire config→tooling→runner→http; block
-│   └── AGENTS.md
-│
-├── ARCH/                          # architecture tests (its own package)
-│   ├── arch_test.go               # import-boundary rules
-│   ├── docs_test.go               # assert AGENTS.md presence per dir
-│   └── AGENTS.md
-│
-├── .agents/                       # open-standard knowledge for agents
-│   ├── AGENTS.md
+├── .agents/                       # open-standard knowledge for agents (port-agnostic)
+│   ├── AGENTS.md                  # documents this whole .agents/ tree (subdirs have no own AGENTS.md)
 │   ├── skills/                    # reusable task recipes (e.g. add-workflow-agent.md)
-│   │   └── AGENTS.md
 │   ├── standards/                 # the rules + canonical design/reference docs
 │   │   ├── architecture-design.md # THE authoritative design (this document)
 │   │   ├── architecture.md        # the import boundaries ARCH enforces
 │   │   ├── language-parity.md     # the cross-language 1:1 contract
 │   │   ├── ci-integration.md      # how CI sends lint/coverage reports
 │   │   ├── deployment.md          # local + cloud deployment
+│   │   ├── local-development.md   # running the agent locally
 │   │   ├── go-style.md
 │   │   ├── testing.md             # 80% rule, no-LLM-assert rule
 │   │   ├── agent-build-pattern.md # the setup-vs-logic split
-│   │   └── AGENTS.md
+│   │   └── documentation.md       # the docs-move-with-the-code rule
 │   └── templates/                 # spec templates
 │       ├── add.spec.md
 │       ├── remove.spec.md
 │       ├── change.spec.md
-│       ├── migrate.spec.md
-│       └── AGENTS.md
+│       └── migrate.spec.md
 │
-├── specs/                         # GITIGNORED — local dev/review docs (specs + parity-status.md)
+├── specs/                         # local dev/review docs (`/specs/*` gitignored; `.gitkeep` kept)
 │   └── .gitkeep
 │
-└── internal/
-    ├── AGENTS.md
-    ├── config/                    # env → typed Config; one source of truth
-    │   ├── config.go
-    │   └── AGENTS.md
-    ├── ingest/                    # the normalized Envelope + Kind enum (cron/ci/github/jira…)
-    │   ├── envelope.go
-    │   └── AGENTS.md
-    ├── agent/
-    │   ├── AGENTS.md              # SHARED agent doc: explains setup.go vs <name>.go convention
-    │   ├── setup/                 # common agent utilities
-    │   │   ├── llm.go             # BuildLLM (provider switch)
-    │   │   ├── ollama.go          # model.LLM adapter
-    │   │   ├── gemini.go          # gemini factory
-    │   │   ├── prompt.go          # embed.FS prompt loader -> GetPrompt("summary/summarize")
-    │   │   ├── events.go          # helpers to emit/parse session.Event + text
-    │   │   ├── runner.go          # build adk Runner + (ephemeral) session service
-    │   │   ├── session.go         # NewSessionService: SESSION_BACKEND switch (memory|sqlite|firestore)
-    │   │   ├── session_firestore.go # custom firestore-backed session.Service (cloud)
-    │   │   ├── parkstore.go       # ParkStore interface + memory impl (the park record)
-    │   │   ├── parkstore_sqlite.go    # gorm/sqlite ParkStore (durable local)
-    │   │   ├── parkstore_firestore.go # firestore ParkStore (cloud)
-    │   │   ├── longrun.go         # LongRunDriver: ADK suspend/resume over a session.Service
-    │   │   └── AGENTS.md
-    │   ├── root/
-    │   │   ├── agents_setup.go    # BuildRootAgent(deps) -> agent.Agent
-    │   │   ├── root.go            # dispatch logic (Run func / callbacks), testable
-    │   │   ├── prompts/root.md
-    │   │   └── AGENTS.md
-    │   ├── summary/
-    │   │   ├── agents_setup.go    # BuildSummaryAgent(deps) -> Sequential[Parallel[fetch×N]→sum→notify]
-    │   │   ├── summary.go         # fetch code-agent + summarize logic
-    │   │   ├── prompts/summarize.md
-    │   │   ├── tasks/             # (optional) per-step helpers
-    │   │   └── AGENTS.md
-    │   ├── lintfixer/             # the lint Spec of the fixflow engine
-    │   │   ├── lint.go            # builds the lint Spec (branch/label/check + triage/analyze)
-    │   │   ├── prompts/
-    │   │   └── AGENTS.md
-    │   ├── covfixer/              # the coverage Spec of the fixflow engine
-    │   │   ├── coverage.go        # builds the coverage Spec
-    │   │   ├── prompts/
-    │   │   └── AGENTS.md
-    │   └── fixflow/               # generic fix engine shared by lint + coverage
-    │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
-    │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts) over a ParkStore
-    │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
-    │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
-    │       ├── analyze.go         # analyze step
-    │       ├── explore.go         # repo exploration helper
-    │       ├── tools.go           # apply_fix + long-running await_ci tools
-    │       ├── files.go
-    │       ├── util.go
-    │       ├── envelope.go
-    │       └── AGENTS.md
-    ├── githubapi/                 # go-github: ListCommits, CreatePR, check status
-    │   ├── client.go
-    │   └── AGENTS.md
-    ├── gitrepo/                   # go-git: Clone, Branch, Commit, Push
-    │   ├── repo.go
-    │   └── AGENTS.md
-    ├── webhook/                   # http.Server + handlers (daily/ci/ingest)
-    │   ├── server.go
-    │   ├── handlers.go
-    │   └── AGENTS.md
-    └── notify/                    # Slack/Teams behind one interface
-        ├── notify.go              # Notifier interface
-        ├── slack.go
-        ├── teams.go               # plan for Workflows/Adaptive Card (O365 connectors deprecating)
-        └── AGENTS.md
+├── go/                            # the Go port (source of truth); siblings: python/ kotlin/ javascript/
+│   ├── AGENTS.md
+│   ├── README.md / Makefile / go.mod / go.sum / Dockerfile
+│   ├── .golangci.yml
+│   │
+│   ├── cmd/agent/
+│   │   ├── main.go                # wire config→tooling→runner→http; block
+│   │   └── AGENTS.md
+│   │
+│   ├── ARCH/                      # architecture tests (its own package)
+│   │   ├── arch_test.go           # import-boundary rules
+│   │   ├── docs_test.go           # assert AGENTS.md presence per dir
+│   │   └── AGENTS.md
+│   │
+│   └── internal/
+│       ├── AGENTS.md
+│       ├── config/                # env → typed Config; one source of truth
+│       │   ├── config.go
+│       │   └── AGENTS.md
+│       ├── ingest/                # the normalized Envelope + Kind enum (cron/ci/github/jira…)
+│       │   ├── envelope.go
+│       │   └── AGENTS.md
+│       ├── agent/
+│       │   ├── AGENTS.md          # SHARED agent doc: explains setup.go vs <name>.go convention
+│       │   ├── setup/             # common agent utilities
+│       │   │   ├── llm.go         # BuildLLM (provider switch)
+│       │   │   ├── ollama.go      # model.LLM adapter
+│       │   │   ├── gemini.go      # gemini factory
+│       │   │   ├── prompt.go      # embed.FS prompt loader -> GetPrompt("summary/summarize")
+│       │   │   ├── events.go      # helpers to emit/parse session.Event + text
+│       │   │   ├── runner.go      # build adk Runner + (ephemeral) session service
+│       │   │   ├── session.go     # NewSessionService: SESSION_BACKEND switch (memory|sqlite|firestore)
+│       │   │   ├── session_firestore.go # custom firestore-backed session.Service (cloud)
+│       │   │   ├── parkstore.go   # ParkStore interface + memory impl (the park record)
+│       │   │   ├── parkstore_sqlite.go    # gorm/sqlite ParkStore (durable local)
+│       │   │   ├── parkstore_firestore.go # firestore ParkStore (cloud)
+│       │   │   ├── longrun.go     # LongRunDriver: ADK suspend/resume over a session.Service
+│       │   │   └── AGENTS.md
+│       │   ├── root/
+│       │   │   ├── agents_setup.go    # BuildRootAgent(deps) -> agent.Agent
+│       │   │   ├── root.go            # dispatch logic (Run func / callbacks), testable
+│       │   │   ├── prompts/root.md
+│       │   │   └── AGENTS.md
+│       │   ├── summary/
+│       │   │   ├── agents_setup.go    # BuildSummaryAgent(deps) -> Sequential[Parallel[fetch×N]→sum→notify]
+│       │   │   ├── summary.go         # fetch code-agent + summarize logic
+│       │   │   ├── prompts/summarize.md
+│       │   │   ├── tasks/             # (optional) per-step helpers
+│       │   │   └── AGENTS.md
+│       │   ├── lintfixer/             # the lint Spec of the fixflow engine
+│       │   │   ├── lint.go            # builds the lint Spec (branch/label/check + triage/analyze)
+│       │   │   ├── prompts/
+│       │   │   └── AGENTS.md
+│       │   ├── covfixer/              # the coverage Spec of the fixflow engine
+│       │   │   ├── coverage.go        # builds the coverage Spec
+│       │   │   ├── prompts/
+│       │   │   └── AGENTS.md
+│       │   └── fixflow/               # generic fix engine shared by lint + coverage
+│       │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
+│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts) over a ParkStore
+│       │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
+│       │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
+│       │       ├── analyze.go         # analyze step
+│       │       ├── explore.go         # repo exploration helper
+│       │       ├── tools.go           # apply_fix + long-running await_ci tools
+│       │       ├── files.go
+│       │       ├── util.go
+│       │       ├── envelope.go
+│       │       └── AGENTS.md
+│       ├── githubapi/                 # go-github: ListCommits, CreatePR, check status
+│       │   ├── client.go
+│       │   └── AGENTS.md
+│       ├── gitrepo/                   # go-git: Clone, Branch, Commit, Push
+│       │   ├── repo.go
+│       │   └── AGENTS.md
+│       ├── webhook/                   # http.Server + handlers (daily/ci/ingest)
+│       │   ├── server.go
+│       │   ├── handlers.go
+│       │   └── AGENTS.md
+│       └── notify/                    # Slack/Teams behind one interface
+│           ├── notify.go              # Notifier interface
+│           ├── slack.go
+│           ├── teams.go               # plan for Workflows/Adaptive Card (O365 connectors deprecating)
+│           └── AGENTS.md
+│
+├── python/                        # the Python port (mirrors go/ topology)
+├── kotlin/                        # the Kotlin port (mirrors go/ topology)
+└── javascript/                    # the TypeScript port (mirrors go/ topology)
 ```
 
 Suspend/resume state is split across two `internal/agent/setup`-owned stores, both selected
@@ -363,7 +368,7 @@ uses branch `automation-agent/test-coverage`, check `agent-coverage-verify`.
 
 > **Durable sessions.** One `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`) selects
 > two provider-switched stores; `memory` is the zero-dependency default, `firestore` is the
-> prod path. Per-port drift is tracked in `specs/parity-status.md`.
+> prod path. Per-port parity is tracked per-PR (see [`language-parity.md`](language-parity.md)).
 
 ### The hard constraint: CI takes 20–40 minutes (often more with retries)
 
@@ -547,7 +552,7 @@ three layers, all funnelling through the `ParkStore`'s atomic single-winner clai
 - **Eager terminal cleanup.** On resolve the Driver `clear`s the run — `ParkStore.Delete` +
   `LongRunDriver.DeleteSession` — so a durable backend does not leak completed sessions. (A
   finished PR is still merged/closed by the normal review workflow.) A *separate* orphan-session
-  GC for sessions that crash between create-and-park is still pending — see
+  GC for sessions that crash between create-and-park is not yet implemented — see
   [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 ### ADK mechanics
@@ -723,58 +728,56 @@ port-agnostic. Architecture detail in
 
 ---
 
-## 14. Phased roadmap
+## 14. System composition
 
-Each phase is independently testable.
+The system is composed of independently testable layers:
 
 1. **Skeleton & standards** — repo tree, go.mod, Makefile, `.agents/` (standards +
-   templates), ARCH tests, AGENTS.md, config, ingest envelope. *(no agents yet)*
+   templates), ARCH tests, AGENTS.md, config, ingest envelope.
 2. **Model layer** — `setup`: Ollama adapter + Gemini factory + `BuildLLM` + prompt loader
-   + runner. *(adapter tested vs stub Ollama)*
-3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `webhook`.
-   *(all unit-tested, agent-free)*
-4. **Root + Summary** — end-to-end summary workflow on a real repo via local Gemma →
+   + runner. The adapter is tested against a stub Ollama HTTP server.
+3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `webhook`; all unit-tested and agent-free.
+4. **Root + Summary** — the end-to-end summary workflow runs on a real repo via local Gemma →
    Slack/Teams.
-5. **Lint-fixer** — the suspend/resume workflow, incorporating the detailed notes.
-6. **Deployment** — Cloud Run or GCE; decide Ollama-on-GPU vs Gemini.
+5. **Lint-fixer** — the suspend/resume workflow.
+6. **Deployment** — Cloud Run or GCE, with the Ollama-on-GPU vs Gemini choice as a config flag.
 
-**Durable-sessions migration:**
+**Durable sessions:**
 
-- **Spike** — confirm Firestore + Cloud Run durable sessions over Agent Runtime + Cloud SQL.
-  ✅ done.
-- **Phase A** — `session.Service` abstraction + `SESSION_BACKEND` switch (memory|sqlite|firestore).
-  ✅ done.
-- **Phase B** — `ParkStore` interface replacing the in-memory registry/`runs` map; sqlite +
-  firestore backends; UUID session ids; atomic single-winner claim. ✅ done.
-- **Phase C** — eager terminal cleanup (`DeleteSession`) + status-aware terminal summaries
-  (success / max-iter / timeout, enriched via `githubapi.Compare`). ✅ done.
-- **Phase D** — Cloud Scheduler ingress: `/internal/cron/daily` + `/internal/sweep`
-  (durable timeout catch-all), Bearer-auth via `INTERNAL_TOKEN`. ✅ done.
-- **Phase E (pending)** — orphan-session GC (sessions that crash between create-and-park),
-  Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, and CI running the
-  Firestore emulator. Detail in [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
-- **Cross-port parity** — keep the ports in lockstep on the durable-session design; current
-  per-port drift is tracked in `specs/parity-status.md`.
+- The Firestore + Cloud Run durable-session approach is used over Agent Runtime + Cloud SQL.
+- A `session.Service` abstraction backs the `SESSION_BACKEND` switch (memory|sqlite|firestore).
+- The `ParkStore` interface backs parked runs with memory/sqlite/firestore backends, UUID
+  session ids, and an atomic single-winner claim (it replaces an in-memory registry/`runs` map).
+- Eager terminal cleanup (`DeleteSession`) plus status-aware terminal summaries
+  (success / max-iter / timeout) enrich notifications via `githubapi.Compare`.
+- Cloud Scheduler ingress drives `/internal/cron/daily` + `/internal/sweep` (durable timeout
+  catch-all), Bearer-authed via `INTERNAL_TOKEN`.
+- The ports stay in lockstep on the durable-session design; per-port parity is tracked per-PR
+  (see [`language-parity.md`](language-parity.md)).
+
+Not yet implemented: orphan-session GC (sessions that crash between create-and-park),
+Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, and CI running the
+Firestore emulator — see [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 ---
 
 ## 15. Open questions
 
-1. **Persistence:** ✅ **resolved — durable sessions.** One `SESSION_BACKEND` env selects
+1. **Persistence — durable sessions.** One `SESSION_BACKEND` env selects
    the ADK `session.Service` + `setup.ParkStore`: `memory` (default, non-durable — the old
    behavior) | `sqlite` (durable local) | `firestore` (durable cloud, scale-to-zero). With a
    durable backend a restart resumes parked runs; GitHub still holds the durable PR artifacts.
-   Per-port drift: `specs/parity-status.md`. See §8.
-2. **Notify:** build the `Notifier` interface + both Slack and Teams impls; choice is one
+   Per-port parity is tracked per-PR (see [`language-parity.md`](language-parity.md)). See §8.
+2. **Notify.** The `Notifier` interface has both Slack and Teams impls; choice is one
    env var. Teams targets the new **Workflows/Adaptive Card** format (O365 connectors
-   deprecating). ✅ assumed.
-3. **Root routing:** start deterministic; add LLM routing later. ✅ assumed.
-4. **Lint-fixer:** hold detailed suspend/resume impl until the prior notes are shared.
-5. **CI provider:** ✅ GitHub Actions / Checks API. Resume listens for `check_run`
+   deprecating).
+3. **Root routing.** Routing starts deterministic; LLM routing can be added later.
+4. **Lint-fixer.** The detailed suspend/resume implementation is covered in §8.
+5. **CI provider — GitHub Actions / Checks API.** Resume listens for `check_run`
    (completed) on a dedicated, **label-triggered** agent verification check (`synchronize`
    re-runs it each iteration). See §8.
-6. **Same-PR vs new-PR on retry:** ✅ same PR/branch — iterations push new commits to the
-   existing branch. Correlation key is therefore `pr_number`, with `current_head_sha` as a
+6. **Same-PR vs new-PR on retry — same PR/branch.** Iterations push new commits to the
+   existing branch. The correlation key is therefore `pr_number`, with `current_head_sha` as a
    freshness guard.
 
 ---
@@ -821,7 +824,7 @@ type Tool interface { /* ... */ IsLongRunning() bool }
 Notes:
 - `loopagent` shape is verified from the official example
   (`examples/workflowagents/loop/main.go`). Sequential/parallel are assumed to share the
-  embedded-`agent.Config` shape — to confirm against their example dirs during Phase 1.
+  embedded-`agent.Config` shape — to confirm against their example dirs.
 - adk-go has **no** durable *workflow* engine; durability is supplied at the session layer
   instead. `IsLongRunning` (the long-running `await_ci` tool) over a `SESSION_BACKEND`-selected
   `session.Service`, plus the `setup.ParkStore` for the run record, is the suspend/resume

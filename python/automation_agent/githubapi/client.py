@@ -191,7 +191,8 @@ class Client:
         try:
             r = self._gh.get_repo(f"{owner}/{repo}")
             commit = r.get_commit(ref)
-            runs = commit.get_check_runs(check_name=check_name)
+            # filter="latest": on a re-run, return only the most recent run per check.
+            runs = commit.get_check_runs(check_name=check_name, filter="latest")
             # Guard on both the count and the actual page: a positive total with an
             # empty first page would otherwise IndexError on runs[0].
             if runs.totalCount == 0:

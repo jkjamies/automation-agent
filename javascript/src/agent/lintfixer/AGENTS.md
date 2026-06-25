@@ -3,9 +3,10 @@
 The autonomous lint-remediation workflow. It is a configuration of the shared `fixflow`
 engine: its own triage/analyze functions and prompts, on `fixflow`'s deterministic
 kickoff -> suspend -> CI resume -> loop or finish loop. The wait is a real long-running
-suspend/resume because CI takes 20–40 min. The parked run is tracked in `fixflow`'s
-**in-memory** registry (keyed by `owner/repo#pr`); there is no durable store, so a
-process restart strands in-flight runs, and a per-run `CI_TIMEOUT` timer bounds each wait.
+suspend/resume because CI takes 20–40 min. The parked run is persisted through `fixflow`'s
+injected `ParkStore` (indexed by `owner/repo#pr`), whose backend is selected by
+`SESSION_BACKEND` — with sqlite/firestore it survives a restart, and `/internal/sweep`
+reconciles a lost timer. A per-run `CI_TIMEOUT` timer bounds each wait.
 
 ```mermaid
 flowchart TD

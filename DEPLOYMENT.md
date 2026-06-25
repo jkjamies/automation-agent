@@ -7,7 +7,7 @@
 >
 > Scope: the GCP walkthrough below uses the Go service (`go/`) as the worked example; the
 > same durable-sessions design, `SESSION_BACKEND` switch, and env vars apply to every port.
-> Per-port drift is tracked in `specs/parity-status.md`.
+> Per-port parity is tracked per-PR (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)).
 
 ## Where to find what
 
@@ -43,7 +43,8 @@ The detailed, copy-paste steps for each item are in
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds into measured coverage.
 - [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
-      current per-port drift is tracked in `specs/parity-status.md`.
+      per-port parity is tracked per-PR (see
+      [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)).
 - [ ] **OIDC instead of a shared bearer** for `/internal/*`.
 - [ ] **Private ingress** — front the service with a self-hosted API gateway and make Cloud Run
       private so each operator deploys an instance reachable only on their own network. Phased
@@ -56,9 +57,8 @@ Full rationale and detail for every item: [`.agents/standards/deployment.md`](.a
 > The target architecture (self-hosted API gateway in front of a **private** Cloud Run, OIDC in
 > place of the shared bearer, each operator on their own network) is documented in
 > [`.agents/standards/deployment.md` § Private ingress](.agents/standards/deployment.md#private-ingress).
-> Nothing here is implemented yet. The fuller design — threat model, the per-item safety
-> checklist, alternatives considered, and the concrete gateway-product selection — lives in the
-> local spec `specs/20260624-private-ingress-gravitee-gateway.md`. Defaults
+> Nothing here is implemented yet. The fuller design covers the threat model, the per-item
+> safety checklist, alternatives considered, and selecting a self-hosted API gateway. Defaults
 > (`ingress=all`, `INTERNAL_AUTH=bearer`, daily Cloud Scheduler trigger) reproduce today's public
 > behavior, so this is entirely opt-in.
 

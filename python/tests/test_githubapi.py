@@ -100,8 +100,9 @@ class FakeRepo:
         repo = self
 
         class _Commit:
-            def get_check_runs(self_inner, check_name=None):
+            def get_check_runs(self_inner, check_name=None, filter=None):
                 repo._kw["check_name_seen"] = check_name
+                repo._kw["filter_seen"] = filter
                 return FakePaginated(runs)
 
         return _Commit()
@@ -240,6 +241,8 @@ def test_agent_check_found() -> None:
     assert res.output_text == "all checks passed"
     assert res.completed_at == completed
     assert repo._kw["check_name_seen"] == "agent-lint-verify"
+    # parity with Go: re-runs return only the most recent run per check
+    assert repo._kw["filter_seen"] == "latest"
 
 
 def test_agent_check_prefers_text_over_summary() -> None:

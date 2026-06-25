@@ -57,8 +57,8 @@ flowchart TD
   `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
 - `driver.go` — `Driver`: the `apply_fix`/`await_ci` tools, the `fixer` agent (on a
   deterministic sequencer model), and the Kickoff/Resume/onTimeout/`SweepTimeouts`
-  lifecycle over the injected `setup.ParkStore` (the in-memory `runRegistry` + `runs` map
-  it replaced are gone). Terminal `clear` deletes the park record **and** the ADK session.
+  lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record
+  **and** the ADK session.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / max-iter
   / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record.
 - `applyfix.go` — clone → branch (new/existing) → commit → push → ensure labeled PR.

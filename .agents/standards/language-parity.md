@@ -8,7 +8,7 @@
 | Language | Location | ADK | Role |
 |---|---|---|---|
 | Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | **reference (source of truth)** |
-| Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.2.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | port |
+| Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | port |
 | Python | `python/` | `google-adk` (PyPI) | port |
 | TypeScript | `javascript/` | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | port |
 
@@ -59,6 +59,5 @@ exceptions vs `error` returns, data classes vs structs). What must match across 
 - **Change Go first.** New behavior or fixes land in the reference, then propagate into
   every *existing* port within the same logical change set. Ports never silently drift.
 - **Touch one, check the rest.** A PR that edits any port must either update the others or
-  record the deliberate gap in the central parity record, `specs/parity-status.md`.
-- **Track drift centrally.** `specs/parity-status.md` maps each open divergence to its
-  per-port state (done / open / partial) so drift is visible at a glance.
+  record the deliberate gap in that PR's description. Parity is tracked per-PR: each change
+  states which ports it covers and any divergence it knowingly leaves open.

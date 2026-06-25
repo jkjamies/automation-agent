@@ -379,7 +379,12 @@ export class Driver {
       await this.failApply(sid, fullRepo, 'parked without a PR number');
       return;
     }
-    await this.park(sid, prKey(fullRepo, pr), res.parkedCallId, attempt);
+    try {
+      await this.park(sid, prKey(fullRepo, pr), res.parkedCallId, attempt);
+    } catch (err) {
+      await this.failApply(sid, fullRepo, `could not record parked run: ${String(err)}`);
+      return;
+    }
     this.log('info', 'fix applied; awaiting CI', { repo: fullRepo, pr, attempt });
   }
 
@@ -397,12 +402,16 @@ export class Driver {
 
   /** Record a run as parked under its PR key and arm its soft timeout. */
   private async park(sid: string, key: string, callId: string, attempt: number): Promise<void> {
-    const rec = await this.store.get(sid);
-    if (!rec) {
-      // The run vanished mid-flight (e.g. a concurrent clear) — nothing to park.
-      this.log('warn', 'park: no run params; skipping', { pr: key });
-      return;
-    }
+    // Read-modify-write the existing record; if it vanished mid-flight (e.g. a concurrent
+    // clear) recreate it so the run is still parked/swept/notified (mirrors Go's park).
+    const rec: ParkRecord = (await this.store.get(sid)) ?? {
+      sessionId: sid,
+      prKey: '',
+      callId: '',
+      attempts: 0,
+      params: '',
+      parkedAt: null,
+    };
     rec.prKey = key;
     rec.callId = callId;
     rec.attempts = attempt;

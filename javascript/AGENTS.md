@@ -8,9 +8,11 @@ to one of three workflow agents:
 - **lintfixer** — autonomous lint remediation with a PR + CI loop.
 - **covfixer** — test-coverage remediation, sharing the `fixflow` engine.
 
-The PR + CI suspend/resume loop runs on ADK long-running tools plus an in-memory
-parked-run registry (no durable store; a restart strands in-flight runs). Deterministic,
-agent-free tooling lives under `src/` and is called by agents but never imports them.
+The PR + CI suspend/resume loop runs on ADK long-running tools plus an injected `ParkStore`
+selected by `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`); a durable backend lets
+parked runs survive a restart, and `/internal/sweep` reconciles runs whose timeout timer
+was lost. Deterministic, agent-free tooling lives under `src/` and is called by agents but
+never imports them.
 
 The authoritative, language-neutral design is [`.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md).
 

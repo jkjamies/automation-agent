@@ -167,8 +167,8 @@ async function run(): Promise<void> {
 
   // Bounded, drainable dispatch pool. Webhook dispatches acquire a permit before the 202
   // (backpressure under burst); every dispatch is tracked so a SIGTERM drains in-flight
-  // work instead of dropping it. (Parked runs are still in-memory, so a restart strands
-  // them — an accepted trade.)
+  // work instead of dropping it. (With the default `memory` backend, parked runs are not
+  // durable, so a restart strands them; a sqlite/firestore backend survives restart.)
   let permits = MAX_CONCURRENT_DISPATCH;
   const permitWaiters: Array<() => void> = [];
   const acquire = (): Promise<void> => {

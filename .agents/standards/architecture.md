@@ -4,8 +4,8 @@ The authoritative design is `.agents/standards/architecture-design.md`. This fil
 `ARCH/` suite enforces. The **import-boundary** rules are **language-neutral**: they hold
 identically across every port (`go/`, `python/`, `kotlin/`, `javascript/`). The
 **durable-session state** model below is the design for the fix-loop's suspend/resume state.
-See `.agents/standards/language-parity.md` for the cross-language 1:1 contract and
-`specs/parity-status.md` for where ports currently diverge.
+See `.agents/standards/language-parity.md` for the cross-language 1:1 contract; any
+deliberate divergence between ports is recorded in the PR that introduces it.
 
 ## Flow
 

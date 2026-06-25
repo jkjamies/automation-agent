@@ -15,8 +15,9 @@ agents:
 
 Local-first on **Ollama + Gemma** via a small `BaseLlm` adapter, with a config switch to
 **Gemini/Vertex** for cloud deployment. The PR + CI suspend/resume loop rides on ADK
-long-running tools plus an in-memory parked-run registry (no database); a process
-restart strands in-flight runs — an accepted trade-off.
+long-running tools plus an injected `ParkStore` selected by `SESSION_BACKEND`
+(`memory` | `sqlite` | `firestore`); with a durable backend parked runs survive a restart,
+and the periodic `/internal/sweep` reconciles runs whose timeout timer was lost.
 
 ## Quick start
 

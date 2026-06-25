@@ -120,6 +120,15 @@ func TestInvalidDuration(t *testing.T) {
 	}
 }
 
+func TestCITimeoutMustBePositive(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"CI_TIMEOUT": "0s"})); err == nil {
+		t.Fatal("expected error for CI_TIMEOUT=0s")
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"CI_TIMEOUT": "-5m"})); err == nil {
+		t.Fatal("expected error for negative CI_TIMEOUT")
+	}
+}
+
 func TestMaxIterationsFloor(t *testing.T) {
 	if _, err := loadFrom(mapLookup(map[string]string{"MAX_ITERATIONS": "0"})); err == nil {
 		t.Fatal("expected error for MAX_ITERATIONS=0")

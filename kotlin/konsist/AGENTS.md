@@ -13,7 +13,7 @@ and Kotest. This is the analogue of the Go reference's `ARCH/` package and the P
 - **Tooling must not import agents.** Files in `githubapi`, `gitrepo`, `webhook`, `notify`,
   `scheduler` may not import `io.github.jkjamies.automationagent.agent...`.
 - **Provider SDKs only in `agent.setup`.** Ollama / ADK-Gemini / genai imports are confined
-  to the `agent.setup` package (vacuously true until that layer is ported).
+  to the `agent.setup` package.
 - **Nothing imports the entrypoint.** No file outside `app` imports the `app` package.
 - **Every source package directory has an `AGENTS.md`.**
 

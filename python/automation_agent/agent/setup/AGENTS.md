@@ -42,7 +42,7 @@ flowchart TD
 - `parkstore.py` — `ParkStore` (async ABC) + `ParkRecord` + `MemoryParkStore` +
   `SqliteParkStore` (aiosqlite, atomic CAS claim, WAL + busy_timeout, single shared
   connection) + `new_park_store(cfg)`: the durable park-record store (pr_key -> session,
-  attempts, opaque run params) that replaced the in-memory `RunRegistry`.
+  attempts, opaque run params) backing parked runs.
   `resolve_by_pr_key`/`sweep` are atomic single-winner claims across all backends.
 - `parkstore_firestore.py` — `FirestoreParkStore`: the cloud park store on the native
   `firestore.AsyncClient`, with the atomic claim in a Firestore transaction (the park record

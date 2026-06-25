@@ -2,6 +2,7 @@ package fixflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +84,17 @@ func Commit(ctx context.Context, gh GitHub, repo *gitrepo.Repo, cfg ApplyConfig,
 	}
 	sha, err := repo.CommitAll(cfg.CommitMessage, cfg.Author)
 	if err != nil {
-		return ApplyResult{}, err
+		// A clean tree is a benign no-op, not a failure: the LLM re-emitted content that
+		// already matches the branch (common on retry). Resolve it like a real apply —
+		// reuse the current HEAD, push (an up-to-date push is fine), and ensure the PR —
+		// so the run parks on CI instead of being reported to a human as a failed fix.
+		if errors.Is(err, gitrepo.ErrNoChanges) {
+			if sha, err = repo.Head(); err != nil {
+				return ApplyResult{}, err
+			}
+		} else {
+			return ApplyResult{}, err
+		}
 	}
 	if err := repo.Push(ctx); err != nil {
 		return ApplyResult{}, err

@@ -6,7 +6,7 @@ agent locally without asking anyone.
 
 > **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same run
 > modes and env vars apply to every port — run them from that port's directory (see
-> [Other ports](#other-ports)). Per-port drift: `specs/parity-status.md`.
+> [Other ports](#other-ports)).
 >
 > Related: [`testing.md`](testing.md) (running tests) · [`deployment.md`](deployment.md)
 > (cloud/GCP) · [`ci-integration.md`](ci-integration.md) (driving the lint/coverage fixers).
@@ -178,5 +178,5 @@ The `/internal/*` ingress + `INTERNAL_TOKEN` behave identically.
 ### TypeScript (`javascript/`) and Kotlin (`kotlin/`)
 
 The same `make run` / `make playground` / `make ci` targets, run from `javascript/` and
-`kotlin/`. Where a port's run flags or backend SDKs differ, `specs/parity-status.md` is the
-record.
+`kotlin/`. Any deliberate divergence in a port's run flags or backend SDKs is recorded in
+the PR that introduces it.

@@ -39,6 +39,20 @@ flowchart TD
   flows) and `newSequencerModel`, a deterministic action→wait `Model` for two-phase
   wait loops. Lives here because it touches the genai types; callers (e.g. `fixflow`) stay
   genai-free.
+- `ParkStore.kt` — the durable seam for suspended fix runs: the `ParkStore` interface + `ParkRecord`,
+  the in-process `MemoryParkStore` (default), and `newParkStore(cfg)`. The store has single-winner
+  claim semantics (`resolveByPrKey`/`sweep`) so exactly one of {CI webhook, soft timer, sweep}
+  resolves a run. `ParkStoreSqlite.kt` / `ParkStoreFirestore.kt` are the durable backends
+  (`SESSION_BACKEND=sqlite|firestore`); both hand-rolled, since adk-kotlin ships no database store.
+- `Session.kt` — `newSessionService(cfg)`: the ADK `SessionService` for the configured backend
+  (`InMemorySessionService` / `SqliteSessionService` / `FirestoreSessionService`), holding the
+  history a parked run resumes from. `SessionSqlite.kt` / `SessionFirestore.kt` are the durable
+  services (also hand-rolled).
+- `AdkSerialization.kt` — `adkEventJson`: reflectively reaches adk-kotlin's internal `adkJson` so the
+  durable session services round-trip ADK `Event`s exactly as the SDK does (pinned to 0.4.0; fails
+  fast at startup if the SDK relocates `getAdkJson`).
+- `Names.kt` — `safeName(s)`: derives a safe ADK sub-agent name from a repo/file path (mirrors the Go
+  reference's `setup.SafeName`).
 
 Notable idiomatic choices: `Flow`/coroutines drive iteration; errors throw from flows rather than
 being yielded; `DriveResult.parkedCallId` is a nullable `String?`; ADK-Kotlin's config carries no
