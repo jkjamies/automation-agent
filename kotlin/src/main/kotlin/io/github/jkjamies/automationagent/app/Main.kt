@@ -76,6 +76,14 @@ private fun run() {
     val notifier = buildNotifier(cfg)
 
     val summaryDaily = buildSummary(cfg, llm, commitLister, notifier, Duration.ofHours(24), "Daily commit digest")
+    // /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+    // is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+    if (summaryDaily != null && cfg.internalToken.isEmpty()) {
+        log.log(
+            Level.WARNING,
+            "daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered",
+        )
+    }
 
     // One session service + park store, shared by both fix engines. memory (the default) keeps
     // today's behavior; the durable backends persist parked runs across restarts.

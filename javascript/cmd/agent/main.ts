@@ -122,6 +122,13 @@ async function run(): Promise<void> {
 
   // Summary workflow (needs repos + a notifier). The daily Cloud Scheduler trigger fires it.
   const summaryDaily = buildSummary(cfg, llm, gh, notifier, DAY_MS, 'Daily commit digest');
+  // /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+  // is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+  if (summaryDaily !== null && cfg.internalToken === '') {
+    log.warn(
+      'daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered',
+    );
+  }
 
   // Fix engines (event-driven; work without a notifier — they just won't post results).
   const fixDeps: FixDeps = {

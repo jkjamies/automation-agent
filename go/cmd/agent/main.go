@@ -88,6 +88,11 @@ func run(logger *slog.Logger) error {
 
 	// Summary workflow (needs repos + a notifier). The daily Cloud Scheduler trigger fires it.
 	summaryDaily := buildSummaryAgent(logger, cfg, llm, gh, notifier, 24*time.Hour, "Daily commit digest")
+	// /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+	// is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+	if summaryDaily != nil && cfg.InternalToken == "" {
+		logger.Warn("daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is disabled (404), so the digest cannot be triggered")
+	}
 
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{

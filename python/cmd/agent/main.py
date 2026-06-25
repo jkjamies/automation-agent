@@ -10,6 +10,7 @@ a top-level ``cmd`` package would shadow the stdlib ``cmd`` module).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -23,7 +24,7 @@ from automation_agent.agent import covfixer, lintfixer, root, summary
 from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
-from automation_agent.config import Config, NotifyProvider, load
+from automation_agent.config import Config, load
 from automation_agent.githubapi import Client
 from automation_agent.ingest import Envelope
 from automation_agent.notify import Notifier, new_notifier
@@ -118,6 +119,13 @@ async def run() -> None:
     summary_daily = build_summary_agent(
         cfg, llm, gh, notifier, timedelta(hours=24), "Daily commit digest"
     )
+    # /internal/cron/daily is the only daily-digest trigger, and it 404s when INTERNAL_TOKEN
+    # is unset. Warn rather than fail silently so a built-but-unreachable digest is visible.
+    if summary_daily is not None and not cfg.internal_token:
+        log.warning(
+            "daily summary built but INTERNAL_TOKEN is unset; /internal/cron/daily is "
+            "disabled (404), so the digest cannot be triggered",
+        )
 
     # Fix engines (event-driven; work without a notifier — they just won't post results).
     fix_deps = FixDeps(
@@ -250,10 +258,8 @@ async def run() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    try:
+    with contextlib.suppress(KeyboardInterrupt, SystemExit):
         asyncio.run(run())
-    except (KeyboardInterrupt, SystemExit):
-        pass
 
 
 if __name__ == "__main__":

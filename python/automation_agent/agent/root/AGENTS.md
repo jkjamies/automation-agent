@@ -7,8 +7,10 @@ The dispatcher kicked off for every ingest. Build-agent pattern:
 ```mermaid
 flowchart TD
     Build["build_root_dispatcher(Deps)"] -->|"summary_daily is not None"| RegC["register KindCronDaily"]
-    Build -->|"lint_kickoff/resume is not None"| RegL["register KindLint / KindCI"]
+    Build -->|"coverage_kickoff is not None"| RegCov["register KindCoverage"]
+    Build -->|"lint_kickoff/ci_resume is not None"| RegL["register KindLint / KindCI"]
     RegC --> D["Dispatcher{handlers, log}"]
+    RegCov --> D
     RegL --> D
     GW["managed API gateway (single ingress)"] --> Ing["webhook HTTP server (/webhooks/*, /internal/*)"]
     Ing --> Env["ingest.Envelope"]
@@ -17,14 +19,15 @@ flowchart TD
     M -->|no| Warn["log warn + no-op (return None)"]
     M -->|"cron.daily"| Sum["summary_handler -> setup.drive(summary runner)"]
     M -->|lint| LK["fixer.kickoff(payload)"]
+    M -->|coverage| CK["fixer.kickoff(payload)"]
     M -->|ci| LR["fixer.resume(payload)"]
 ```
 
 - `root.py` — `Dispatcher`: routes an `ingest.Envelope` to a `Handler` by `Kind`.
   Unregistered kinds are logged and ignored (so a not-yet-wired ingress is a no-op).
-- `agents_setup.py` — `build_root_dispatcher(Deps)` registers the available workflows:
-  `KindCronDaily` -> the summary workflow runner. `KindLint`/`KindCI` are registered by the
-  lint-fixer in a later phase.
+- `agents_setup.py` — `build_root_dispatcher(Deps)` registers the available workflows when
+  their deps are present: `KindCronDaily` -> the summary workflow runner; `KindCoverage` ->
+  the coverage-fixer kickoff; `KindLint`/`KindCI` -> the lint-fixer kickoff/resume.
 
 Keeping a single entry point is the point of "root": new ingress sources
 (GitHub/Jira/Confluence/human) and smarter routing (e.g. LLM-based) slot in here
