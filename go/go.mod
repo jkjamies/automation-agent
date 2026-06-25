@@ -1,4 +1,4 @@
-module github.com/jkjamies/automation-agent
+module automation-agent
 
 go 1.26.0
 

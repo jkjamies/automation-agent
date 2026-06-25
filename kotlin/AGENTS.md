@@ -12,7 +12,7 @@ to `google.golang.org/adk` in Go. Parity is **functional, not version-matched**.
 
 ## Layout (mirrors the Go reference)
 
-Package root: `io.github.jkjamies.automationagent` under `src/main/kotlin/...`.
+Package root: `com.automation.agent` under `src/main/kotlin/...`.
 
 | Kotlin package | Go package | Purpose |
 |---|---|---|

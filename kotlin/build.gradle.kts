@@ -14,7 +14,7 @@ plugins {
     // id("com.google.devtools.ksp") version "2.3.9"
 }
 
-group = "io.github.jkjamies"
+group = "com.automation"
 version = "0.1.0"
 
 val ktorVersion = "3.5.0"
@@ -73,7 +73,7 @@ kotlin {
 
 application {
     // The service entrypoint that wires and runs the agent.
-    mainClass.set("io.github.jkjamies.automationagent.app.MainKt")
+    mainClass.set("com.automation.agent.app.MainKt")
 }
 
 // `./gradlew playground` — local-only interactive REPL over the configured model (dev only).
@@ -81,7 +81,7 @@ tasks.register<JavaExec>("playground") {
     group = "application"
     description = "Run the local playground REPL over the configured model."
     classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("io.github.jkjamies.automationagent.playground.PlaygroundKt")
+    mainClass.set("com.automation.agent.playground.PlaygroundKt")
     standardInput = System.`in`
 }
 
@@ -97,9 +97,9 @@ kover {
         filters {
             excludes {
                 classes(
-                    "io.github.jkjamies.automationagent.agent.setup.FirestoreParkStore",
-                    "io.github.jkjamies.automationagent.agent.setup.FirestoreSessionService",
-                    "io.github.jkjamies.automationagent.agent.setup.SessionFirestoreKt",
+                    "com.automation.agent.agent.setup.FirestoreParkStore",
+                    "com.automation.agent.agent.setup.FirestoreSessionService",
+                    "com.automation.agent.agent.setup.SessionFirestoreKt",
                 )
             }
         }

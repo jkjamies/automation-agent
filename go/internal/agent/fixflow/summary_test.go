@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkjamies/automation-agent/internal/githubapi"
+	"automation-agent/internal/githubapi"
 )
 
 func cmp(commits int, files ...string) githubapi.Comparison {

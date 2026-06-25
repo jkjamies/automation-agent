@@ -11,8 +11,8 @@ import (
 	"google.golang.org/adk/agent/workflowagents/sequentialagent"
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/notify"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/notify"
 )
 
 //go:embed prompts/*.md

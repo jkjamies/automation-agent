@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 // Triage uses the LLM to normalize an arbitrary coverage report into the source

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/ingest"
 )
 
 func (s *Server) routes() {

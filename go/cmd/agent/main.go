@@ -20,17 +20,17 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/covfixer"
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/lintfixer"
-	"github.com/jkjamies/automation-agent/internal/agent/root"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/agent/summary"
-	"github.com/jkjamies/automation-agent/internal/config"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/ingest"
-	"github.com/jkjamies/automation-agent/internal/notify"
-	"github.com/jkjamies/automation-agent/internal/webhook"
+	"automation-agent/internal/agent/covfixer"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/lintfixer"
+	"automation-agent/internal/agent/root"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/summary"
+	"automation-agent/internal/config"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/ingest"
+	"automation-agent/internal/notify"
+	"automation-agent/internal/webhook"
 )
 
 func main() {
@@ -46,7 +46,7 @@ func run(logger *slog.Logger) error {
 	defer stop()
 
 	// Load .env if present (no-op when absent); real environment still wins.
-	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warn("could not load .env", "err", err)
 	}
 

@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/gitrepo"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/gitrepo"
 )
 
 // GitHub is the slice of githubapi the apply step needs (consumer-defined, fakeable).

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/ingest"
 )
 
 type capture struct {

@@ -11,7 +11,7 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/session/database"
 
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/config"
 )
 
 // NewSessionService builds the ADK session service for the configured backend. The

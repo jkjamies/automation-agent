@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jkjamies/automation-agent/internal/githubapi"
+	"automation-agent/internal/githubapi"
 )
 
 // terminalOutcome is the way a fix run ended; it selects the summary framing.

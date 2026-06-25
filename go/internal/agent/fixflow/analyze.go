@@ -11,7 +11,7 @@ import (
 	"google.golang.org/adk/agent/workflowagents/parallelagent"
 	"google.golang.org/adk/session"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/setup"
 )
 
 const (

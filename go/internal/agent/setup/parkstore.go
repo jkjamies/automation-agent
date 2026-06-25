@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/config"
 )
 
 // ParkRecord is one suspended fix run's stored state. It is keyed by SessionID (stable

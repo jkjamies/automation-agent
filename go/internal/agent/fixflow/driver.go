@@ -14,8 +14,8 @@ import (
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/githubapi"
 )
 
 const (

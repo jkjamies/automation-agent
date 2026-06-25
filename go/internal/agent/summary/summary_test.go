@@ -11,9 +11,9 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/notify"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/notify"
 )
 
 // --- fakes ---

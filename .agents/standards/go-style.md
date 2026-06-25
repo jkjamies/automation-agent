@@ -3,7 +3,7 @@
 Idiomatic Go, matching the surrounding code.
 
 - **Formatting:** `gofmt`/`goimports` clean (`make fmt`); `goimports` local prefix
-  is `github.com/jkjamies/automation-agent`.
+  is `automation-agent`.
 - **Errors:** return errors, don't panic in library code. Wrap with context:
   `fmt.Errorf("doing x: %w", err)`. Handle or explicitly ignore — `errcheck` is on.
 - **Naming:** short, lower-case package names; no stutter (`config.Config`, not

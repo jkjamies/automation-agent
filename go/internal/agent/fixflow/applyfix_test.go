@@ -12,9 +12,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/gitrepo"
-	"github.com/jkjamies/automation-agent/internal/notify"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/gitrepo"
+	"automation-agent/internal/notify"
 )
 
 // --- shared test fakes ---

@@ -7,8 +7,8 @@ package covfixer
 import (
 	"embed"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 //go:embed prompts/*.md

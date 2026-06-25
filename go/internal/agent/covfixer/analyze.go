@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 // Analyze plans test placement by having a tool-using agent examine the checked-out
