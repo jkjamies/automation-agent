@@ -7,6 +7,7 @@
 import { type BaseAgent, InMemorySessionService, Runner } from '@google/adk';
 
 import { contentText, userText } from './events';
+import { STREAMING_RUN_CONFIG } from './runconfig';
 
 /** Build an in-memory runner rooted at `root`. */
 export function newRunner(appName: string, root: BaseAgent): Runner {
@@ -28,7 +29,12 @@ export async function drive(
   text: string,
 ): Promise<void> {
   await ensureSession(runner, userId, sessionId);
-  for await (const _ev of runner.runAsync({ userId, sessionId, newMessage: userText(text) })) {
+  for await (const _ev of runner.runAsync({
+    userId,
+    sessionId,
+    newMessage: userText(text),
+    runConfig: STREAMING_RUN_CONFIG,
+  })) {
     // drain
   }
 }
@@ -46,7 +52,12 @@ export async function driveText(
 ): Promise<string> {
   await ensureSession(runner, userId, sessionId);
   const parts: string[] = [];
-  for await (const ev of runner.runAsync({ userId, sessionId, newMessage: userText(text) })) {
+  for await (const ev of runner.runAsync({
+    userId,
+    sessionId,
+    newMessage: userText(text),
+    runConfig: STREAMING_RUN_CONFIG,
+  })) {
     if (ev.content && !ev.partial) {
       parts.push(contentText(ev.content));
     }
@@ -67,7 +78,12 @@ export async function driveCollectState(
 ): Promise<Record<string, unknown>> {
   await ensureSession(runner, userId, sessionId);
   const state: Record<string, unknown> = {};
-  for await (const ev of runner.runAsync({ userId, sessionId, newMessage: userText(text) })) {
+  for await (const ev of runner.runAsync({
+    userId,
+    sessionId,
+    newMessage: userText(text),
+    runConfig: STREAMING_RUN_CONFIG,
+  })) {
     const delta = ev.actions?.stateDelta;
     if (delta) {
       Object.assign(state, delta);

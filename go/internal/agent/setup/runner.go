@@ -27,10 +27,21 @@ func newRunner(appName string, root agent.Agent, sess session.Service) (*runner.
 	})
 }
 
+// streamingRunConfig is the single run configuration every drive uses. SSE streaming
+// is required: with it, Ollama flushes response headers and the first chunk right after
+// model-load + prefill, and the (potentially long) token-by-token decode streams over a
+// long-lived body with no overall timeout — so a slow generation on modest hardware never
+// trips the transport's first-chunk timeout. Without streaming, Ollama buffers the whole
+// answer before sending any bytes, turning that timeout into a cap on total generation.
+// All event consumers below already ignore partial events, so streaming is transparent.
+func streamingRunConfig() agent.RunConfig {
+	return agent.RunConfig{StreamingMode: agent.StreamingModeSSE}
+}
+
 // Drive runs the agent for a single input, draining events and returning the first
 // error. Side-effecting agents (e.g. a notifier) perform their work as they run.
 func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input string) error {
-	for _, err := range r.Run(ctx, userID, sessionID, UserText(input), agent.RunConfig{}) {
+	for _, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
 		if err != nil {
 			return err
 		}
@@ -43,7 +54,7 @@ func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input strin
 // (intermediate function-call/response events carry no text).
 func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (string, error) {
 	var sb strings.Builder
-	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), agent.RunConfig{}) {
+	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
 		if err != nil {
 			return "", err
 		}
@@ -59,7 +70,7 @@ func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input s
 // each write a distinct state key the caller needs to read back.
 func DriveCollectState(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (map[string]any, error) {
 	state := make(map[string]any)
-	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), agent.RunConfig{}) {
+	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
 		if err != nil {
 			return nil, err
 		}

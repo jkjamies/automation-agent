@@ -2,6 +2,7 @@ package com.automation.agent.agent.setup
 
 import com.google.adk.kt.agents.BaseAgent
 import com.google.adk.kt.agents.InvocationContext
+import com.google.adk.kt.agents.StreamingMode
 import com.google.adk.kt.events.Event
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.BehaviorSpec
@@ -35,6 +36,14 @@ class RunnerTest : BehaviorSpec({
             Then("the emitted state delta is accumulated") {
                 val r = newRunner("test-app", EchoAgent())
                 driveCollectState(r, "u", "s", "go")["k"] shouldBe "v"
+            }
+        }
+    }
+
+    Given("the shared runner run config") {
+        When("inspecting its streaming mode") {
+            Then("it opts into SSE so long Ollama generations stream over a long-lived body") {
+                streamingRunConfig.streamingMode shouldBe StreamingMode.SSE
             }
         }
     }

@@ -44,12 +44,16 @@ func NewOllamaModel(host, modelTag string) (*OllamaModel, error) {
 	}
 	// Connection-level timeouts guard against a hung/unreachable Ollama server
 	// without bounding overall request duration: generations stream over a long-
-	// lived body, so an http.Client.Timeout would truncate valid long responses.
+	// lived body (the runner uses SSE streaming), so an http.Client.Timeout would
+	// truncate valid long responses. ResponseHeaderTimeout bounds only the wait for
+	// the first streamed chunk — which on a cold start covers model-load + prefill,
+	// slow for a large model on modest hardware — not the token-by-token decode that
+	// follows. 300s is a generous cold-start cushion, not a cap on total generation.
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 60 * time.Second,
+			ResponseHeaderTimeout: 300 * time.Second,
 		},
 	}
 	return &OllamaModel{client: api.NewClient(base, httpClient), name: modelTag}, nil

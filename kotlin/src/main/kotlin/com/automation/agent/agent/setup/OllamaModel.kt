@@ -50,6 +50,15 @@ private const val DEFAULT_NUM_CTX = 32768
 /** Bounds how long the client waits to establish a TCP connection to the Ollama server. */
 private const val OLLAMA_CONNECT_TIMEOUT_MS = 10_000L
 
+/**
+ * Bounds inactivity between data packets: the wait for the first streamed chunk (model load +
+ * prefill on a cold 26b model) and any inter-chunk gap thereafter. It is a generous cold-start
+ * cushion, NOT a cap on total generation — with SSE streaming the runner asks Ollama to flush
+ * NDJSON chunks as it decodes, so the socket stays active and a long decode runs unbounded. See
+ * specs/20260625-ollama-sse-streaming-long-generations.md.
+ */
+private const val OLLAMA_SOCKET_TIMEOUT_MS = 300_000L
+
 private val ollamaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
 /**
@@ -78,9 +87,13 @@ class OllamaModel(
     private val http: HttpClient =
         httpClient ?: HttpClient(CIO) {
             install(ContentNegotiation) { json(ollamaJson) }
-            // Bound only the connect phase: request/socket timeouts are intentionally left open
-            // because a local generation can legitimately stream for minutes.
-            install(HttpTimeout) { connectTimeoutMillis = OLLAMA_CONNECT_TIMEOUT_MS }
+            // Bound connect (10s) and inter-packet inactivity (300s, the first-chunk/cold-start
+            // cushion). There is intentionally NO requestTimeoutMillis: a long streaming generation
+            // must not be capped by an overall call timeout, which would truncate the body.
+            install(HttpTimeout) {
+                connectTimeoutMillis = OLLAMA_CONNECT_TIMEOUT_MS
+                socketTimeoutMillis = OLLAMA_SOCKET_TIMEOUT_MS
+            }
         }
 
     /**
@@ -110,22 +123,33 @@ class OllamaModel(
 
         // Ollama replies with newline-delimited JSON (one object per chunk; a single object when
         // stream=false). The body is read whole and replayed in order — partials are still emitted
-        // before the final. (This service only ever calls stream=false; true token-by-token
-        // delivery would matter for a live UI, which does not exist here.)
+        // before the final. The runner drives this with SSE streaming (stream=true), so Ollama
+        // flushes chunks as it decodes and the connection stays active for a long generation; the
+        // first-chunk wait is bounded by the socket timeout, not total generation time.
         val full = StringBuilder()
         val toolCalls = mutableListOf<OllamaToolCall>()
+        var model = ""
+        var emittedFinal = false
         for (line in response.bodyAsText().lineSequence()) {
             if (line.isBlank()) continue
             val chunk = ollamaJson.decodeFromString(OllamaChatResponse.serializer(), line)
             full.append(chunk.message.content)
             toolCalls += chunk.message.toolCalls
+            if (chunk.model.isNotEmpty()) model = chunk.model
 
             if (stream && !chunk.done && chunk.message.content.isNotBlank()) {
-                emit(newTextResponse(chunk.message.content, chunk.model).copy(partial = true))
+                emit(newTextResponse(chunk.message.content, model).copy(partial = true))
             }
             if (chunk.done) {
-                emit(finalResponse(full.toString(), toolCalls.toList(), chunk.model))
+                emit(finalResponse(full.toString(), toolCalls.toList(), model))
+                emittedFinal = true
             }
+        }
+        // A stream that ends without an explicit done=true (the body closes after only partial
+        // chunks) still needs its terminal response, so the runner always receives one final
+        // LlmResponse. Mirrors the JS port's post-loop fallback.
+        if (!emittedFinal) {
+            emit(finalResponse(full.toString(), toolCalls.toList(), model))
         }
     }
 

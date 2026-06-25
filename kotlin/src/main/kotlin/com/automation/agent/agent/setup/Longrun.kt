@@ -90,7 +90,7 @@ class LongRunDriver(private val runner: Runner, private val userId: String) {
         var parkedCallId: String? = null
         val toolResponses = mutableMapOf<String, Map<String, Any?>>()
         val final = StringBuilder()
-        runner.runAsync(userId, sessionId, newMessage = input).collect { ev ->
+        runner.runAsync(userId, sessionId, newMessage = input, runConfig = streamingRunConfig).collect { ev ->
             ev.longRunningToolIds.firstOrNull()?.let { parkedCallId = it }
             ev.content?.parts?.forEach { p ->
                 p.functionResponse?.let { toolResponses[it.name] = it.response }

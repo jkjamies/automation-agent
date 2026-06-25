@@ -83,6 +83,46 @@ describe('OllamaLlm', () => {
     expect(resp.turnComplete).toBe(true);
   });
 
+  it('streams NDJSON chunks: emits partials and a final aggregating text + tool calls', async () => {
+    const ndjson =
+      JSON.stringify({ model: 'g', message: { content: 'Hel' }, done: false }) +
+      '\n' +
+      JSON.stringify({ model: 'g', message: { content: 'lo' }, done: false }) +
+      '\n' +
+      JSON.stringify({
+        model: 'g',
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'apply', arguments: { path: 'a.ts' } } }],
+        },
+        done: true,
+      }) +
+      '\n';
+    const fn = vi.fn(async (..._args: unknown[]) => new Response(ndjson, { status: 200 }));
+    vi.stubGlobal('fetch', fn);
+
+    const m = new OllamaLlm('http://localhost:11434', 'gemma4:12b');
+    const out: Array<{ partial?: boolean; text: string; toolCall?: string }> = [];
+    for await (const ev of m.generateContentAsync(req(), true)) {
+      const parts = ev.content!.parts!;
+      out.push({
+        partial: ev.partial,
+        text: parts.map((p) => p.text ?? '').join(''),
+        toolCall: parts.find((p) => p.functionCall)?.functionCall?.name,
+      });
+    }
+
+    // Streaming was requested of Ollama.
+    const body = JSON.parse((fn.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.stream).toBe(true);
+
+    // Two non-empty content chunks surface as partials, then one final.
+    expect(out.filter((o) => o.partial).map((o) => o.text)).toEqual(['Hel', 'lo']);
+    const final = out.find((o) => !o.partial)!;
+    expect(final.text).toBe('Hello'); // aggregated across chunks
+    expect(final.toolCall).toBe('apply'); // tool call carried on the terminal chunk
+  });
+
   it('throws on a non-2xx response', async () => {
     stub('boom', 500);
     const m = new OllamaLlm('http://localhost:11434', 'gemma4:12b');
