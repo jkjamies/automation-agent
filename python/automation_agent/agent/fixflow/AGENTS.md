@@ -59,8 +59,8 @@ flowchart TD
   deterministic sequencer model), the `RunParams` (serialized into the park record), and the
   kickoff/resume/on_timeout/`sweep_timeouts` lifecycle over the injected `setup.ParkStore`
   (the in-memory `RunRegistry` it replaced is gone). Terminal `_clear` deletes the park
-  record **and** the ADK session. The triage `work` cache is an in-process optimization
-  (not serialized), so a warm process skips re-triage while a restart simply re-triages.
+  record **and** the ADK session. Triage re-runs on every attempt (no cache): a retry resumes
+  on a fresh process — under scale-to-zero, a new instance — so a cache would miss anyway.
   Terminal paths build a status-aware summary via `summary.build_summary_text` + `gh.compare`.
 - `summary.py` — `build_summary_text`: the status-aware terminal summary (success / max-iter
   / timeout framings) enriched with `gh.compare` (base...head diff) + the park record. Pure.

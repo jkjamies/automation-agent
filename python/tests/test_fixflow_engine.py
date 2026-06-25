@@ -360,8 +360,9 @@ async def test_engine_kickoff_apply_failure_notifies(tmp_path) -> None:
     assert await e.driver.parked_count() == 0
 
 
-async def test_engine_triage_cached_across_retries(tmp_path) -> None:
-    # Triage runs once and is reused on retry; only analyze re-runs. (S6)
+async def test_engine_triage_runs_each_attempt(tmp_path) -> None:
+    # Triage re-runs on every attempt (no in-process cache): a retry resumes on a fresh
+    # process, so a cache would miss anyway — matches Go/Ko/JS. (S6)
     remote = _seed_remote(tmp_path)
     gh = FakeGH()
     n = FakeNotifier()
@@ -393,7 +394,7 @@ async def test_engine_triage_cached_across_retries(tmp_path) -> None:
     e.spec.analyze = retry_analyze
     gh.existing = [PR(number=42, title="", branch="agent/fix", head_sha="", url="")]
     await e.resume(_check_body("failure", 42, "still failing"))
-    assert triage_calls["n"] == 1  # not re-run on retry
+    assert triage_calls["n"] == 2  # kickoff + retry each re-triage
     assert await e.driver.parked_count() == 1
 
 

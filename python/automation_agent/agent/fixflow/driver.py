@@ -43,7 +43,7 @@ from automation_agent.agent.setup import MemoryParkStore, ParkRecord
 from automation_agent.githubapi import Comparison
 
 if TYPE_CHECKING:
-    from automation_agent.agent.fixflow.engine import Engine, FileWork, ResumeInput
+    from automation_agent.agent.fixflow.engine import Engine, ResumeInput
     from automation_agent.agent.fixflow.envelope import Kickoff
 
 TOOL_APPLY_FIX = "apply_fix"
@@ -64,14 +64,10 @@ class RunParams:
     report: str
     feedback: str = ""  # previous attempt's CI failure, on retry
     new_branch: bool = True  # True on kickoff (create from base); False on retry
-    # Triage output, cached on first attempt and reused across retries. This is an
-    # in-process optimization held by the Driver (not serialized into the durable params),
-    # so a warm process skips re-triage while a restart simply re-triages.
-    work: list[FileWork] | None = None
 
     def to_json(self) -> str:
-        """Serialize the durable inputs (everything except the in-process ``work`` cache).
-        The key names match the Go reference's blob for cross-port parity."""
+        """Serialize the durable inputs. The key names match the Go reference's blob for
+        cross-port parity."""
         return json.dumps(
             {
                 "owner": self.owner,
@@ -106,9 +102,8 @@ class Driver:
         # Injected durable store (falls back to in-memory: today's behavior, used by tests).
         self.store = engine.d.park_store or MemoryParkStore()
         self.timeout = engine.d.ci_timeout
-        # In-process triage cache (session id -> work) and soft per-run timeout timers.
-        # Both are lost on restart; the durable record in the store is the source of truth.
-        self._work: dict[str, list[FileWork]] = {}
+        # Soft per-run timeout timers (lost on restart; the durable record in the store is
+        # the source of truth — a restart's sweep re-arms them).
         self._timers: dict[str, asyncio.TimerHandle] = {}
         # Strong refs to in-flight timeout tasks: CPython only weakly references a bare
         # ensure_future task, so without this a fired timeout handler (which frees the run
@@ -167,12 +162,7 @@ class Driver:
             if rec is None:
                 raise ValueError(f"apply_fix: no run params for session {sid!r}")
             rp = RunParams.from_json(rec.params)
-            # Reuse cached triage across retries within this process (None after a restart,
-            # which simply re-triages — triage depends only on the immutable report).
-            rp.work = self._work.get(sid)
             res = await self.engine.attempt_once(rp)
-            if rp.work is not None:
-                self._work[sid] = rp.work
             return {"pr_number": res.pr.number, "head_sha": res.head_sha}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
@@ -450,9 +440,8 @@ class Driver:
         raise RuntimeError(f"{full_repo} {self.engine.spec.name}: {reason}")
 
     async def _clear(self, sid: str) -> None:
-        """Terminal cleanup: drop the in-process triage cache, remove the park record, and
-        delete the ADK session so a durable backend does not leak completed runs."""
-        self._work.pop(sid, None)
+        """Terminal cleanup: remove the park record and delete the ADK session so a durable
+        backend does not leak completed runs."""
         try:
             await self.store.delete(sid)
         except Exception as exc:  # noqa: BLE001
