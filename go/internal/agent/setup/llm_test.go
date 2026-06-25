@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/config"
 )
 
 func TestBuildLLMOllama(t *testing.T) {

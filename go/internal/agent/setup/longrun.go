@@ -138,6 +138,11 @@ type sequencer struct{ cfg SequencerConfig }
 func (s *sequencer) Name() string { return "sequencer:" + s.cfg.Action + "+" + s.cfg.Wait }
 
 func (s *sequencer) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	if req == nil {
+		return func(yield func(*model.LLMResponse, error) bool) {
+			yield(nil, fmt.Errorf("sequencer: nil request"))
+		}
+	}
 	next := s.decide(req.Contents)
 	return func(yield func(*model.LLMResponse, error) bool) {
 		yield(next, nil)

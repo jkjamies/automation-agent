@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 // Analyze rewrites each affected source file to fix its lint problems, one parallel

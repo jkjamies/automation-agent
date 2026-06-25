@@ -10,7 +10,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/ingest"
 )
 
 func env(kind ingest.Kind) ingest.Envelope {

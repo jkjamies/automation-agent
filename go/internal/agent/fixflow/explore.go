@@ -7,7 +7,7 @@ import (
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/setup"
 )
 
 // Explore runs a single tool-using agent that navigates the checkout itself (via

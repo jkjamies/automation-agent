@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/githubapi"
 )
 
 // seedParked puts a parked run directly into the driver's store, for tests that exercise

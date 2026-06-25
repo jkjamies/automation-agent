@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 // scriptedLLM routes by the system prompt: triage, explore (plan), or execute (test).

@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/agent/fixflow"
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/fixflow"
+	"automation-agent/internal/agent/setup"
 )
 
 type stubLLM struct{ text string }

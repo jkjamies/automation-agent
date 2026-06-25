@@ -12,9 +12,9 @@ import (
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/session"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/notify"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/notify"
 )
 
 // CommitLister is the slice of githubapi the fetchers need (consumer-defined for

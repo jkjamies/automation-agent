@@ -12,10 +12,10 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/githubapi"
-	"github.com/jkjamies/automation-agent/internal/gitrepo"
-	"github.com/jkjamies/automation-agent/internal/notify"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/githubapi"
+	"automation-agent/internal/gitrepo"
+	"automation-agent/internal/notify"
 )
 
 // FileWork is one file and the items to address in it (lint problems, uncovered

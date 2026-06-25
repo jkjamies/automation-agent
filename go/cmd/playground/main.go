@@ -34,8 +34,8 @@ import (
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/full"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/config"
 )
 
 func main() {

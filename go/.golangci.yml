@@ -29,10 +29,10 @@ linters-settings:
           - "**/internal/notify/**"
           - "**/internal/reconcile/**"
         deny:
-          - pkg: "github.com/jkjamies/automation-agent/internal/agent"
+          - pkg: "automation-agent/internal/agent"
             desc: "tooling must not import agent packages"
   goimports:
-    local-prefixes: github.com/jkjamies/automation-agent
+    local-prefixes: automation-agent
 
 issues:
   exclude-rules:

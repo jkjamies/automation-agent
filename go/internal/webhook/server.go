@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/ingest"
 )
 
 // maxBodyBytes caps how much of a webhook body we read.

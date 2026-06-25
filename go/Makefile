@@ -1,4 +1,4 @@
-MODULE    := github.com/jkjamies/automation-agent
+MODULE    := automation-agent
 COVER_MIN := 80
 OLLAMA_HOST ?= http://localhost:11434
 

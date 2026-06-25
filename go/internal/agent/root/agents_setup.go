@@ -8,8 +8,8 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/ingest"
 )
 
 // Deps wires the dispatcher. Each handler is optional. CIResume handles KindCI for

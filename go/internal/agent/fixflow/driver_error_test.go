@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkjamies/automation-agent/internal/agent/setup"
+	"automation-agent/internal/agent/setup"
 )
 
 // erroringStore wraps a real ParkStore and forces a chosen method to fail, proving the

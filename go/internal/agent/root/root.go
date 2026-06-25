@@ -8,7 +8,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/jkjamies/automation-agent/internal/ingest"
+	"automation-agent/internal/ingest"
 )
 
 // Handler runs the work for one ingest envelope.

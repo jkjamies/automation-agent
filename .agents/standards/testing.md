@@ -30,7 +30,7 @@ is the source of truth — read it and you can run the suite without asking anyo
 
 ## Go (`go/`) — reference
 
-Module `github.com/jkjamies/automation-agent`, Go 1.26. **Run everything from the `go/`
+Module `automation-agent`, Go 1.26. **Run everything from the `go/`
 directory.** All targets live in `go/Makefile`.
 
 ### One-liners

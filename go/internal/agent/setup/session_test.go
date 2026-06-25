@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/config"
 )
 
 // TestNewSessionServiceMemory: the default backend yields a usable in-memory service.

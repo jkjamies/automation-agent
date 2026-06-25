@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/adk/model"
 
-	"github.com/jkjamies/automation-agent/internal/config"
+	"automation-agent/internal/config"
 )
 
 // BuildLLM returns the default model.LLM (triage, explore, summary) for the
