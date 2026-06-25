@@ -107,6 +107,15 @@ async def run() -> None:
     llm = agent_setup.build_llm(cfg)
     code_llm = agent_setup.build_code_llm(cfg)
     gh = Client(cfg.github_token)
+    # SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
+    # and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
+    # rather than fail so read-only/dry-run flows still work, but PR operations will not.
+    if cfg.git_transport == "ssh" and not cfg.github_token:
+        log.warning(
+            "GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth "
+            "token`); git clone+push will use ssh, but PR operations against the REST API "
+            "will fail — run `gh auth login` or set a token"
+        )
     notifier = build_notifier(cfg)
 
     # One session service + park store, shared by both fix engines (namespaced by app name).
@@ -134,6 +143,8 @@ async def run() -> None:
         gh=gh,
         notify=notifier,
         token=cfg.github_token,
+        git_transport=cfg.git_transport,
+        ssh_key=cfg.git_ssh_key,
         pr_label=cfg.agent_pr_label,
         max_iter=cfg.max_iterations,
         ci_timeout=cfg.ci_timeout,

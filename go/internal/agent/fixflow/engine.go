@@ -104,6 +104,13 @@ type Deps struct {
 	// in-memory store. Built once at startup, alongside SessionService.
 	ParkStore setup.ParkStore
 	CloneURL  func(owner, repo string) string // overridable in tests
+	// GitTransport selects the clone-URL scheme: "https" (default — token / GitHub App)
+	// or "ssh" (local dev — ssh-agent/keys). It only changes the URL the default cloneURL
+	// builds; a test-injected CloneURL overrides it.
+	GitTransport string
+	// SSHKey is the explicit private-key path used when GitTransport is "ssh" (GIT_SSH_KEY);
+	// empty falls back to ssh-agent then default identities.
+	SSHKey string
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is
@@ -211,7 +218,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 	}
 
 	cfg := ApplyConfig{
-		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Token: e.d.Token,
+		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Token: e.d.Token, SSHKey: e.d.SSHKey,
 		Base: rp.base, Branch: e.spec.Branch, NewBranch: rp.newBranch, Label: e.d.PRLabel,
 		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work),
 		Author: e.d.Author,
@@ -245,6 +252,9 @@ func (e *Engine) notify(ctx context.Context, title, text, link string) error {
 func (e *Engine) cloneURL(owner, repo string) string {
 	if e.d.CloneURL != nil {
 		return e.d.CloneURL(owner, repo)
+	}
+	if e.d.GitTransport == "ssh" {
+		return fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
 	}
 	return fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 }

@@ -308,3 +308,20 @@ func TestEngineLabelAndCheckName(t *testing.T) {
 		t.Errorf("label=%q check=%q", e.Label(), e.CheckName())
 	}
 }
+
+func TestCloneURLByTransport(t *testing.T) {
+	// Default (https) and an explicit ssh transport build the two GitHub URL forms; a
+	// test-injected CloneURL still overrides both.
+	https := (&Engine{d: Deps{}}).cloneURL("acme", "api")
+	if want := "https://github.com/acme/api.git"; https != want {
+		t.Errorf("https cloneURL = %q, want %q", https, want)
+	}
+	ssh := (&Engine{d: Deps{GitTransport: "ssh"}}).cloneURL("acme", "api")
+	if want := "git@github.com:acme/api.git"; ssh != want {
+		t.Errorf("ssh cloneURL = %q, want %q", ssh, want)
+	}
+	override := (&Engine{d: Deps{GitTransport: "ssh", CloneURL: func(_, _ string) string { return "x" }}}).cloneURL("acme", "api")
+	if override != "x" {
+		t.Errorf("injected CloneURL override = %q, want x", override)
+	}
+}

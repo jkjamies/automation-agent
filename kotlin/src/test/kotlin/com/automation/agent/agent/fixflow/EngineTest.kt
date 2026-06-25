@@ -222,4 +222,25 @@ class EngineTest : BehaviorSpec({
             }
         }
     }
+
+    Given("the default clone-URL builder (no test override)") {
+        When("the transport is https (the default)") {
+            Then("it builds the https GitHub URL") {
+                val e = Engine(fixSpec(AtomicInteger(0)), Deps(gh = FakeGitHub()))
+                e.cloneUrl("acme", "api") shouldBe "https://github.com/acme/api.git"
+            }
+        }
+        When("the transport is ssh") {
+            Then("it builds the scp-style git@ URL") {
+                val e = Engine(fixSpec(AtomicInteger(0)), Deps(gh = FakeGitHub(), gitTransport = "ssh"))
+                e.cloneUrl("acme", "api") shouldBe "git@github.com:acme/api.git"
+            }
+        }
+        When("a cloneUrl override is injected under ssh") {
+            Then("the override still wins over the transport branch") {
+                val e = Engine(fixSpec(AtomicInteger(0)), Deps(gh = FakeGitHub(), gitTransport = "ssh", cloneUrl = { _, _ -> "injected" }))
+                e.cloneUrl("acme", "api") shouldBe "injected"
+            }
+        }
+    }
 })

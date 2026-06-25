@@ -402,3 +402,18 @@ def test_engine_label_and_check_name(tmp_path) -> None:
     e = _new_engine("x", FakeGH(), FakeNotifier())
     assert e.label() == "automation-agent"
     assert e.check_name() == "agent-test-verify"
+
+
+def test_clone_url_transport() -> None:
+    # Default (https) and an explicit ssh transport build the two GitHub URL forms; a
+    # test-injected clone_url overrides both.
+    https = new_engine(_spec(), Deps(gh=FakeGH()))
+    assert https._clone_url("acme", "api") == "https://github.com/acme/api.git"
+
+    ssh = new_engine(_spec(), Deps(gh=FakeGH(), git_transport="ssh"))
+    assert ssh._clone_url("acme", "api") == "git@github.com:acme/api.git"
+
+    override = new_engine(
+        _spec(), Deps(gh=FakeGH(), git_transport="ssh", clone_url=lambda _o, _r: "x")
+    )
+    assert override._clone_url("acme", "api") == "x"

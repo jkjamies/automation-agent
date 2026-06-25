@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -15,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gossh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
 // Author identifies the committer.
@@ -32,19 +35,82 @@ type Repo struct {
 	now  func() time.Time
 }
 
-// authFor builds GitHub token auth (x-access-token) or nil for local/anonymous.
-func authFor(token string) transport.AuthMethod {
-	if token == "" {
-		return nil
-	}
-	return &githttp.BasicAuth{Username: "x-access-token", Password: token}
+// Auth carries the credentials Clone/Push use. Which one applies is chosen by the
+// clone URL scheme, not by the caller: an https remote uses Token (GitHub x-access-token
+// basic auth), an ssh remote (git@… / ssh://…) uses SSHKey or the ssh-agent.
+type Auth struct {
+	// Token is the GitHub token used as x-access-token basic auth on https remotes.
+	// Empty means anonymous (public read only). Ignored for ssh remotes.
+	Token string
+	// SSHKey is an explicit private-key path for ssh remotes. Empty falls back to the
+	// ssh-agent, then the default identity files (~/.ssh/id_ed25519, id_rsa, id_ecdsa),
+	// mirroring the ssh binary. Ignored for https remotes.
+	SSHKey string
 }
 
-// Clone clones url into dir (which must not already exist). A non-empty token is
-// used as GitHub HTTP auth.
-func Clone(ctx context.Context, url, dir, token string) (*Repo, error) {
-	auth := authFor(token)
-	repo, err := git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{URL: url, Auth: auth})
+// sshUser is the user every GitHub ssh remote authenticates as (git@github.com).
+const sshUser = "git"
+
+// isSSHURL reports whether url is an scp-style (git@host:path) or ssh:// remote, as
+// opposed to an https remote. The agent only ever builds these two forms.
+func isSSHURL(url string) bool {
+	return strings.HasPrefix(url, "ssh://") || strings.HasPrefix(url, "git@")
+}
+
+// authFor selects the auth method by URL scheme: ssh keys/agent for an ssh remote,
+// x-access-token basic auth (or nil/anonymous) for an https remote. Host-key checking
+// stays on for ssh — go-git defaults HostKeyCallback to the user's known_hosts.
+func authFor(url string, a Auth) (transport.AuthMethod, error) {
+	if isSSHURL(url) {
+		return sshAuth(a.SSHKey)
+	}
+	if a.Token == "" {
+		return nil, nil
+	}
+	return &githttp.BasicAuth{Username: "x-access-token", Password: a.Token}, nil
+}
+
+// sshAuth resolves ssh credentials like the ssh binary: an explicit key path wins;
+// otherwise prefer a running ssh-agent (which handles passphrase-protected and hardware
+// keys), then fall back to the first default identity file present.
+func sshAuth(keyPath string) (transport.AuthMethod, error) {
+	if keyPath != "" {
+		m, err := gossh.NewPublicKeysFromFile(sshUser, keyPath, "")
+		if err != nil {
+			return nil, fmt.Errorf("ssh key %s: %w", keyPath, err)
+		}
+		return m, nil
+	}
+	if m, err := gossh.NewSSHAgentAuth(sshUser); err == nil {
+		return m, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("ssh: locate home dir: %w", err)
+	}
+	for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
+		p := filepath.Join(home, ".ssh", name)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		m, err := gossh.NewPublicKeysFromFile(sshUser, p, "")
+		if err != nil {
+			return nil, fmt.Errorf("ssh key %s: %w", p, err)
+		}
+		return m, nil
+	}
+	return nil, errors.New("ssh: no ssh-agent and no default identity file " +
+		"(~/.ssh/id_ed25519|id_rsa|id_ecdsa); set GIT_SSH_KEY or start ssh-agent")
+}
+
+// Clone clones url into dir (which must not already exist). The auth applied is chosen
+// by url's scheme — see Auth.
+func Clone(ctx context.Context, url, dir string, auth Auth) (*Repo, error) {
+	am, err := authFor(url, auth)
+	if err != nil {
+		return nil, fmt.Errorf("auth for %s: %w", url, err)
+	}
+	repo, err := git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{URL: url, Auth: am})
 	if err != nil {
 		return nil, fmt.Errorf("clone %s: %w", url, err)
 	}
@@ -52,7 +118,7 @@ func Clone(ctx context.Context, url, dir, token string) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
-	return &Repo{repo: repo, wt: wt, dir: dir, auth: auth, now: time.Now}, nil
+	return &Repo{repo: repo, wt: wt, dir: dir, auth: am, now: time.Now}, nil
 }
 
 // Dir returns the working-tree directory; callers write file edits under it.

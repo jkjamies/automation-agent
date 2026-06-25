@@ -73,6 +73,14 @@ class Config:
     # GitHub / repos
     repos: list[str] = field(default_factory=list)
     github_token: str = ""
+    # git_transport selects the git clone/push transport: "https" (default — uses
+    # github_token) or "ssh" (local dev — ssh-agent/keys). SSH only covers the git
+    # transport; the GitHub REST API (open/label PR, read CI) still needs a token, so an
+    # ssh run without a token warns at startup.
+    git_transport: str = "https"
+    # git_ssh_key is an explicit private-key path for git_transport=ssh (GIT_SSH_KEY); empty
+    # falls back to ssh-agent then the default identity files.
+    git_ssh_key: str = ""
 
     # Notifications
     notify_provider: NotifyProvider = NotifyProvider.SLACK
@@ -117,6 +125,10 @@ class Config:
             raise ValueError(
                 f"invalid SESSION_BACKEND {self.session_backend!r} "
                 "(want memory|sqlite|firestore)"
+            )
+        if self.git_transport not in ("https", "ssh"):
+            raise ValueError(
+                f"invalid GIT_TRANSPORT {self.git_transport!r} (want https|ssh)"
             )
         if self.max_iterations < 1:
             raise ValueError(f"MAX_ITERATIONS must be >= 1, got {self.max_iterations}")
@@ -193,6 +205,8 @@ def load_from(get: Lookup) -> Config:
         firestore_collection=_get_or(get, "FIRESTORE_COLLECTION", "automation_agent"),
         repos=_split_list(_get_or(get, "REPOS", "")),
         github_token=_get_or(get, "GITHUB_TOKEN", _get_or(get, "GH_TOKEN", "")),
+        git_transport=_get_or(get, "GIT_TRANSPORT", "https"),
+        git_ssh_key=_get_or(get, "GIT_SSH_KEY", ""),
         notify_provider=NotifyProvider(
             _get_or(get, "NOTIFY_PROVIDER", NotifyProvider.SLACK.value)
         ),

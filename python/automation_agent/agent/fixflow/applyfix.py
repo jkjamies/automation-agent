@@ -56,6 +56,9 @@ class ApplyConfig:
     pr_title: str
     pr_body: str
     author: Author
+    # ssh_key is the explicit private-key path for an ssh clone_url (GIT_SSH_KEY); empty
+    # falls back to ssh-agent / default identities. Ignored for an https clone_url.
+    ssh_key: str = ""
 
 
 @dataclass
@@ -73,7 +76,7 @@ def open_repo(cfg: ApplyConfig) -> Repo:
     # gitrepo.Repo.clone requires the target dir not to already exist.
     os.rmdir(dir_)
     try:
-        repo = Repo.clone(cfg.clone_url, dir_, cfg.token)
+        repo = Repo.clone(cfg.clone_url, dir_, cfg.token, cfg.ssh_key)
     except Exception:
         _rmtree(dir_)
         raise

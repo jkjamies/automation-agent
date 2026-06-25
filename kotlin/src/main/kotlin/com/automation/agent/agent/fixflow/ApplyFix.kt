@@ -29,6 +29,11 @@ data class ApplyConfig(
     val repo: String,
     val cloneUrl: String,
     val token: String = "",
+    /**
+     * Explicit private-key path for an ssh [cloneUrl] (GIT_SSH_KEY); empty falls back to ssh-agent
+     * then the default identity files. Ignored for an https [cloneUrl].
+     */
+    val sshKey: String = "",
     val base: String, // base branch the PR targets
     val branch: String, // agent working branch
     val newBranch: Boolean, // true on kickoff (create from base); false on retry (reuse remote branch)
@@ -52,7 +57,7 @@ suspend fun open(cfg: ApplyConfig): Repo {
     val dir = withContext(Dispatchers.IO) { Files.createTempDirectory("agentfix-").toFile() }
     val repo =
         try {
-            Repo.clone(cfg.cloneUrl, dir.path, cfg.token)
+            Repo.clone(cfg.cloneUrl, dir.path, cfg.token, cfg.sshKey)
         } catch (e: Throwable) {
             withContext(Dispatchers.IO) { dir.deleteRecursively() }
             throw e

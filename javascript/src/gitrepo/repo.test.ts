@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Author, authUrl, NoChangesError, Repo } from './repo';
+import { Author, authUrl, NoChangesError, Repo, sshCommand } from './repo';
 
 let tmpRoot: string;
 
@@ -113,5 +113,33 @@ describe('gitrepo', () => {
     const local = path.join(tmpRoot, 'repo');
     expect(authUrl(local, 'tok')).toBe(local);
     expect(authUrl('https://github.com/o/r.git', '')).toBe('https://github.com/o/r.git');
+  });
+
+  it('passes ssh URLs through authUrl untouched even with a token', () => {
+    // An scp-style ssh remote is not a parseable URL, so it flows straight to the system
+    // git (ssh-agent / keys / known_hosts); the token is never embedded.
+    const sshUrl = 'git@github.com:o/r.git';
+    expect(authUrl(sshUrl, 'tok')).toBe(sshUrl);
+    expect(authUrl('ssh://git@github.com/o/r.git', 'tok')).toBe('ssh://git@github.com/o/r.git');
+  });
+
+  it('builds GIT_SSH_COMMAND only when an explicit key is set', () => {
+    // No key ⇒ let the ssh binary resolve agent/default identities/known_hosts itself.
+    expect(sshCommand('')).toBe('');
+    // An explicit key pins the transport to it (IdentitiesOnly stops other keys leaking in).
+    // The composition root exports this as the GIT_SSH_COMMAND env var so child git inherits it.
+    // The key path is single-quoted because git word-splits GIT_SSH_COMMAND like a shell.
+    expect(sshCommand('/home/dev/.ssh/id_ed25519')).toBe(
+      "ssh -i '/home/dev/.ssh/id_ed25519' -o IdentitiesOnly=yes",
+    );
+  });
+
+  it('shell-quotes a key path with spaces or metacharacters', () => {
+    // A space must not split into a second argument, and metacharacters must not be reinterpreted.
+    expect(sshCommand('/home/My Keys/id_rsa')).toBe(
+      "ssh -i '/home/My Keys/id_rsa' -o IdentitiesOnly=yes",
+    );
+    // An embedded single quote is escaped as '\'' so the wrapping stays balanced.
+    expect(sshCommand("/k/a'b")).toBe("ssh -i '/k/a'\\''b' -o IdentitiesOnly=yes");
   });
 });

@@ -113,7 +113,16 @@ class Deps:
         )
     )
     log: logging.Logger | None = None
-    clone_url: Callable[[str, str], str] = _default_clone_url
+    # git_transport selects the clone-URL scheme the default builder uses: "https" (default
+    # — token / GitHub App) or "ssh" (local dev — ssh-agent/keys). A test-injected
+    # ``clone_url`` overrides it.
+    git_transport: str = "https"
+    # ssh_key is the explicit private-key path used when git_transport is "ssh" (GIT_SSH_KEY);
+    # empty falls back to ssh-agent then default identities. Ignored for https.
+    ssh_key: str = ""
+    # clone_url, when set, overrides the built-in transport-based URL builder (tests inject a
+    # local seed-repo path). None uses the default https/ssh builder keyed on git_transport.
+    clone_url: Callable[[str, str], str] | None = None
     # session_service stores the durable suspend/resume history for the parked fix loop.
     # None falls back to in-memory (a restart strands parked runs); a durable backend
     # (sqlite/firestore) lets a parked run resume after a restart. Built once at startup.
@@ -208,8 +217,9 @@ class Engine:
         cfg = ApplyConfig(
             owner=rp.owner,
             repo=rp.repo,
-            clone_url=self.d.clone_url(rp.owner, rp.repo),
+            clone_url=self._clone_url(rp.owner, rp.repo),
             token=self.d.token,
+            ssh_key=self.d.ssh_key,
             base=rp.base,
             branch=self.spec.branch,
             new_branch=rp.new_branch,
@@ -234,6 +244,16 @@ class Engine:
             return commit(self.d.gh, git_repo, cfg, edits)
         finally:
             shutil.rmtree(git_repo.dir(), ignore_errors=True)
+
+    def _clone_url(self, owner: str, repo: str) -> str:
+        """Build the clone URL. A test-injected ``clone_url`` wins; otherwise the scheme is
+        selected by ``git_transport`` — ``ssh`` builds the ``git@github.com:…`` form, anything
+        else the default https URL."""
+        if self.d.clone_url is not None:
+            return self.d.clone_url(owner, repo)
+        if self.d.git_transport == "ssh":
+            return f"git@github.com:{owner}/{repo}.git"
+        return _default_clone_url(owner, repo)
 
     def notify(self, title: str, text: str, link: str) -> None:
         if self.d.notify is None:

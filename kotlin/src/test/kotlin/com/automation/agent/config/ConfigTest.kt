@@ -24,6 +24,35 @@ class ConfigTest : BehaviorSpec({
                 c.firestoreProject shouldBe ""
                 c.firestoreCollection shouldBe "automation_agent"
                 c.internalToken shouldBe ""
+                c.gitTransport shouldBe "https"
+                c.gitSshKey shouldBe ""
+            }
+        }
+    }
+
+    Given("an ssh git transport with an explicit key") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(
+                lookupOf(
+                    mapOf(
+                        "GIT_TRANSPORT" to "ssh",
+                        "GIT_SSH_KEY" to "/home/dev/.ssh/id_ed25519",
+                    ),
+                ),
+            )
+            Then("the transport and key path are read") {
+                c.gitTransport shouldBe "ssh"
+                c.gitSshKey shouldBe "/home/dev/.ssh/id_ed25519"
+            }
+        }
+    }
+
+    Given("an invalid GIT_TRANSPORT") {
+        When("loading the configuration") {
+            Then("it fails") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("GIT_TRANSPORT" to "scp")))
+                }
             }
         }
     }

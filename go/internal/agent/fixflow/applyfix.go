@@ -31,6 +31,9 @@ type ApplyConfig struct {
 	Owner, Repo   string
 	CloneURL      string
 	Token         string
+	// SSHKey is the explicit private-key path for an ssh CloneURL (GIT_SSH_KEY); empty
+	// falls back to ssh-agent then default identities. Ignored for an https CloneURL.
+	SSHKey        string
 	Base          string // base branch the PR targets
 	Branch        string // agent working branch
 	NewBranch     bool   // true on kickoff (create from base); false on retry (reuse remote branch)
@@ -56,7 +59,7 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tempdir: %w", err)
 	}
-	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, cfg.Token)
+	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, gitrepo.Auth{Token: cfg.Token, SSHKey: cfg.SSHKey})
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err

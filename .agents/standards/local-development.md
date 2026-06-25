@@ -103,7 +103,9 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC for `/webhooks/*`; **blank locally = verification skipped (dev only)** |
 | `INTERNAL_TOKEN` | — | Bearer for `/internal/*`; blank = those routes are 404 |
 | **GitHub** | | |
-| `GITHUB_TOKEN` | `GH_TOKEN`, then `gh auth token` | PR create/label/compare (repo scope); blank reuses your local `gh` login |
+| `GITHUB_TOKEN` | `GH_TOKEN`, then `gh auth token` | PR create/label/compare (repo scope); blank reuses your local `gh` login. Also the `https` git transport. |
+| `GIT_TRANSPORT` | `https` | `https` (token) \| `ssh` (clone/push over ssh-agent/keys). **SSH only covers git transport — PR ops still need a token / `gh` login.** |
+| `GIT_SSH_KEY` | — | `GIT_TRANSPORT=ssh`: explicit key path; blank = ssh-agent then `~/.ssh/id_*` |
 | `REPOS` | — | `owner/repo,owner/repo2` kickoff allowlist (empty = no restriction) |
 | **Notify** | | |
 | `NOTIFY_PROVIDER` | `slack` | `slack` \| `teams` |
@@ -117,10 +119,12 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 
 - **Daily summary** needs `REPOS` **and** a notifier (`SLACK_WEBHOOK_URL` or
   `TEAMS_WEBHOOK_URL`). Without a notifier it logs "disabled" and runs webhooks-only.
-- **Lint-fixer / coverage-fixer** need a `GITHUB_TOKEN` with repo scope to push and open
-  PRs, and each target repo needs the `agent-lint-verify` / `agent-coverage-verify`
-  workflow plus a `check_run` webhook back to the agent — see
-  [`ci-integration.md`](ci-integration.md).
+- **Lint-fixer / coverage-fixer** need a `GITHUB_TOKEN` with repo scope to open and label
+  PRs (the REST API), and each target repo needs the `agent-lint-verify` /
+  `agent-coverage-verify` workflow plus a `check_run` webhook back to the agent — see
+  [`ci-integration.md`](ci-integration.md). To push over SSH locally set `GIT_TRANSPORT=ssh`
+  (uses your ssh-agent/keys for clone+push) — but you still need the token/`gh` login above
+  for the PR operations, since SSH does not authenticate the REST API.
 
 ### Exercising webhooks locally
 

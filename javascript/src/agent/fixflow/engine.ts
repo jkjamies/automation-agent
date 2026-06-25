@@ -80,7 +80,10 @@ export interface Logger {
   warn(msg: string, fields?: Record<string, unknown>): void;
 }
 
-function defaultCloneUrl(owner: string, repo: string): string {
+function defaultCloneUrl(owner: string, repo: string, transport: string): string {
+  if (transport === 'ssh') {
+    return `git@github.com:${owner}/${repo}.git`;
+  }
   return `https://github.com/${owner}/${repo}.git`;
 }
 
@@ -109,6 +112,12 @@ export interface Deps {
   author?: Author;
   log?: Logger | null;
   cloneUrl?: (owner: string, repo: string) => string;
+  /**
+   * Selects the clone-URL scheme the default cloneUrl builds: 'https' (default — token /
+   * GitHub App) or 'ssh' (local dev — ssh-agent/keys). A test-injected `cloneUrl` overrides
+   * it entirely. Defaults to 'https'.
+   */
+  gitTransport?: string;
   /**
    * The single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL).
    * Write-only — PR lookup is by branch, so it never gates behavior. Defaults to
@@ -292,7 +301,10 @@ export function newEngine(spec: Spec, d: Deps): Engine {
     ciTimeoutMs: d.ciTimeoutMs && d.ciTimeoutMs > 0 ? d.ciTimeoutMs : DEFAULT_CI_TIMEOUT_MS,
     author: d.author && d.author.name !== '' ? d.author : DEFAULT_AUTHOR,
     log: d.log ?? null,
-    cloneUrl: d.cloneUrl ?? defaultCloneUrl,
+    // A test-injected cloneUrl wins; otherwise the default builder picks the scheme from
+    // gitTransport (https default, ssh for local dev).
+    cloneUrl:
+      d.cloneUrl ?? ((owner, repo) => defaultCloneUrl(owner, repo, d.gitTransport ?? 'https')),
     prLabel: d.prLabel ?? 'automation-agent',
     sessionService: d.sessionService ?? null,
     parkStore: d.parkStore ?? null,

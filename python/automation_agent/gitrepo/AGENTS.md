@@ -6,11 +6,14 @@ Working-tree git operations via `GitPython`:
 
 ```mermaid
 flowchart TD
-    LF[lint-fixer] --> CL["Repo.clone(url, dir, token)"]
+    LF[lint-fixer] --> CL["Repo.clone(url, dir, token, ssh_key)"]
     CL --> AF["_auth_url(url, token)"]
     AF -->|"https + token != ''"| BA["x-access-token:token in remote URL"]
-    AF -->|"empty token or non-https"| NIL[url unchanged - anonymous]
-    CL -->|"GitRepo.clone_from(clone_url, dir)"| REM[(git remote / GitHub)]
+    AF -->|"empty token or non-https"| NIL[url unchanged - anonymous / ssh]
+    CL --> SE["_ssh_env(ssh_key) when url is git@ / ssh://"]
+    SE -->|"ssh_key set"| GSC["GIT_SSH_COMMAND=ssh -i key -o IdentitiesOnly=yes"]
+    SE -->|"ssh_key empty"| SYS[system git: ssh-agent / default keys / known_hosts]
+    CL -->|"GitRepo.clone_from(clone_url, dir, env)"| REM[(git remote / GitHub)]
     CL --> REPO["Repo{_repo: GitRepo, _dir: str}"]
 
     REPO --> BR{branch path}
@@ -31,7 +34,12 @@ flowchart TD
     CMT --> HEAD["head() -> HEAD SHA"]
 ```
 
-- `clone(url, dir, token)` — token becomes GitHub `x-access-token` HTTP auth.
+- `clone(url, dir, token, ssh_key)` — auth is chosen by the URL scheme, not the caller. An
+  `https` remote uses `token` as GitHub `x-access-token` HTTP auth (anonymous when empty). A
+  `git@…`/`ssh://…` remote (built upstream when `GIT_TRANSPORT=ssh`) is left untouched, so
+  the system `git` GitPython shells out to authenticates it via ssh-agent, the default
+  identity files, and `known_hosts`. A non-empty `ssh_key` (`GIT_SSH_KEY`) pins ssh to that
+  key via `GIT_SSH_COMMAND`; GitPython carries that env onto the repo so `push` reuses it.
 - `checkout(branch, create)`, `commit_all(msg, author)` (stages all, returns SHA),
   `push()`, `head()`, `path(rel)`.
 

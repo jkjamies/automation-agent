@@ -19,6 +19,7 @@ import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
 import { type Config, load } from '../../src/config/config';
 import { Client } from '../../src/githubapi/client';
+import { sshCommand } from '../../src/gitrepo/repo';
 import { type Envelope } from '../../src/ingest/envelope';
 import { type Notifier, newNotifier } from '../../src/notify/notify';
 import { Server } from '../../src/webhook/server';
@@ -109,9 +110,27 @@ async function run(): Promise<void> {
   }
   const cfg = load();
 
+  // Honor GIT_SSH_KEY for the shell-out git: export GIT_SSH_COMMAND so every child git
+  // (clone/push) pins its ssh transport to the explicit key while still inheriting the full
+  // environment (PATH/HOME/known_hosts). Done here at the composition root rather than via
+  // simple-git's per-call .env() — that replaces the child environment and would strip PATH,
+  // breaking git's lookup of the ssh binary — and keeps `src/` free of process.env access.
+  const gitSshCommand = sshCommand(cfg.gitSshKey);
+  if (gitSshCommand !== '') {
+    process.env.GIT_SSH_COMMAND = gitSshCommand;
+  }
+
   const llm = buildLLM(cfg);
   const codeLlm = buildCodeLLM(cfg);
   const gh = new Client(cfg.githubToken);
+  // SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
+  // and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
+  // rather than fail so read-only/dry-run flows still work, but PR operations will not.
+  if (cfg.gitTransport === 'ssh' && cfg.githubToken === '') {
+    log.warn(
+      'GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); git clone+push will use ssh, but PR operations against the REST API will fail — run `gh auth login` or set a token',
+    );
+  }
   const notifier = buildNotifier(cfg);
 
   // One session service + park store, shared by both fix engines (namespaced by app name).
@@ -137,6 +156,7 @@ async function run(): Promise<void> {
     gh,
     notify: notifier,
     token: cfg.githubToken,
+    gitTransport: cfg.gitTransport,
     repos: cfg.repos,
     maxIter: cfg.maxIterations,
     ciTimeoutMs: cfg.ciTimeoutMs,

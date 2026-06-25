@@ -64,6 +64,12 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("build code llm: %w", err)
 	}
 	gh := githubapi.New(cfg.GitHubToken)
+	// SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
+	// and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
+	// rather than fail so read-only/dry-run flows still work, but PR operations will not.
+	if cfg.GitTransport == "ssh" && cfg.GitHubToken == "" {
+		logger.Warn("GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); git clone+push will use ssh, but PR operations against the REST API will fail — run `gh auth login` or set a token")
+	}
 	notifier := buildNotifier(logger, cfg)
 
 	// One session service + park store, shared by both fix engines (namespaced by app
@@ -100,6 +106,7 @@ func run(logger *slog.Logger) error {
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
 		PRLabel:        cfg.AgentPRLabel,
 		SessionService: sessions, ParkStore: parkStore,
+		GitTransport: cfg.GitTransport, SSHKey: cfg.GitSSHKey,
 	}
 	lintEngine := lintfixer.NewEngine(fixDeps)
 	covEngine := covfixer.NewEngine(fixDeps)
