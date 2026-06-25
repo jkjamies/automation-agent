@@ -137,15 +137,33 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
+    class FakeGit:
+        def __init__(self) -> None:
+            self.persisted: dict[str, str] = {}
+
+        def update_environment(self, **env: str) -> None:
+            self.persisted.update(env)
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self.git = FakeGit()
+
     def fake_clone_from(url, dir, env=None):
         captured["url"] = url
         captured["env"] = env
-        return object()
+        repo = FakeRepo()
+        captured["repo"] = repo
+        return repo
 
     monkeypatch.setattr(repomod.GitRepo, "clone_from", fake_clone_from)
 
     Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w1"), "", "/k/id_ed25519")
     assert captured["env"] == {
+        "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
+    }
+    # clone_from's env is subprocess-scoped, so the same command must be persisted onto the
+    # returned repo's Git instance — otherwise a later push() over ssh would drop the key.
+    assert captured["repo"].git.persisted == {
         "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
     }
 

@@ -86,8 +86,9 @@ class Repo:
         via ssh-agent / default keys. A non-empty ``ssh_key`` pins ssh to that private key
         (via ``GIT_SSH_COMMAND``); it is ignored for https URLs.
 
-        The ssh environment is carried onto the resulting repo by GitPython, so a later
-        :meth:`push` over ssh reuses the same key.
+        ``clone_from(env=...)`` scopes the ssh environment to the clone subprocess only, so
+        it is persisted onto the returned repo's Git instance — a later :meth:`push` over
+        ssh then reuses the same key (mirroring Go's per-repo auth).
         """
         clone_url = _auth_url(url, token)
         env = _ssh_env(ssh_key) if _is_ssh_url(url) else None
@@ -95,6 +96,10 @@ class Repo:
             repo = GitRepo.clone_from(clone_url, dir, env=env)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"clone {url}: {exc}") from exc
+        if env:
+            # GitPython does NOT carry the clone env onto the returned Repo; set it
+            # explicitly so push() (and any later ssh op) keeps using GIT_SSH_COMMAND.
+            repo.git.update_environment(**env)
         return Repo(repo, dir)
 
     def dir(self) -> str:
