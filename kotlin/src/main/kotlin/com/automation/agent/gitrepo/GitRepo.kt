@@ -113,11 +113,18 @@ class Repo internal constructor(
             withContext(Dispatchers.IO) {
                 if (isSshUrl(url)) {
                     val factory = buildSshFactory(sshKey)
-                    val git = Git.cloneRepository()
-                        .setURI(url)
-                        .setDirectory(File(dir))
-                        .setTransportConfigCallback(sshConfigCallback(factory))
-                        .call()
+                    // The factory's key cache / SSH client is released by Repo.close(); if the clone
+                    // itself fails the Repo is never built, so close the factory here to avoid a leak.
+                    val git = try {
+                        Git.cloneRepository()
+                            .setURI(url)
+                            .setDirectory(File(dir))
+                            .setTransportConfigCallback(sshConfigCallback(factory))
+                            .call()
+                    } catch (e: Throwable) {
+                        factory.close()
+                        throw e
+                    }
                     Repo(git, File(dir), cred = null, sshFactory = factory, now = Instant::now)
                 } else {
                     val cred: CredentialsProvider? =
