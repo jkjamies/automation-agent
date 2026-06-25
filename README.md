@@ -32,7 +32,7 @@ contract; a behavior change lands in Go first and is mirrored into every existin
 the same change (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
 - **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
-  (`com.google.adk:google-adk-kotlin-core:0.4.0`). A functional 1:1 port (`gradle build`
+  (`com.google.adk:google-adk-kotlin-core:0.4.0`). A functional 1:1 port (`./gradlew build`
   green).
 - **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
   port (`make ci` green).

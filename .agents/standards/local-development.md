@@ -177,6 +177,7 @@ The `/internal/*` ingress + `INTERNAL_TOKEN` behave identically.
 
 ### TypeScript (`javascript/`) and Kotlin (`kotlin/`)
 
-The same `make run` / `make playground` / `make ci` targets, run from `javascript/` and
-`kotlin/`. Any deliberate divergence in a port's run flags or backend SDKs is recorded in
+The same `make run` / `make playground` / `make ci` targets apply to `javascript/`.
+`kotlin/` uses the Gradle wrapper (`./gradlew build`, `./gradlew run`, `./gradlew koverVerify`).
+Any deliberate divergence in a port's run flags or backend SDKs is recorded in
 the PR that introduces it.

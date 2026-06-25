@@ -227,7 +227,7 @@ automation-agent/
 │       │   │   ├── longrun.go     # LongRunDriver: ADK suspend/resume over a session.Service
 │       │   │   └── AGENTS.md
 │       │   ├── root/
-│       │   │   ├── agents_setup.go    # BuildRootAgent(deps) -> agent.Agent
+│       │   │   ├── agents_setup.go    # BuildRootDispatcher(deps) -> *Dispatcher
 │       │   │   ├── root.go            # dispatch logic (Run func / callbacks), testable
 │       │   │   ├── prompts/root.md
 │       │   │   └── AGENTS.md
@@ -739,7 +739,7 @@ The system is composed of independently testable layers:
 3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `webhook`; all unit-tested and agent-free.
 4. **Root + Summary** — the end-to-end summary workflow runs on a real repo via local Gemma →
    Slack/Teams.
-5. **Lint-fixer** — the suspend/resume workflow.
+5. **Fixflow-based fixers** — the suspend/resume workflow for lint and coverage.
 6. **Deployment** — Cloud Run or GCE, with the Ollama-on-GPU vs Gemini choice as a config flag.
 
 **Durable sessions:**

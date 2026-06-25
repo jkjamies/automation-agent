@@ -1,6 +1,6 @@
 # src/webhook
 
-The HTTP ingress. Seven routes — a liveness probe, three POST webhooks, and two
+The HTTP ingress. Six routes — a liveness probe, three POST webhooks, and two
 Bearer-gated `/internal/*` ingress routes — reduce requests to an `ingest.Envelope` and
 hand them to an `IngestFunc` (which should enqueue and return fast):
 
