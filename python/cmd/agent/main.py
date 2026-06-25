@@ -32,6 +32,11 @@ from automation_agent.webhook import Server
 
 log = logging.getLogger("automation_agent")
 
+# MAX_CONCURRENT_DISPATCH bounds in-flight webhook dispatches (mirrors Go's
+# maxConcurrentDispatch): under a burst the ingest path applies backpressure rather than
+# spawning unbounded tasks.
+MAX_CONCURRENT_DISPATCH = 32
+
 
 def build_notifier(cfg: Config) -> Notifier | None:
     """Return a Notifier, or None (with a warning) if not configured."""
@@ -158,11 +163,23 @@ async def run() -> None:
     # instead of dropping it.
     pending: set[asyncio.Task[None]] = set()
 
+    # Caps in-flight webhook dispatches (matches Go's sem-32 channel). Acquired in _ingest
+    # before the task is spawned, so a burst blocks the handler (backpressure) instead of
+    # piling up tasks; released when the dispatch finishes.
+    dispatch_sem = asyncio.Semaphore(MAX_CONCURRENT_DISPATCH)
+
     async def _safe_dispatch(e: Envelope) -> None:
         try:
             await dispatcher.dispatch(e)
         except Exception as exc:  # noqa: BLE001
             log.error("dispatch failed: kind=%s err=%s", e.kind, exc)
+
+    async def _dispatch_and_release(e: Envelope) -> None:
+        # Webhook-path wrapper: frees the bound-concurrency slot _ingest acquired.
+        try:
+            await _safe_dispatch(e)
+        finally:
+            dispatch_sem.release()
 
     # Scheduler: cron fires on a background thread → marshal the coroutine onto the loop.
     # run_coroutine_threadsafe keeps the coroutine alive via the returned future, so this
@@ -174,9 +191,20 @@ async def run() -> None:
     sched.add(cfg.cron_daily, Kind.CRON_DAILY)
     sched.add(cfg.cron_weekly, Kind.CRON_WEEKLY)
 
-    # Webhooks enqueue asynchronously and return fast.
+    # Webhooks enqueue asynchronously. Acquiring the bound-concurrency slot here (before
+    # spawning) means a burst applies backpressure to the handler instead of spawning
+    # unbounded tasks. The cron path (_emit) stays unbounded, like Go's per-job goroutines.
     async def _ingest(e: Envelope) -> None:
-        task = loop.create_task(_safe_dispatch(e))
+        # When every slot is held, acquire() blocks here — the intended backpressure. Surface
+        # it so sustained saturation is observable rather than silent (delayed webhook ACKs).
+        if dispatch_sem.locked():
+            log.warning(
+                "dispatch concurrency saturated (%d in flight); webhook ingest is applying "
+                "backpressure until a slot frees",
+                MAX_CONCURRENT_DISPATCH,
+            )
+        await dispatch_sem.acquire()
+        task = loop.create_task(_dispatch_and_release(e))
         pending.add(task)
         task.add_done_callback(pending.discard)
 
