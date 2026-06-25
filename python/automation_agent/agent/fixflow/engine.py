@@ -10,6 +10,7 @@ by the :class:`Driver` (ADK long-running + an injected setup.ParkStore backend).
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -232,8 +233,6 @@ class Engine:
             )
             return commit(self.d.gh, git_repo, cfg, edits)
         finally:
-            import shutil
-
             shutil.rmtree(git_repo.dir(), ignore_errors=True)
 
     def notify(self, title: str, text: str, link: str) -> None:

@@ -9,6 +9,7 @@ labeled PR exists. :func:`apply_fix` does both in one step (a test convenience).
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from typing import Protocol
@@ -134,6 +135,4 @@ def _ensure_pr(gh: GitHub, cfg: ApplyConfig) -> PR:
 
 
 def _rmtree(path: str) -> None:
-    import shutil
-
     shutil.rmtree(path, ignore_errors=True)
