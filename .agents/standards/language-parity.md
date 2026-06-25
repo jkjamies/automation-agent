@@ -34,7 +34,8 @@ exceptions vs `error` returns, data classes vs structs). What must match across 
 3. **Configuration.** Identical env var names, defaults, validation rules, and precedence.
 4. **External contracts.** Same HTTP routes, request/response shapes, webhook signature
    verification, Slack/Teams payloads, GitHub API calls, labels, and check names. Anything
-   another system observes must be byte-compatible where it matters.
+   another system observes must be byte-compatible where it matters. The webhook routes and
+   `check_run` names every port must match are registered in [`webhooks.md`](webhooks.md).
 5. **Conventions.** Per-directory `AGENTS.md`; the build-agent pattern (pure wiring split
    from testable logic); prompts as markdown loaded from resources; ≥80% test coverage;
    never assert on LLM output content; provider SDKs confined to the `agent/setup` layer;

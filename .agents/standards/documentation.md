@@ -27,14 +27,17 @@ These are binding review criteria. `ARCH/` `docs_test` enforces only that an `AG
 
 ## Docs + diagrams move with the code
 
-Adding, removing, or renaming an **agent**, an ingest **`Kind`**, an **ingress route**, or a
-**tooling package** must update *every place that describes or draws it*, in the same change.
-The surfaces to sweep:
+Adding, removing, or renaming an **agent**, an ingest **`Kind`**, an **ingress route** (incl. a
+**webhook route**), a **CI `check_run` name**, or a **tooling package** must update *every place
+that describes or draws it*, in the same change. The surfaces to sweep:
 
 - the touched package's own `AGENTS.md`;
 - the **root `AGENTS.md` system-flow** mermaid **and** the `agent/root` **dispatcher** diagram;
 - [`architecture-design.md`](architecture-design.md) (§2 at-a-glance, §13 deployment) and
   [`deployment.md`](deployment.md) topology diagrams;
+- [`webhooks.md`](webhooks.md) — the webhook-route + CI-check-name registry — and
+  [`ci-integration.md`](ci-integration.md) (for any new/removed/renamed kickoff route or
+  `check_run` name; both tables must stay in lockstep with the engine `Spec`s in every port);
 - `.env.example` + the `architecture-design.md` §12 config table (for any new/removed env var);
 - the **same diagrams/docs in every port** (see cross-port parity below).
 
