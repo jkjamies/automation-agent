@@ -1,11 +1,12 @@
 # agent.lintfixer
 
 The lint-remediation configuration of the [fixflow](../fixflow/AGENTS.md) engine. It supplies a triage step (normalize a linter report into
-per-file work) and an analyze step (rewrite the affected source files), plus its branch/label/check
+per-file work) and an analyze step (rewrite the affected source files), plus its branch/check
 identity. The event-driven loop itself lives in `agent.fixflow`.
 
 - `Lint.kt` — `newEngine(deps)`: builds the `fixflow.Engine` with the lint `Spec`
-  (`agent-lint-verify` check, `automation-agent` label, `automation-agent/lint-fix` branch).
+  (`agent-lint-verify` check, `automation-agent/lint-fix` branch) and the shared PR label
+  from `deps`.
 - `Triage.kt` — `triage`: LLM-normalizes an arbitrary linter report into `FileWork`
   (`parseTriage` extracts the JSON array the model emits).
 - `Analyze.kt` — `analyze`: rewrites each affected file via `fixflow.parallelAnalyze`, reading

@@ -297,9 +297,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run tests and enforce coverage
         run: |
-          # Run the suite (incl. the agent's new tests) and fail if they don't pass
-          # or coverage didn't improve. Put a short summary on stdout for the agent.
-          go test ./...   # (or gradle/jest/swift test for your stack)
+          # Run the suite (incl. the agent's new tests), measure coverage, and fail if
+          # the tests don't pass or coverage didn't rise to your threshold. Put a short
+          # summary on stdout for the agent. (Use gradle/jest/swift cover for your stack.)
+          go test -coverprofile=cover.out ./...
+          go tool cover -func=cover.out
+          pct="$(go tool cover -func=cover.out | awk '/^total:/ {print $3}' | tr -d %)"
+          awk -v p="$pct" -v min=80 'BEGIN { if (p+0 < min) { printf "coverage %.1f%% < %d%%\n", p, min; exit 1 } }'
 ```
 
 Test placement is **not** guessed from a hardcoded rule. The agent checks out the

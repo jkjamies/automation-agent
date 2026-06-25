@@ -141,8 +141,13 @@ private fun run() {
     val scheduler =
         Scheduler({ envelope ->
             scope.launch {
-                runCatching { dispatcher.dispatch(envelope) }
-                    .onFailure { log.log(Level.WARNING, "scheduled dispatch failed kind=${envelope.kind}", it) }
+                try {
+                    dispatcher.dispatch(envelope)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.log(Level.WARNING, "scheduled dispatch failed kind=${envelope.kind}", e)
+                }
             }
         })
     scheduler.add(cfg.cronDaily, Kind.CRON_DAILY)
@@ -162,8 +167,13 @@ private fun run() {
             port = cfg.port.toInt(),
             ingest = { envelope ->
                 scope.launch {
-                    runCatching { dispatcher.dispatch(envelope) }
-                        .onFailure { log.log(Level.WARNING, "webhook dispatch failed kind=${envelope.kind}", it) }
+                    try {
+                        dispatcher.dispatch(envelope)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        log.log(Level.WARNING, "webhook dispatch failed kind=${envelope.kind}", e)
+                    }
                 }
             },
             secret = cfg.githubWebhookSecret,
