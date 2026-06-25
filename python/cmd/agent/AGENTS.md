@@ -14,25 +14,23 @@ flowchart TD
     GH --> Notif["build_notifier(cfg) -> notify.new_notifier (or None)"]
     Notif --> SumA["build_summary_agent (None if no repos/notifier)"]
     SumA --> Eng["lintfixer.new_engine(FixDeps)<br/>covfixer.new_engine(FixDeps)<br/>engines = [lint, cov]"]
-    Eng --> Disp["root.build_root_dispatcher(Deps{<br/>summary_agent,<br/>lint_kickoff=lint_engine.kickoff,<br/>coverage_kickoff=cov_engine.kickoff,<br/>ci_resume=resume to every engine})"]
+    Eng --> Disp["root.build_root_dispatcher(Deps{<br/>summary_daily,<br/>lint_kickoff=lint_engine.kickoff,<br/>coverage_kickoff=cov_engine.kickoff,<br/>ci_resume=resume to every engine})"]
     Disp -->|err| Fatal
 
-    Disp --> Sched["Scheduler(emit -> dispatch)"]
-    Sched --> AddCron["add(cron_daily, KindCronDaily)<br/>add(cron_weekly, KindCronWeekly)"]
-    AddCron --> Web["Server(ingest -> create_task(dispatch),<br/>secret=github_webhook_secret)"]
+    Disp --> Web["Server(ingest -> create_task(dispatch),<br/>secret=github_webhook_secret)"]
     Web --> HTTP["FastAPI app + uvicorn (port)"]
 
-    HTTP --> Start["sched.start()"]
-    Start --> Listen["await server.serve() (uvicorn)"]
+    HTTP --> Listen["await server.serve() (uvicorn)"]
     Listen --> Block["block until interrupted"]
-    Block --> Shutdown["sched.stop()"]
+    Block --> Shutdown["drain in-flight dispatches"]
 ```
 
 1. Load `config`.
 2. Build the LLMs (`automation_agent/agent/setup`), tooling, and the
    root + summary agents plus the lint-fixer and coverage-fixer `fixflow` engines.
-3. Start the scheduler (APScheduler cron) and the webhook HTTP server (FastAPI + uvicorn).
-4. Block until interrupted, then stop the scheduler.
+3. Start the webhook HTTP server (FastAPI + uvicorn). The daily digest is driven by
+   Cloud Scheduler calling `POST /internal/cron/daily`; the service runs no internal timer.
+4. Block until interrupted, then drain in-flight webhook dispatches.
 
 The fix loop is non-durable and in-memory (ADK long-running suspend/resume + `fixflow`'s
 in-memory parked-run registry, with a per-run `CI_TIMEOUT` bounding each wait); there is

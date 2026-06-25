@@ -1,7 +1,7 @@
 # ingest
 
 The normalized `Envelope` that every ingress source is reduced to before reaching the root
-agent. `Kind` identifies the trigger (cron.daily, cron.weekly, lint, coverage, ci);
+agent. `Kind` identifies the trigger (cron.daily, lint, coverage, ci);
 `payload` carries the raw source body for the chosen workflow to parse.
 
 ## Details

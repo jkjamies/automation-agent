@@ -8,12 +8,18 @@ authoritative design.
 
 ```mermaid
 flowchart TD
-    Cron["scheduler (APScheduler cron 09:00 daily / Mon)"] -->|"KindCronDaily/Weekly"| Env["ingest.Envelope{Kind, Source, Payload}"]
-    WLint["POST /webhooks/lint (CI lint report)"] -->|KindLint| Env
-    WCov["POST /webhooks/coverage (coverage report)"] -->|KindCoverage| Env
-    WCI["POST /webhooks/github (check_run, HMAC)"] -->|KindCI| Env
+    CS["Cloud Scheduler (daily)"] --> GW
+    GH["GitHub (webhooks, HMAC)"] --> GW
+    GW["managed API gateway<br/>(single ingress: authn, rate-limit, route)"] --> Cron["POST /internal/cron/daily"]
+    GW --> WLint["POST /webhooks/lint (CI lint report)"]
+    GW --> WCov["POST /webhooks/coverage (coverage report)"]
+    GW --> WCI["POST /webhooks/github (check_run)"]
+    Cron -->|KindCronDaily| Env["ingest.Envelope{Kind, Source, Payload}"]
+    WLint -->|KindLint| Env
+    WCov -->|KindCoverage| Env
+    WCI -->|KindCI| Env
     Env --> Root["root.Dispatcher.dispatch (by Kind)"]
-    Root -->|"cron.*"| Sum["Summary workflow"]
+    Root -->|"cron.daily"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: kickoff"]
     Root -->|ci| LFR["Fix engines: resume (each no-ops unless its check matches)"]
@@ -38,7 +44,7 @@ flowchart TD
 
 ## Mental model
 
-Ingest (cron / webhook / future hooks) -> **root agent** (dispatcher) -> one of three
+Ingest (Cloud Scheduler / webhook / future hooks) -> **root agent** (dispatcher) -> one of three
 workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
 remediation with a PR + CI loop), or **covfixer** (coverage remediation; shares the
 fixflow engine with the lint-fixer). Deterministic, agent-free tooling lives under

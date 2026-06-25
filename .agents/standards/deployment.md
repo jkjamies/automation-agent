@@ -22,8 +22,10 @@ back here (no environment is stood up yet — the repo is code only).
 
 ```
  GitHub repo ──webhook(HMAC)──► POST /webhooks/{lint,coverage,github}
- Cloud Scheduler ─bearer─►       POST /internal/cron/{daily,weekly}   (digests)
+ Cloud Scheduler ─bearer─►       POST /internal/cron/daily            (daily digest)
  Cloud Scheduler ─bearer─►       POST /internal/sweep                 (timeout catch-all)
+                                         │
+                              managed API gateway   (single ingress: authn, rate-limit, routing)
                                          │
                                     Cloud Run service (this app)
                                          │
@@ -49,7 +51,6 @@ doesn't scan them for recovery.
 | `POST /webhooks/coverage` | HMAC | kick off a coverage fix |
 | `POST /webhooks/github` | HMAC | `check_run` event → resume the parked fix |
 | `POST /internal/cron/daily` | Bearer (`INTERNAL_TOKEN`) | fire the daily commit digest |
-| `POST /internal/cron/weekly` | Bearer | fire the weekly digest |
 | `POST /internal/sweep` | Bearer | resolve runs whose CI never reported within `CI_TIMEOUT` |
 
 `/internal/*` are **disabled (404)** unless `INTERNAL_TOKEN` is set. HMAC verification is
@@ -108,21 +109,16 @@ vars that matter specifically for a **cloud** deploy:
    `GITHUB_WEBHOOK_SECRET`, events: **Check runs**. The lint/coverage kickoffs
    (`/webhooks/{lint,coverage}`) are POSTed by your CI with the same secret in
    `X-Hub-Signature-256` (see [`ci-integration.md`](ci-integration.md)).
-5. **Cloud Scheduler** — three jobs, each an HTTP POST with header
+5. **Cloud Scheduler** — two jobs, each an HTTP POST with header
    `Authorization: Bearer <INTERNAL_TOKEN>` (or an OIDC token + a tightened handler):
 
    | Job | Target | Schedule (cron) |
    |---|---|---|
    | daily digest | `POST /internal/cron/daily` | `0 9 * * *` |
-   | weekly digest | `POST /internal/cron/weekly` | `0 9 * * 1` |
    | timeout sweep | `POST /internal/sweep` | e.g. `*/15 * * * *` |
 
-> **Caution — don't double-fire the digests.** The app *also* runs an in-process cron
-> (`CRON_DAILY`/`CRON_WEEKLY`). If you use Cloud Scheduler (the scale-to-zero path), the
-> in-process scheduler will *also* fire whenever an instance is warm → duplicate digests.
-> Until there's a flag to disable it (see TODO), pick **one**: either keep
-> `min-instances=1` and use the in-process cron (no Scheduler cron jobs), **or** use Cloud
-> Scheduler and treat the in-process cron as redundant.
+Cloud Scheduler is the only trigger — the service runs no in-process cron, so there is no
+double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
 
 ### Prod vs local stack
 
@@ -132,7 +128,7 @@ vars that matter specifically for a **cloud** deploy:
 | LLM | Ollama (default) | `LLM_PROVIDER=gemini` (Vertex) unless a GPU VM runs Ollama |
 | Session + park store | `memory` / `sqlite` | `firestore` (durable; a restart resumes in-flight runs) |
 | Secrets | `.env` | Secret Manager mounted as env |
-| Scheduler | in-process cron | Cloud Scheduler → `/internal/cron/*` + `/internal/sweep` (Bearer) — disable the in-process cron, see caution |
+| Scheduler | Cloud Scheduler → `/internal/cron/daily` + `/internal/sweep` (Bearer) | same — Cloud Scheduler is the only trigger; no in-process cron |
 | Timeout safety | in-process per-run timer | the timer **and** the durable `/internal/sweep` catch-all |
 | HA / scale-out | n/a | `firestore` is a shared store with atomic single-winner claims, so replicas can in principle share it; not exercised yet |
 
@@ -149,8 +145,6 @@ GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is a
       that deletes sessions whose `updated_at` is older than a stale threshold
       (≈ `CI_TIMEOUT × MAX_ITERATIONS` + margin, ~6–24h). Works for firestore + sqlite; can
       ride `/internal/sweep` or a Firestore native TTL policy on `_sessions`.
-- [ ] **Disable the in-process scheduler** via a flag (e.g. `SCHEDULER=external`) so Cloud
-      Scheduler + `min-instances=0` is safe without duplicate digests (see caution).
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds back into measured
       coverage (see [`testing.md`](testing.md)).
@@ -206,7 +200,7 @@ itself, so those defenses hold end-to-end regardless of the edge.
                                   │  SESSION_BACKEND=firestore (scale-to-0) │
                                   └────────────────────────────────────────┘
                                                      ▲
-   Cloud Scheduler ─OIDC(aud=Cloud Run)─► Internal ALB ─┘   /internal/cron/* , /internal/sweep
+   Cloud Scheduler ─OIDC(aud=Cloud Run)─► Internal ALB ─┘   /internal/cron/daily , /internal/sweep
 ```
 
 `ingress=internal-and-cloud-load-balancing` admits the Internal ALB in the same VPC and nothing
@@ -241,7 +235,7 @@ concrete product selection is recorded in [`DEPLOYMENT.md`](../../DEPLOYMENT.md)
 |---|---|---|
 | `check_run` resume (`/webhooks/github`) | gateway on operator net | gateway public listener, IP-allowlisted → private Cloud Run |
 | lint/coverage kickoff (`/webhooks/{lint,coverage}`) | CI runners on operator net → gateway | CI → gateway (same listener) |
-| daily/weekly digest (`/internal/cron/*`) | Cloud Scheduler → OIDC → Internal ALB | same |
+| daily digest (`/internal/cron/daily`) | Cloud Scheduler → OIDC → Internal ALB | same |
 | timeout sweep (`/internal/sweep`) | Cloud Scheduler → OIDC → Internal ALB | same |
 
 - **GHE self-hosted** — GitHub and the gateway both sit on the operator network, so ingress
@@ -261,13 +255,11 @@ Cron and the sweep are **always** GCP-internal regardless of GitHub flavor; only
 | `INTERNAL_AUTH` | `bearer` \| `oidc` \| `both` for `/internal/*` | `bearer` |
 | `OIDC_AUDIENCE` | expected `aud` (the Cloud Run service URL) | empty |
 | `OIDC_ALLOWED_SA` | comma-list of allowed caller SA emails (gateway SA, Scheduler SA) | empty |
-| `SCHEDULER` | `internal` \| `external` (disable in-process cron when Cloud Scheduler owns it) | `internal` |
 
 The defaults reproduce the public-URL behavior, so this posture is selected entirely through
 config + infra. The agent logic (`fixflow`, sessions, park store, `REPOS`) is unchanged; the
-architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`) and the
-`SCHEDULER=external` flag, which land Go-first and mirror per the parity contract. Per-port
-drift: `specs/parity-status.md`.
+architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`), which
+lands Go-first and mirrors per the parity contract. Per-port drift: `specs/parity-status.md`.
 
 ---
 

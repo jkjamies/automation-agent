@@ -1,7 +1,7 @@
 /**
  * Builds the root dispatcher and registers available workflows.
  *
- * Cron kinds → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume (all
+ * CronDaily → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume (all
  * fix engines). Each handler is optional.
  */
 import type { BaseAgent } from '@google/adk';
@@ -14,12 +14,10 @@ import { Dispatcher, type Handler, type Logger } from './root';
  * Wires the dispatcher. Each handler is optional. `ciResume` handles {@link Kind.CI} for
  * every fix workflow (lint, coverage) — each engine no-ops unless its check matches.
  *
- * `summaryDaily` and `summaryWeekly` are distinct agents (different commit windows and
- * titles) so the Monday cron posts a real weekly digest, not a copy of the daily one.
+ * `summaryDaily` runs the daily commit digest fired by the daily Cloud Scheduler trigger.
  */
 export interface Deps {
   summaryDaily?: BaseAgent | null; // Kind.CronDaily
-  summaryWeekly?: BaseAgent | null; // Kind.CronWeekly
   lintKickoff?: Handler | null; // Kind.Lint
   coverageKickoff?: Handler | null; // Kind.Coverage
   ciResume?: Handler | null; // Kind.CI (dispatched to all fix engines)
@@ -28,16 +26,13 @@ export interface Deps {
 
 /**
  * Build the dispatcher and register the available workflows.
- * Cron kinds → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume.
+ * CronDaily → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume.
  */
 export function buildRootDispatcher(d: Deps): Dispatcher {
   const disp = new Dispatcher(d.log);
 
   if (d.summaryDaily) {
     registerSummary(disp, d.summaryDaily, Kind.CronDaily, 'Run the daily commit digest.');
-  }
-  if (d.summaryWeekly) {
-    registerSummary(disp, d.summaryWeekly, Kind.CronWeekly, 'Run the weekly commit digest.');
   }
   if (d.lintKickoff) {
     disp.register(Kind.Lint, d.lintKickoff);

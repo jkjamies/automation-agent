@@ -174,7 +174,7 @@ func TestCoverageKickoffRequiresSignature(t *testing.T) {
 func TestInternalEndpointsDisabledWithoutToken(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest)
-	for _, path := range []string{"/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep"} {
+	for _, path := range []string{"/internal/cron/daily", "/internal/sweep"} {
 		if rec := do(t, s, http.MethodPost, path, "", nil); rec.Code != http.StatusNotFound {
 			t.Errorf("%s without token = %d, want 404", path, rec.Code)
 		}
@@ -197,12 +197,12 @@ func TestInternalRequiresBearer(t *testing.T) {
 func TestInternalCronDispatches(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest, WithInternalToken("secret"))
-	rec := do(t, s, http.MethodPost, "/internal/cron/weekly", "", map[string]string{"Authorization": "Bearer secret"})
+	rec := do(t, s, http.MethodPost, "/internal/cron/daily", "", map[string]string{"Authorization": "Bearer secret"})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
-	if c.env.Kind != ingest.KindCronWeekly {
-		t.Errorf("kind = %q, want cron.weekly", c.env.Kind)
+	if c.env.Kind != ingest.KindCronDaily {
+		t.Errorf("kind = %q, want cron.daily", c.env.Kind)
 	}
 }
 

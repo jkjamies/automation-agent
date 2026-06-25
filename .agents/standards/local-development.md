@@ -40,15 +40,16 @@ agent locally without asking anyone.
 
 ```bash
 cd go
-make run                          # the service: webhooks + in-process cron (cmd/agent), SESSION_BACKEND=memory
+make run                          # the service: webhooks + /internal cron hooks (cmd/agent), SESSION_BACKEND=memory
 SESSION_BACKEND=sqlite make run   # durable local: parked runs survive a restart (a local .db file)
 make playground                   # local ADK web UI + CLI at http://localhost:8080 (cmd/playground, dev only)
 make ci                           # the full local gate (tidy + vet + arch + test + cover)
 ```
 
 - **`make run`** → `go run ./cmd/agent`. Loads `.env`, builds the LLM + session service +
-  park store, wires the agents, starts the in-process cron and the HTTP server on `PORT`
-  (default `8080`), and drains gracefully on SIGINT/SIGTERM.
+  park store, wires the agents, starts the HTTP server on `PORT` (default `8080`), and drains
+  gracefully on SIGINT/SIGTERM. There is no in-process cron — the daily digest is triggered by
+  POSTing `/internal/cron/daily` (Cloud Scheduler in prod; `curl` + Bearer token locally).
 - **`make playground`** → `go run ./cmd/playground web api webui`. A **dev-only** binary
   (never deployed) for poking the configured model. `go run ./cmd/playground console`
   gives an interactive CLI instead.
@@ -107,15 +108,14 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | **Notify** | | |
 | `NOTIFY_PROVIDER` | `slack` | `slack` \| `teams` |
 | `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` | — | required for the chosen provider |
-| **Server / schedule** | | |
+| **Server** | | |
 | `PORT` | `8080` | HTTP port |
-| `CRON_DAILY` / `CRON_WEEKLY` | `0 9 * * *` / `0 9 * * 1` | in-process scheduler |
 | `MAX_ITERATIONS` | `3` | fix attempts before "needs review" |
 | `CI_TIMEOUT` | `90m` | how long a parked run waits before the sweep/timer frees it |
 
 ### What each feature needs to actually do something
 
-- **Daily/weekly summary** needs `REPOS` **and** a notifier (`SLACK_WEBHOOK_URL` or
+- **Daily summary** needs `REPOS` **and** a notifier (`SLACK_WEBHOOK_URL` or
   `TEAMS_WEBHOOK_URL`). Without a notifier it logs "disabled" and runs webhooks-only.
 - **Lint-fixer / coverage-fixer** need a `GITHUB_TOKEN` with repo scope to push and open
   PRs, and each target repo needs the `agent-lint-verify` / `agent-coverage-verify`
@@ -164,7 +164,7 @@ model (or `LLM_PROVIDER=gemini`), and a `.env` (copy `python/.env.example`).
 ```bash
 cd python
 make build                        # uv sync
-make run                          # webhooks + in-process cron (cmd/agent), SESSION_BACKEND=memory
+make run                          # webhooks + /internal cron hooks (cmd/agent), SESSION_BACKEND=memory
 SESSION_BACKEND=sqlite make run   # durable local: parked runs survive a restart
 make playground                   # local ADK web UI
 ```

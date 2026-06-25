@@ -60,10 +60,8 @@ export interface Config {
   slackWebhookUrl: string;
   teamsWebhookUrl: string;
 
-  // Server / schedule
+  // Server
   port: string;
-  cronDaily: string;
-  cronWeekly: string;
 
   // Lint-fixer
   maxIterations: number;
@@ -149,8 +147,6 @@ export function loadFrom(get: Lookup): Config {
     slackWebhookUrl: getOr(get, 'SLACK_WEBHOOK_URL', ''),
     teamsWebhookUrl: getOr(get, 'TEAMS_WEBHOOK_URL', ''),
     port: getOr(get, 'PORT', '8080'),
-    cronDaily: getOr(get, 'CRON_DAILY', '0 9 * * *'),
-    cronWeekly: getOr(get, 'CRON_WEEKLY', '0 9 * * 1'),
     maxIterations,
     ciTimeoutMs: parseDuration(getOr(get, 'CI_TIMEOUT', '90m')),
     githubWebhookSecret: getOr(get, 'GITHUB_WEBHOOK_SECRET', ''),

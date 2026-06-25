@@ -21,7 +21,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGitHub)
 	// Cloud Scheduler ingress (Bearer-token auth; disabled unless INTERNAL_TOKEN is set).
 	s.mux.HandleFunc("POST /internal/cron/daily", s.handleCronDaily)
-	s.mux.HandleFunc("POST /internal/cron/weekly", s.handleCronWeekly)
 	s.mux.HandleFunc("POST /internal/sweep", s.handleSweep)
 }
 
@@ -60,21 +59,13 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	s.dispatch(r.Context(), w, ingest.New(ingest.KindCI, "webhook:/github", body, s.now()))
 }
 
-// handleCronDaily / handleCronWeekly let Cloud Scheduler trigger the summary digests, so
-// the cron schedule lives GCP-side and the Cloud Run instance can scale to zero between
-// fires. They emit the same envelopes the in-process scheduler would.
+// handleCronDaily lets Cloud Scheduler trigger the daily summary digest, so the schedule
+// lives GCP-side and the Cloud Run instance can scale to zero between fires.
 func (s *Server) handleCronDaily(w http.ResponseWriter, r *http.Request) {
 	if !s.internalAuthenticated(w, r) {
 		return
 	}
 	s.dispatch(r.Context(), w, ingest.New(ingest.KindCronDaily, "internal:/cron/daily", nil, s.now()))
-}
-
-func (s *Server) handleCronWeekly(w http.ResponseWriter, r *http.Request) {
-	if !s.internalAuthenticated(w, r) {
-		return
-	}
-	s.dispatch(r.Context(), w, ingest.New(ingest.KindCronWeekly, "internal:/cron/weekly", nil, s.now()))
 }
 
 // handleSweep runs the durable timeout sweep (Cloud Scheduler drives it on a schedule),

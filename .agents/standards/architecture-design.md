@@ -9,7 +9,7 @@
 
 A single long-running Go service that ingests events from many sources, routes every
 ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
-(daily/weekly commit digests), a **Lint-fixer** workflow (autonomous lint remediation
+(daily commit digest), a **Lint-fixer** workflow (autonomous lint remediation
 with PR + CI feedback loop), and a **Coverage-fixer** workflow (autonomous test-coverage
 remediation). Lint-fixer and Coverage-fixer share a generic `fixflow` engine.
 
@@ -41,8 +41,8 @@ persistent GCP deployment — both behind one `model.LLM` builder.
 
 ## 1. Goals
 
-1. **Ingest events** from many possible sources. Today: cron at **09:00 daily** and
-   **09:00 Mondays**. Tomorrow: GitHub / Jira / Confluence / human-triggered. Every
+1. **Ingest events** from many possible sources. Today: a **daily** Cloud Scheduler
+   trigger. Tomorrow: GitHub / Jira / Confluence / human-triggered. Every
    ingest is normalized into one envelope and handed to the **Root Agent**.
 2. **Root Agent** is the universal dispatcher — it inspects the envelope and kicks off
    the right workflow agent(s). Keeping a single entry point is why the root agent exists.
@@ -65,10 +65,10 @@ future human interaction or additional hooks — hence the root-agent indirectio
 ## 2. Architecture at a glance
 
 ```
-                         ┌──────────────── ingest sources ─────────────────┐
-   cron 09:00 daily ─┐   │  webhook: /ci   webhook: /ingest   (future: Jira)│
-   cron 09:00 Mon  ──┼──▶│        scheduler + HTTP server                   │
-   (future hooks) ───┘   └───────────────────────┬─────────────────────────┘
+                          ┌──────────────── ingest sources ─────────────────┐
+   Cloud Scheduler ───┐    │  webhook: /ci   webhook: /ingest   (future: Jira)│
+   (daily) ───────────┼───▶│   managed API gateway ──► HTTP server           │
+   GitHub webhooks ───┘    └───────────────────────┬─────────────────────────┘
                                                   ▼
                                        ingest.Envelope (normalized)
                                                   ▼
@@ -93,7 +93,7 @@ future human interaction or additional hooks — hence the root-agent indirectio
 Lint-fixer and Coverage-fixer share the generic `fixflow` engine; each is a thin `Spec`
 (branch/label/check + triage/analyze) over it.
 
-Tooling (`gitrepo`, `githubapi`, `webhook`, `notify`, `scheduler`) is **deterministic
+Tooling (`gitrepo`, `githubapi`, `webhook`, `notify`) is **deterministic
 and agent-free** — agents call it, it never imports agents. This boundary is enforced by
 ARCH tests.
 
@@ -109,7 +109,6 @@ everything in-process.
 | Agent framework | `google.golang.org/adk` | v1.x; agents, workflow agents, runner, model interface |
 | Local LLM | `github.com/ollama/ollama/api` | native typed client; `Chat(ctx, *ChatRequest, fn)` |
 | Cloud LLM | `google.golang.org/adk/model/gemini` | prod path |
-| Cron | `github.com/robfig/cron/v3` | `0 9 * * *` daily, `0 9 * * 1` Mondays |
 | HTTP | `net/http` (`ServeMux`, Go 1.22 method routing) | stdlib is enough; chi only if we outgrow it |
 | GitHub API | `github.com/google/go-github` | list commits, create PR |
 | Git working tree | `github.com/go-git/go-git/v5` | clone/branch/commit/push (pure Go) |
@@ -170,7 +169,7 @@ automation-agent/
 ├── .golangci.yml
 │
 ├── cmd/agent/
-│   ├── main.go                    # wire config→tooling→runner→scheduler→http; block
+│   ├── main.go                    # wire config→tooling→runner→http; block
 │   └── AGENTS.md
 │
 ├── ARCH/                          # architecture tests (its own package)
@@ -263,12 +262,9 @@ automation-agent/
     ├── gitrepo/                   # go-git: Clone, Branch, Commit, Push
     │   ├── repo.go
     │   └── AGENTS.md
-    ├── webhook/                   # http.Server + handlers (daily/weekly/ci/ingest)
+    ├── webhook/                   # http.Server + handlers (daily/ci/ingest)
     │   ├── server.go
     │   ├── handlers.go
-    │   └── AGENTS.md
-    ├── scheduler/                 # robfig/cron wrapper -> emits ingest.Envelope
-    │   ├── scheduler.go
     │   └── AGENTS.md
     └── notify/                    # Slack/Teams behind one interface
         ├── notify.go              # Notifier interface
@@ -497,17 +493,12 @@ other checks are ignored.
 
 **Cloud Scheduler ingress (Bearer token, `INTERNAL_TOKEN`; disabled → 404 when unset):**
 
-- `POST /internal/cron/{daily,weekly}` — externalize the commit-digest schedules so the
-  schedule lives GCP-side and the instance can scale to zero between fires. They emit the
-  same envelopes the in-process scheduler would.
+- `POST /internal/cron/daily` — externalizes the commit-digest schedule so it lives GCP-side
+  and the instance can scale to zero between fires. Cloud Scheduler is the only trigger; the
+  service runs no in-process cron.
 - `POST /internal/sweep` — the **durable timeout catch-all**: drives `ParkStore.Sweep` /
   `Engine.SweepTimeouts`, resolving every parked run whose CI never reported within
   `CI_TIMEOUT`. This is the restart-safe counterpart to the in-process per-run timer.
-
-> **Caution:** the in-process cron (`CRON_DAILY`/`CRON_WEEKLY`) still exists. If Cloud
-> Scheduler also fires `/internal/cron/*`, a warm instance double-fires the digests. Pick one
-> (see [`DEPLOYMENT.md`](../../DEPLOYMENT.md) for the ops detail and the pending
-> scheduler-disable flag).
 
 ### Correlation strategy (same-PR retry)
 
@@ -626,6 +617,13 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 - **AGENTS.md everywhere** — one per directory + the root + `cmd/agent`. Inside each agent
   dir, a single *shared* `AGENTS.md` documents both `agents_setup.go` and `<name>.go`
   conventions.
+- **Docs + diagrams move with the code (a change is not done until they do).** `docs_test`
+  only checks that an `AGENTS.md` **exists**, not that it is current — freshness is on the
+  author. When an agent, ingest `Kind`, ingress route, or tooling package changes, sweep every
+  place that describes or draws it (the package `AGENTS.md`; the root + `agent/root` diagrams;
+  the §2/§13 and `deployment.md` topology diagrams; `.env.example` + the §12 config table) in
+  the same change, mirrored across all ports. Full checklist:
+  [`documentation.md`](documentation.md).
 - **specs/** — gitignored developer memory. `make spec name=add-jira-ingest kind=add`
   copies `.agents/templates/add.spec.md` → `specs/2026-…-add-jira-ingest.md`. Templates:
   **add / remove / change / migrate**, each with sections: Context, Motivation, Scope,
@@ -665,7 +663,6 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `NOTIFY_PROVIDER` | `slack` \| `teams` | `slack` |
 | `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` | notify targets | — |
 | `PORT` | webhook server port | `8080` |
-| `CRON_DAILY` / `CRON_WEEKLY` | **in-process** schedules (see §13 caution) | `0 9 * * *` / `0 9 * * 1` |
 | `MAX_ITERATIONS` | lint-fix loop cap | `3` |
 | `CI_TIMEOUT` | how long a suspended fix run waits for its CI result before the timer/sweep frees it ("needs review") | `90m` |
 | `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/*` | — |
@@ -686,8 +683,10 @@ the firestore emulator for local tests, and the pending-work list — lives in
 
 ```
  GitHub repo ──webhook(HMAC)──► POST /webhooks/{lint,coverage,github}
- Cloud Scheduler ─bearer─►       POST /internal/cron/{daily,weekly}   (digests)
+ Cloud Scheduler ─bearer─►       POST /internal/cron/daily            (daily digest)
  Cloud Scheduler ─bearer─►       POST /internal/sweep                 (timeout catch-all)
+                                         │
+                              managed API gateway   (single ingress: authn, rate-limit, routing)
                                          │
                                     Cloud Run service (this app)
                                          │
@@ -701,12 +700,9 @@ the firestore emulator for local tests, and the pending-work list — lives in
   parked runs durable, the instance no longer has to stay warm to avoid stranding work — it can
   scale toward zero and rehydrate a parked run when CI reports. ADC gives the service account
   `roles/datastore.user` (Firestore) and `roles/aiplatform.user` (Gemini-on-Vertex); no keys.
-- **Cloud Scheduler** drives `/internal/cron/{daily,weekly}` (digests) and `/internal/sweep`
-  (durable timeout catch-all), each Bearer-authed with `INTERNAL_TOKEN`.
-- **Caution — don't double-fire the digests.** The in-process cron (`CRON_DAILY`/`CRON_WEEKLY`)
-  still runs; on a warm instance it fires *in addition to* Cloud Scheduler. Until a flag to
-  disable it lands (pending — see `DEPLOYMENT.md`), pick one: `min-instances=1` + in-process
-  cron (no Scheduler cron jobs), **or** Cloud Scheduler + treat the in-process cron as redundant.
+- **Cloud Scheduler** drives `/internal/cron/daily` (the daily digest) and `/internal/sweep`
+  (durable timeout catch-all), each Bearer-authed with `INTERNAL_TOKEN`. It is the only
+  trigger — the service runs no in-process cron, so there is no double-fire to guard against.
 - **Lightweight mode: `SESSION_BACKEND=memory`** (default) on a persistent instance
   (`min-instances=1` or a GCE VM) keeps the old zero-storage behavior — but a restart strands
   parked runs, so avoid redeploying while runs are parked.
@@ -735,7 +731,7 @@ Each phase is independently testable.
    templates), ARCH tests, AGENTS.md, config, ingest envelope. *(no agents yet)*
 2. **Model layer** — `setup`: Ollama adapter + Gemini factory + `BuildLLM` + prompt loader
    + runner. *(adapter tested vs stub Ollama)*
-3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `scheduler`, `webhook`.
+3. **Tooling** — `githubapi`, `gitrepo`, `notify`, `webhook`.
    *(all unit-tested, agent-free)*
 4. **Root + Summary** — end-to-end summary workflow on a real repo via local Gemma →
    Slack/Teams.
@@ -752,12 +748,11 @@ Each phase is independently testable.
   firestore backends; UUID session ids; atomic single-winner claim. ✅ done.
 - **Phase C** — eager terminal cleanup (`DeleteSession`) + status-aware terminal summaries
   (success / max-iter / timeout, enriched via `githubapi.Compare`). ✅ done.
-- **Phase D** — Cloud Scheduler ingress: `/internal/cron/{daily,weekly}` + `/internal/sweep`
+- **Phase D** — Cloud Scheduler ingress: `/internal/cron/daily` + `/internal/sweep`
   (durable timeout catch-all), Bearer-auth via `INTERNAL_TOKEN`. ✅ done.
 - **Phase E (pending)** — orphan-session GC (sessions that crash between create-and-park),
-  Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, an in-process-scheduler
-  disable flag (so `min-instances=0` is safe), and CI running the Firestore emulator. Detail in
-  [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+  Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, and CI running the
+  Firestore emulator. Detail in [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 - **Cross-port parity** — keep the ports in lockstep on the durable-session design; current
   per-port drift is tracked in `specs/parity-status.md`.
 

@@ -2,7 +2,7 @@
 
 The HTTP ingress. The `/webhooks/*` POST endpoints reduce requests to an `ingest.Envelope`
 and hand them to an `IngestFunc` (which should enqueue and return fast); the `/internal/*`
-endpoints are the **Cloud Scheduler** ingress (cron digests + the durable timeout sweep).
+endpoints are the **Cloud Scheduler** ingress (the daily digest + the durable timeout sweep).
 Every `/webhooks/*` POST is HMAC-authenticated with `X-Hub-Signature-256` when a secret is
 configured — the `/webhooks/lint` and `/webhooks/coverage` kickoffs as well as
 `/webhooks/github`, because a kickoff selects a caller-supplied target repo.
@@ -66,8 +66,8 @@ sequenceDiagram
 - `POST /webhooks/coverage` — coverage-fixer **kickoff** (agnostic coverage report) → `KindCoverage`.
 - `POST /webhooks/github` — lint/coverage-fixer **resume** (GitHub `check_run`) → `KindCI`.
 - `GET /healthz` — liveness.
-- `POST /internal/cron/{daily,weekly}` — Cloud Scheduler triggers for the summary digests
-  (`KindCronDaily`/`KindCronWeekly`); lets the cron live GCP-side so Cloud Run scales to zero.
+- `POST /internal/cron/daily` — Cloud Scheduler trigger for the daily summary digest
+  (`KindCronDaily`); lets the schedule live GCP-side so Cloud Run scales to zero.
 - `POST /internal/sweep` — Cloud Scheduler trigger for the durable timeout sweep
   (`SweepFunc` → `Engine.SweepTimeouts`), the restart-proof catch-all behind the soft timer.
 

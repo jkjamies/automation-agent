@@ -1,10 +1,10 @@
 # automation-agent
 
 A lightweight, long-running Go service that ingests events from many sources
-(cron today; GitHub/Jira/Confluence/human later), routes every ingest through a
+(Cloud Scheduler today; GitHub/Jira/Confluence/human later), routes every ingest through a
 **root agent**, and runs three workflow agents:
 
-- **Summary** — daily/weekly digest of the last 24h of commits across N repos,
+- **Summary** — daily digest of the last 24h of commits across N repos,
   posted to Slack or Teams.
 - **Lint-fixer** — consumes an agnostic lint payload, opens a PR with a fix, and
   loops (max 3) on CI feedback before posting a result. Suspend/resume rides on
@@ -63,8 +63,8 @@ setup — source of truth), and [`ci-integration.md`](.agents/standards/ci-integ
 
 The fix loop's suspend/resume state is stored behind one `SESSION_BACKEND` switch —
 `memory` (default, zero-dependency), `sqlite` (durable local file), or `firestore` (cloud,
-scale-to-zero). Cloud Scheduler can drive the digests and the timeout sweep via
-`POST /internal/cron/{daily,weekly}` and `POST /internal/sweep` (Bearer-auth'd with
+scale-to-zero). Cloud Scheduler drives the daily digest and the timeout sweep via
+`POST /internal/cron/daily` and `POST /internal/sweep` (Bearer-auth'd with
 `INTERNAL_TOKEN`). With a durable backend a process restart resumes parked runs cleanly,
 which is what lets Cloud Run scale toward zero.
 
@@ -89,8 +89,8 @@ work to reach a fully production-validated system:
       to validate kickoff → PR → CI → resume → success/needs-review.
 - [ ] **Cloud deploy**: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager,
       `LLM_PROVIDER=gemini` in prod (or Ollama on a GPU VM). With durable sessions a restart
-      resumes cleanly, so Cloud Run can scale toward zero (Cloud Scheduler drives the cron +
-      sweep). Full step-by-step + remaining infra TODOs in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+      resumes cleanly, so Cloud Run can scale toward zero (Cloud Scheduler drives the daily
+      digest + sweep). Full step-by-step + remaining infra TODOs in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 - [ ] **Cross-port parity**: keep the ports in lockstep on the durable-session design
       (sessions + park store + `/internal` ingress + status-aware summaries); current
       per-port drift is tracked in `specs/parity-status.md`.
@@ -109,7 +109,7 @@ Nice-to-haves:
 | `cmd/agent` | service entrypoint |
 | `cmd/playground` | local ADK web UI (dev only; never deployed) |
 | `internal/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `internal/{githubapi,gitrepo,webhook,notify,scheduler}` | deterministic tooling |
+| `internal/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
 | `internal/{config,ingest}` | configuration + normalized event envelope |
 | `ARCH/` | architecture-conformance tests |
 | `.agents/` | standards, skills, and spec templates |

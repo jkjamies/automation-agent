@@ -79,10 +79,8 @@ class Config:
     slack_webhook_url: str = ""
     teams_webhook_url: str = ""
 
-    # Server / schedule
+    # Server
     port: str = "8080"
-    cron_daily: str = "0 9 * * *"
-    cron_weekly: str = "0 9 * * 1"
 
     # Lint-fixer
     max_iterations: int = 3
@@ -201,8 +199,6 @@ def load_from(get: Lookup) -> Config:
         slack_webhook_url=_get_or(get, "SLACK_WEBHOOK_URL", ""),
         teams_webhook_url=_get_or(get, "TEAMS_WEBHOOK_URL", ""),
         port=_get_or(get, "PORT", "8080"),
-        cron_daily=_get_or(get, "CRON_DAILY", "0 9 * * *"),
-        cron_weekly=_get_or(get, "CRON_WEEKLY", "0 9 * * 1"),
         max_iterations=max_iterations,
         ci_timeout=_parse_duration(_get_or(get, "CI_TIMEOUT", "90m")),
         github_webhook_secret=_get_or(get, "GITHUB_WEBHOOK_SECRET", ""),

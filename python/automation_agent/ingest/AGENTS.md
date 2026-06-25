@@ -1,23 +1,22 @@
 # automation_agent/ingest
 
 The normalized `Envelope` that every ingress source is reduced to before reaching
-the root agent. `Kind` identifies the trigger (cron.daily, cron.weekly, lint, ci);
+the root agent. `Kind` identifies the trigger (cron.daily, lint, ci);
 `Payload` carries the raw source body for the chosen workflow to parse.
 
 ## Flow
 
 ```mermaid
 flowchart TD
-    S1[scheduler 09:00] -->|KindCronDaily| N
-    S2[scheduler Mon 09:00] -->|KindCronWeekly| N
+    S1["Cloud Scheduler -> POST /internal/cron/daily"] -->|KindCronDaily| N
     W1["webhook:/lint"] -->|KindLint, raw lint JSON| N
     W2[GitHub check_run webhook] -->|KindCI, check_run body| N
     N["new(kind, source, payload, at)"] --> E["Envelope{kind, source, received_at, payload}"]
     E --> V{"k.valid()?"}
-    V -->|"cron.daily / cron.weekly / lint / ci"| OK[recognized -> route]
+    V -->|"cron.daily / lint / ci"| OK[recognized -> route]
     V -->|other| BAD[false -> reject]
     OK --> R[root agent routing]
-    R -->|cron.*| D1[summary digest workflow]
+    R -->|cron.daily| D1[summary digest workflow]
     R -->|lint| D2[lint-fixer workflow]
     R -->|ci| D3[resume lint-fixer]
 ```

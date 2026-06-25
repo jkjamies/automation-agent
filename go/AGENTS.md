@@ -8,12 +8,18 @@ first — it is the authoritative design.
 
 ```mermaid
 flowchart TD
-    Cron["scheduler (cron 09:00 daily / Mon)"] -->|"KindCronDaily/Weekly"| Env["ingest.Envelope{Kind, Source, Payload}"]
-    WLint["POST /webhooks/lint (CI lint report)"] -->|KindLint| Env
-    WCov["POST /webhooks/coverage (coverage report)"] -->|KindCoverage| Env
-    WCI["POST /webhooks/github (check_run, HMAC)"] -->|KindCI| Env
+    CS["Cloud Scheduler (daily)"] --> GW
+    GH["GitHub (webhooks, HMAC)"] --> GW
+    GW["managed API gateway<br/>(single ingress: authn, rate-limit, route)"] --> Cron["POST /internal/cron/daily"]
+    GW --> WLint["POST /webhooks/lint (CI lint report)"]
+    GW --> WCov["POST /webhooks/coverage (coverage report)"]
+    GW --> WCI["POST /webhooks/github (check_run)"]
+    Cron -->|KindCronDaily| Env["ingest.Envelope{Kind, Source, Payload}"]
+    WLint -->|KindLint| Env
+    WCov -->|KindCoverage| Env
+    WCI -->|KindCI| Env
     Env --> Root["root.Dispatcher.Dispatch (by Kind)"]
-    Root -->|"cron.*"| Sum["Summary workflow"]
+    Root -->|"cron.daily"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: Kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: Kickoff"]
     Root -->|ci| LFR["Lint/Coverage-fixer: Resume (by check name)"]

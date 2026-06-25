@@ -1,7 +1,7 @@
 /*
- * Package ingest defines the normalized event envelope that every ingress source (cron,
- * webhooks, and future hooks like GitHub/Jira/Confluence) is reduced to before being handed
- * to the root agent. See ../.agents/standards/architecture-design.md §2.
+ * Package ingest defines the normalized event envelope that every ingress source (Cloud
+ * Scheduler, webhooks, and future hooks like GitHub/Jira/Confluence) is reduced to before
+ * being handed to the root agent. See ../.agents/standards/architecture-design.md §2.
  */
 package io.github.jkjamies.automationagent.ingest
 
@@ -9,8 +9,7 @@ import java.time.Instant
 
 /** Kind identifies what triggered an ingest, so the root agent can route it. */
 enum class Kind(val value: String) {
-    CRON_DAILY("cron.daily"), // 09:00 daily -> summary digest
-    CRON_WEEKLY("cron.weekly"), // 09:00 Monday
+    CRON_DAILY("cron.daily"), // daily Cloud Scheduler trigger -> summary digest
     LINT("lint"), // agnostic lint payload -> lint-fixer
     COVERAGE("coverage"), // agnostic coverage payload -> coverage-fixer
     CI("ci"), // GitHub check_run -> resume lint/coverage fixer
@@ -33,7 +32,7 @@ enum class Kind(val value: String) {
  */
 data class Envelope(
     val kind: Kind,
-    val source: String, // human-readable origin, e.g. "scheduler", "webhook:/lint"
+    val source: String, // human-readable origin, e.g. "internal:/cron/daily", "webhook:/lint"
     val receivedAt: Instant,
     val payload: ByteArray,
 ) {

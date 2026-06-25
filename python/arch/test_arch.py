@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-_TOOLING = ("githubapi", "gitrepo", "webhook", "notify", "scheduler")
+_TOOLING = ("githubapi", "gitrepo", "webhook", "notify")
 _AGENT_PREFIX = "automation_agent.agent"
 _PROVIDER_PAT = re.compile(
     r"(litellm|lite_llm|adk\.models\.gemini|google\.adk\.models\.Gemini|google\.genai)"

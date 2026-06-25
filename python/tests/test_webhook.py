@@ -179,7 +179,7 @@ def test_internal_endpoints_disabled_without_token() -> None:
     # No internal_token -> the endpoints are off (404), never open by default.
     c = Capture()
     client = TestClient(Server(c.ingest).app)
-    for path in ("/internal/cron/daily", "/internal/cron/weekly", "/internal/sweep"):
+    for path in ("/internal/cron/daily", "/internal/sweep"):
         assert client.post(path).status_code == 404
     assert c.env is None
 
@@ -201,14 +201,6 @@ def test_internal_cron_daily_dispatches() -> None:
     assert c.env is not None
     assert c.env.kind == Kind.CRON_DAILY
     assert c.env.source == "internal:/cron/daily"
-
-
-def test_internal_cron_weekly_dispatches() -> None:
-    c = Capture()
-    client = TestClient(Server(c.ingest, internal_token="s3cret").app)
-    resp = client.post("/internal/cron/weekly", headers=_bearer("s3cret"))
-    assert resp.status_code == 202
-    assert c.env is not None and c.env.kind == Kind.CRON_WEEKLY
 
 
 def test_internal_sweep_runs_sweep_func() -> None:

@@ -109,7 +109,7 @@ export function newFetchAgent(
 
 /**
  * Return a code agent that posts the digest to chat under the given title (e.g.
- * "Daily commit digest" / "Weekly commit digest").
+ * "Daily commit digest").
  */
 export function newNotifyAgent(notifier: Notifier, title: string): BaseAgent {
   return new NotifyAgent(notifier, title);

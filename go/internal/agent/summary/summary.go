@@ -55,7 +55,7 @@ func newFetchAgent(repo string, gh CommitLister, window time.Duration, now func(
 }
 
 // newNotifyAgent returns a code agent that posts the summarizer's digest to chat under
-// the given title (e.g. "Daily commit digest" / "Weekly commit digest").
+// the given title (e.g. "Daily commit digest").
 func newNotifyAgent(n notify.Notifier, title string) (agent.Agent, error) {
 	return agent.New(agent.Config{
 		Name:        "notify",

@@ -33,14 +33,13 @@ The detailed, copy-paste steps for each item are in
       `LLM_PROVIDER=gemini`, and the secrets/`REPOS` as env.
 - [ ] GitHub **Check runs** webhook → `https://<service>/webhooks/github` (HMAC =
       `GITHUB_WEBHOOK_SECRET`).
-- [ ] Three Cloud Scheduler jobs (Bearer `INTERNAL_TOKEN`): `/internal/cron/daily`,
-      `/internal/cron/weekly`, `/internal/sweep`. **Disable the in-process cron** to avoid
-      double-firing digests (see the caution in the standards doc).
+- [ ] Two Cloud Scheduler jobs (Bearer `INTERNAL_TOKEN`): `/internal/cron/daily` (the daily
+      digest) and `/internal/sweep` (the durable timeout sweep). Cloud Scheduler is the only
+      trigger — the service runs no in-process cron.
 
 ## TODO (not yet implemented)
 
 - [ ] **Orphan-session GC** for sessions created but never parked.
-- [ ] **Disable the in-process scheduler** via a flag (e.g. `SCHEDULER=external`).
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds into measured coverage.
 - [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
@@ -60,8 +59,8 @@ Full rationale and detail for every item: [`.agents/standards/deployment.md`](.a
 > Nothing here is implemented yet. The fuller design — threat model, the per-item safety
 > checklist, alternatives considered, and the concrete gateway-product selection — lives in the
 > local spec `specs/20260624-private-ingress-gravitee-gateway.md`. Defaults
-> (`ingress=all`, `INTERNAL_AUTH=bearer`, in-process cron) reproduce today's public behavior, so
-> this is entirely opt-in.
+> (`ingress=all`, `INTERNAL_AUTH=bearer`, daily Cloud Scheduler trigger) reproduce today's public
+> behavior, so this is entirely opt-in.
 
 Phased so each step is independently testable:
 
@@ -69,9 +68,9 @@ Phased so each step is independently testable:
       `ingress=internal-and-cloud-load-balancing` + Internal ALB + serverless NEG; prove a curl
       with an OIDC token works and the public URL is dead. *(No app change.)*
 - [ ] **Phase 1 — app auth.** Add `INTERNAL_AUTH` (`bearer`|`oidc`|`both`) + an OIDC verifier
-      (signature + `aud` = service URL + allowed SA email) and the `SCHEDULER=external` flag in
-      Go; switch Cloud Scheduler to OIDC; mirror to `python/`, `kotlin/`, `javascript/`. Retires
-      `INTERNAL_TOKEN` and folds in the existing OIDC + scheduler-disable TODOs above.
+      (signature + `aud` = service URL + allowed SA email) in Go; switch Cloud Scheduler to OIDC;
+      mirror to `python/`, `kotlin/`, `javascript/`. Retires `INTERNAL_TOKEN` and folds in the
+      existing OIDC TODO above.
 - [ ] **Phase 2 — gateway.** Deploy the self-hosted API gateway on the operator network;
       implement the HMAC / GitHub IP-allowlist / replay-window / rate-limit / size-cap policies +
       OIDC mint + mTLS; route `/webhooks/*` (and optionally cron) through it.
@@ -85,5 +84,5 @@ Phased so each step is independently testable:
 - [ ] **CodeRabbit review before any commit** (repo hard rule).
 
 **Rollback** is pure config/infra: set Cloud Run `ingress=all`, restore `INTERNAL_AUTH=bearer`,
-remove the gateway + Internal ALB, point GitHub webhooks back at the Cloud Run URL, and re-enable
-the in-process or Scheduler cron. No data migration; sessions/park store are unaffected.
+remove the gateway + Internal ALB, and point GitHub webhooks back at the Cloud Run URL. No data
+migration; sessions/park store are unaffected.

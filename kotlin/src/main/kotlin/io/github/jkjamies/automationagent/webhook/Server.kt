@@ -81,16 +81,11 @@ fun Application.webhookRoutes(
             dispatch(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
         }
 
-        // Internal Cloud Scheduler ingress: cron digests + the durable timeout sweep. Guarded by a
-        // Bearer INTERNAL_TOKEN; an unset token disables the routes entirely (404).
+        // Internal Cloud Scheduler ingress: the daily digest + the durable timeout sweep. Guarded by
+        // a Bearer INTERNAL_TOKEN; an unset token disables the routes entirely (404).
         post("/internal/cron/daily") {
             if (!call.internalAuthorized(internalToken)) return@post
             dispatch(ingest, Envelope.new(Kind.CRON_DAILY, "internal:/cron/daily", EMPTY_BODY, now()))
-        }
-
-        post("/internal/cron/weekly") {
-            if (!call.internalAuthorized(internalToken)) return@post
-            dispatch(ingest, Envelope.new(Kind.CRON_WEEKLY, "internal:/cron/weekly", EMPTY_BODY, now()))
         }
 
         post("/internal/sweep") {
