@@ -201,8 +201,10 @@ data class Config(
     }
 }
 
+// Trims so trailing whitespace/newlines on a value from the real environment
+// (e.g. a CI secret with a trailing newline) do not leak into the setting.
 private fun getOr(get: Config.Companion.Lookup, key: String, def: String): String {
-    val v = get(key)
+    val v = get(key)?.trim()
     return if (!v.isNullOrEmpty()) v else def
 }
 

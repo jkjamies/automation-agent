@@ -231,9 +231,13 @@ def load_from(get: Lookup) -> Config:
 
 
 def _get_or(get: Lookup, key: str, default: str) -> str:
+    # Trim so trailing whitespace/newlines on a value from the real environment
+    # (e.g. a CI secret with a trailing newline) do not leak into the setting.
     v = get(key)
-    if v:
-        return v
+    if v is not None:
+        v = v.strip()
+        if v:
+            return v
     return default
 
 

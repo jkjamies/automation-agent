@@ -219,7 +219,9 @@ export function validate(c: Config): void {
 }
 
 function getOr(get: Lookup, key: string, def: string): string {
-  const v = get(key);
+  // Trim so trailing whitespace/newlines on a value from the real environment
+  // (e.g. a CI secret with a trailing newline) do not leak into the setting.
+  const v = get(key)?.trim();
   if (v !== undefined && v !== '') {
     return v;
   }

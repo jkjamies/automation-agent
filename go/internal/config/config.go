@@ -219,9 +219,14 @@ func (c Config) Validate() error {
 
 type lookup func(string) (string, bool)
 
+// getOr returns the trimmed value for key, or def when unset or blank. Trimming
+// guards against trailing whitespace/newlines on values from the real environment
+// (e.g. a CI secret with a trailing newline); godotenv already trims values it parses.
 func getOr(get lookup, key, def string) string {
-	if v, ok := get(key); ok && v != "" {
-		return v
+	if v, ok := get(key); ok {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
 	}
 	return def
 }
