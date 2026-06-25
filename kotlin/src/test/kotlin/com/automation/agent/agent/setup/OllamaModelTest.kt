@@ -66,6 +66,24 @@ class OllamaModelTest : BehaviorSpec({
         }
     }
 
+    Given("a stream that ends without a done=true chunk") {
+        When("generating with stream=true") {
+            Then("a terminal response is still emitted from the accumulated content") {
+                val body =
+                    """
+                    {"model":"gemma","message":{"role":"assistant","content":"Hello "},"done":false}
+                    {"model":"gemma","message":{"role":"assistant","content":"world"},"done":false}
+                    """.trimIndent()
+                val m = OllamaModel("http://ollama.test", "gemma", ndjsonClient(body))
+                val resps = m.generateContent(LlmRequest(contents = listOf(userText("hi"))), stream = true).toList()
+
+                val final = resps.last { !it.partial }
+                contentText(final.content) shouldBe "Hello world"
+                final.finishReason shouldBe FinishReason.STOP
+            }
+        }
+    }
+
     Given("an Ollama server returning 500") {
         When("generating") {
             Then("the error surfaces from the flow") {

@@ -128,18 +128,28 @@ class OllamaModel(
         // first-chunk wait is bounded by the socket timeout, not total generation time.
         val full = StringBuilder()
         val toolCalls = mutableListOf<OllamaToolCall>()
+        var model = ""
+        var emittedFinal = false
         for (line in response.bodyAsText().lineSequence()) {
             if (line.isBlank()) continue
             val chunk = ollamaJson.decodeFromString(OllamaChatResponse.serializer(), line)
             full.append(chunk.message.content)
             toolCalls += chunk.message.toolCalls
+            if (chunk.model.isNotEmpty()) model = chunk.model
 
             if (stream && !chunk.done && chunk.message.content.isNotBlank()) {
-                emit(newTextResponse(chunk.message.content, chunk.model).copy(partial = true))
+                emit(newTextResponse(chunk.message.content, model).copy(partial = true))
             }
             if (chunk.done) {
-                emit(finalResponse(full.toString(), toolCalls.toList(), chunk.model))
+                emit(finalResponse(full.toString(), toolCalls.toList(), model))
+                emittedFinal = true
             }
+        }
+        // A stream that ends without an explicit done=true (the body closes after only partial
+        // chunks) still needs its terminal response, so the runner always receives one final
+        // LlmResponse. Mirrors the JS port's post-loop fallback.
+        if (!emittedFinal) {
+            emit(finalResponse(full.toString(), toolCalls.toList(), model))
         }
     }
 
