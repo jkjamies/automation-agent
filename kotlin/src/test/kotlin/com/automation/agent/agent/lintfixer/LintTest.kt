@@ -39,8 +39,8 @@ private val noopGitHub = object : GitHub {
 class LintTest : BehaviorSpec({
     Given("a triage JSON array in noisy output") {
         When("parsing it") {
-            Then("non-empty entries are kept") {
-                val work = parseTriage("""x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]}] y""")
+            Then("non-empty entries are kept; empty-path and empty-problems files are dropped") {
+                val work = parseTriage("""x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]},{"path":"b.go","problems":[]}] y""")
                 work shouldHaveSize 1
                 work[0].path shouldBe "a.go"
                 work[0].items shouldHaveSize 1

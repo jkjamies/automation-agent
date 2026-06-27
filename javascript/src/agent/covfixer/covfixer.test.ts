@@ -15,8 +15,9 @@ import { parseTriage, triage } from './triage';
 describe('covfixer triage', () => {
   it('parses a triage JSON array', () => {
     const work = parseTriage(
-      '[{"path":"calc.ts","uncovered":["divide error path","add edge cases"]},{"path":"","uncovered":[]}]',
+      '[{"path":"calc.ts","uncovered":["divide error path","add edge cases"]},{"path":"","uncovered":[]},{"path":"empty.ts","uncovered":[]}]',
     );
+    // Empty-path and empty-uncovered files are both dropped (no work).
     expect(work).toHaveLength(1);
     expect(work[0]!.path).toBe('calc.ts');
     expect(work[0]!.items).toHaveLength(2);

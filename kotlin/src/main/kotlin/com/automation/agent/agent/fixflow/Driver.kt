@@ -136,7 +136,7 @@ class Driver private constructor(private val engine: Engine) {
                 val rec = store.get(sid) ?: return mapOf("error" to "apply_fix: no run params for session \"$sid\"")
                 val res = engine.attemptOnce(runParamsFromJson(rec.params))
                 mapOf("pr_number" to res.pr.number, "head_sha" to res.headSha)
-            } catch (e: NoWorkException) {
+            } catch (_: NoWorkException) {
                 // Triage found nothing actionable — not a failure. Report a clean result so the
                 // sequencer concludes (stopWhen) and afterDrive sends a positive notice.
                 mapOf("clean" to true)

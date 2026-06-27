@@ -34,7 +34,9 @@ def _parse_triage(out: str) -> list[FileWork]:
     work: list[FileWork] = []
     for f in files:
         path = (f.get("path") or "") if isinstance(f, dict) else ""
-        if isinstance(path, str) and path.strip() != "":
-            uncovered = f.get("uncovered") or []
+        uncovered = (f.get("uncovered") or []) if isinstance(f, dict) else []
+        # A file with nothing uncovered is no work — drop it so an all-empty report collapses
+        # to zero work and routes through the clean (NoWorkError) terminal outcome.
+        if isinstance(path, str) and path.strip() != "" and uncovered:
             work.append(FileWork(path=path, items=list(uncovered)))
     return work

@@ -25,7 +25,7 @@ func (s stubLLM) GenerateContent(context.Context, *model.LLMRequest, bool) iter.
 }
 
 func TestParseTriage(t *testing.T) {
-	work, err := parseTriage(`x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]}] y`)
+	work, err := parseTriage(`x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]},{"path":"b.go","problems":[]}] y`)
 	if err != nil {
 		t.Fatalf("parseTriage: %v", err)
 	}

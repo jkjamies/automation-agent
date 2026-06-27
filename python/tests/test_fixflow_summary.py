@@ -71,6 +71,30 @@ def test_timeout_framing_names_check_and_window() -> None:
     assert "No changes were recorded on the PR." in text
 
 
+def test_clean_framing_is_workflow_prefixed_fun_line() -> None:
+    # The clean outcome is a workflow-prefixed fun line plus the repo, deterministically chosen
+    # by repo name — never the review alarm. The exact string is locked for cross-port parity
+    # (Go/Kotlin/JS assert the identical string).
+    text = build_summary_text(
+        SummaryInput(
+            outcome=TerminalOutcome.CLEAN,
+            workflow="lint",
+            full_repo="acme/api",
+            pr_number=0,
+            attempts=0,
+        )
+    )
+    assert text == (
+        "Lint: all tidy already — I'll see myself out 🚪 — acme/api is already clean, no PR opened."
+    )
+    assert "review" not in text
+    # A different repo rotates to a different line, still workflow-prefixed.
+    other = build_summary_text(
+        SummaryInput(outcome=TerminalOutcome.CLEAN, workflow="coverage", full_repo="acme/web", pr_number=0, attempts=0)
+    )
+    assert other.startswith("Coverage: ")
+
+
 def test_no_changes_recorded() -> None:
     text = build_summary_text(
         SummaryInput(

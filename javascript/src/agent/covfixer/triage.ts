@@ -43,6 +43,11 @@ export function parseTriage(out: string): FileWork[] {
       continue;
     }
     const uncovered = Array.isArray(f.uncovered) ? f.uncovered.map(String) : [];
+    // A file with nothing uncovered is no work — drop it so an all-empty report collapses to
+    // zero work and routes through the clean (NoWorkError) terminal outcome.
+    if (uncovered.length === 0) {
+      continue;
+    }
     work.push({ path, items: uncovered });
   }
   return work;

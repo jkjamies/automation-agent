@@ -13,8 +13,9 @@ import { parseTriage, triage } from './triage';
 describe('lintfixer triage', () => {
   it('parses a triage JSON array', () => {
     const work = parseTriage(
-      'x [{"path":"a.ts","problems":["unchecked error"]},{"path":"","problems":[]}] y',
+      'x [{"path":"a.ts","problems":["unchecked error"]},{"path":"","problems":[]},{"path":"b.ts","problems":[]}] y',
     );
+    // Empty-path and empty-problems files are both dropped (no work).
     expect(work).toHaveLength(1);
     expect(work[0]!.path).toBe('a.ts');
     expect(work[0]!.items).toHaveLength(1);

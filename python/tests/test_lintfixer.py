@@ -12,8 +12,10 @@ from automation_agent.agent.lintfixer.triage import _parse_triage
 
 def test_parse_triage() -> None:
     work = _parse_triage(
-        'x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]}] y'
+        'x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]},'
+        '{"path":"b.go","problems":[]}] y'
     )
+    # Empty-path and empty-problems files are both dropped (no work).
     assert len(work) == 1
     assert work[0].path == "a.go"
     assert len(work[0].items) == 1

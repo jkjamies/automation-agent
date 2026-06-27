@@ -55,8 +55,9 @@ class ScriptedLlm(BaseLlm):
 def test_parse_triage() -> None:
     work = _parse_triage(
         '[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},'
-        '{"path":"","uncovered":[]}]'
+        '{"path":"","uncovered":[]},{"path":"empty.go","uncovered":[]}]'
     )
+    # Empty-path and empty-uncovered files are both dropped (no work).
     assert len(work) == 1
     assert work[0].path == "calc.go"
     assert len(work[0].items) == 2

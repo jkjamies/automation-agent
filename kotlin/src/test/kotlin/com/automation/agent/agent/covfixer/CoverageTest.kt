@@ -48,8 +48,8 @@ private val noopGitHub = object : GitHub {
 class CoverageTest : BehaviorSpec({
     Given("a coverage triage array") {
         When("parsing it") {
-            Then("non-empty entries with their uncovered items are kept") {
-                val work = parseTriage("""[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]}]""")
+            Then("non-empty entries are kept; empty-path and empty-uncovered files are dropped") {
+                val work = parseTriage("""[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]},{"path":"empty.go","uncovered":[]}]""")
                 work shouldHaveSize 1
                 work[0].path shouldBe "calc.go"
                 work[0].items shouldHaveSize 2

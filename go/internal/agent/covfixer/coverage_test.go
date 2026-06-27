@@ -36,7 +36,7 @@ func (s scriptedLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _
 }
 
 func TestParseTriage(t *testing.T) {
-	work, err := parseTriage(`[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]}]`)
+	work, err := parseTriage(`[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]},{"path":"empty.go","uncovered":[]}]`)
 	if err != nil {
 		t.Fatalf("parseTriage: %v", err)
 	}

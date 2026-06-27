@@ -45,9 +45,12 @@ func parseTriage(out string) ([]fixflow.FileWork, error) {
 	}
 	work := make([]fixflow.FileWork, 0, len(files))
 	for _, f := range files {
-		if strings.TrimSpace(f.Path) != "" {
-			work = append(work, fixflow.FileWork{Path: f.Path, Items: f.Problems})
+		// A file with no problems is no work — drop it so an all-empty report collapses to
+		// zero work and routes through the clean (ErrNoWork) terminal outcome.
+		if strings.TrimSpace(f.Path) == "" || len(f.Problems) == 0 {
+			continue
 		}
+		work = append(work, fixflow.FileWork{Path: f.Path, Items: f.Problems})
 	}
 	return work, nil
 }

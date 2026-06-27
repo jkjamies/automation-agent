@@ -35,5 +35,7 @@ internal fun parseTriage(out: String): List<FileWork> {
         } catch (e: Exception) {
             throw IllegalArgumentException("decode triage JSON: ${e.message}")
         }
-    return files.filter { it.path.isNotBlank() }.map { FileWork(path = it.path, items = it.problems) }
+    // A file with no problems is no work — drop it so an all-empty report collapses to zero
+    // work and routes through the clean (NoWorkException) terminal outcome.
+    return files.filter { it.path.isNotBlank() && it.problems.isNotEmpty() }.map { FileWork(path = it.path, items = it.problems) }
 }
