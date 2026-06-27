@@ -152,7 +152,7 @@ class GitRepoTest : BehaviorSpec({
         }
     }
 
-    Given("a clone that resolves a token") {
+    Given("a clone with a provider configured but a local remote (so no token is minted)") {
         When("the working tree is on disk afterward") {
             Then("the token is never written into .git/config (transport auth, not in-URL)") {
                 // A local seed path needs no token, so the provider is not consulted; the point of the
