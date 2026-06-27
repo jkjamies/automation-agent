@@ -3,6 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
 import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend } from './config';
 
@@ -250,5 +251,32 @@ describe('config: github app', () => {
         ),
       ),
     ).toThrow(/read GITHUB_APP_PRIVATE_KEY_PATH/);
+  });
+
+  it('masks every credential when inspected/logged', () => {
+    const c = loadFrom(
+      mapLookup(
+        appEnv({
+          GITHUB_TOKEN: 'ghp_supersecretpat',
+          GITHUB_WEBHOOK_SECRET: 'webhook-shhh',
+          INTERNAL_TOKEN: 'internal-shhh',
+          SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/SECRETPATH',
+        }),
+      ),
+    );
+    const rendered = inspect(c);
+    for (const leak of [
+      'ghp_supersecretpat',
+      'webhook-shhh',
+      'internal-shhh',
+      'SECRETPATH',
+      'PRIVATE KEY',
+    ]) {
+      expect(rendered).not.toContain(leak);
+    }
+    expect(rendered).toContain('***');
+    // Redaction is display-only: the real values stay readable on the object itself.
+    expect(c.githubToken).toBe('ghp_supersecretpat');
+    expect(c.githubAppPrivateKeyPem).toContain('PRIVATE KEY');
   });
 });

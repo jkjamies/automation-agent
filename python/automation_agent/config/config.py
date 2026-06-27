@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import timedelta
 from enum import StrEnum
 
@@ -45,7 +45,20 @@ class SessionBackend(StrEnum):
     FIRESTORE = "firestore"
 
 
-@dataclass
+# Fields whose value is a credential and must never appear in repr/logs.
+_SECRET_FIELDS = frozenset(
+    {
+        "github_token",
+        "github_webhook_secret",
+        "internal_token",
+        "slack_webhook_url",
+        "teams_webhook_url",
+        "github_app_private_key_pem",
+    }
+)
+
+
+@dataclass(repr=False)
 class Config:
     """All runtime settings."""
 
@@ -116,6 +129,20 @@ class Config:
         the static PAT fallback (``github_token``) is used."""
         return self.github_app_id != 0
 
+    def __repr__(self) -> str:
+        """Render the config with every credential masked, so a debug/startup log never
+        leaks a secret. The dataclass-synthesized repr would otherwise dump the App
+        private key, PAT, webhook secret, internal token, and webhook URLs verbatim; an
+        unset secret stays visibly empty, a set one collapses to ``***``. Mirrors Go's
+        ``String()``, JS's inspect redaction, and Kotlin's ``toString``."""
+        parts = []
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if f.name in _SECRET_FIELDS and value:
+                value = "***"
+            parts.append(f"{f.name}={value!r}")
+        return f"{type(self).__name__}({', '.join(parts)})"
+
     def validate(self) -> None:
         """Check invariants that defaults alone cannot guarantee.
 
@@ -166,7 +193,9 @@ def load() -> Config:
     cfg = load_from(os.environ.get)
     # When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
     # CLI login so a local run authenticates to GitHub without a hand-set token.
-    if not cfg.github_token:
+    # Skipped in App mode: the App provider mints its own tokens, so shelling out to gh
+    # would be a useless subprocess that could also hydrate a PAT never asked for.
+    if not cfg.app_mode() and not cfg.github_token:
         cfg.github_token = _gh_cli_token()
     return cfg
 

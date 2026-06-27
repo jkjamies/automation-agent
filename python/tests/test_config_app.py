@@ -156,3 +156,23 @@ def test_app_mode_unreadable_key_file() -> None:
                 )
             )
         )
+
+
+def test_repr_redacts_secrets() -> None:
+    cfg = load_from(
+        map_lookup(
+            _app_env(
+                {
+                    "GITHUB_TOKEN": "ghp_supersecretpat",
+                    "GITHUB_WEBHOOK_SECRET": "webhook-shhh",
+                    "INTERNAL_TOKEN": "internal-shhh",
+                    "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/SECRETPATH",
+                }
+            )
+        )
+    )
+    rendered = repr(cfg)
+    for leak in ("ghp_supersecretpat", "webhook-shhh", "internal-shhh", "SECRETPATH", "PRIVATE KEY"):
+        assert leak not in rendered, f"repr leaked {leak!r}: {rendered}"
+    assert "***" in rendered
+    assert "github_app_id=42" in rendered  # non-secret fields stay visible for debugging
