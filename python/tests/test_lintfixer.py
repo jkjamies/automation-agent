@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from automation_agent.agent.fixflow import AnalyzeInput, Deps, FileWork
+from automation_agent.agent.fixflow import AnalyzeInput, Deps, FileWork, NoWorkError
 from automation_agent.agent.lintfixer import new_engine, triage
 from automation_agent.agent.lintfixer.analyze import _build_file_prompt, analyze
 from automation_agent.agent.lintfixer.triage import _parse_triage
@@ -12,8 +12,10 @@ from automation_agent.agent.lintfixer.triage import _parse_triage
 
 def test_parse_triage() -> None:
     work = _parse_triage(
-        'x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]}] y'
+        'x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]},'
+        '{"path":"b.go","problems":[]}] y'
     )
+    # Empty-path and empty-problems files are both dropped (no work).
     assert len(work) == 1
     assert work[0].path == "a.go"
     assert len(work[0].items) == 1
@@ -22,7 +24,7 @@ def test_parse_triage() -> None:
 async def test_triage(fake_llm) -> None:
     work = await triage(fake_llm('[{"path":"a.go","problems":["x"]}]'), "report")
     assert len(work) == 1 and work[0].path == "a.go"
-    with pytest.raises(ValueError):
+    with pytest.raises(NoWorkError):
         await triage(fake_llm("[]"), "report")
 
 

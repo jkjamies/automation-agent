@@ -2,6 +2,7 @@ package covfixer
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func (s scriptedLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _
 }
 
 func TestParseTriage(t *testing.T) {
-	work, err := parseTriage(`[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]}]`)
+	work, err := parseTriage(`[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]},{"path":"empty.go","uncovered":[]}]`)
 	if err != nil {
 		t.Fatalf("parseTriage: %v", err)
 	}
@@ -52,8 +53,8 @@ func TestTriage(t *testing.T) {
 	if len(work) != 1 || work[0].Path != "calc.go" {
 		t.Errorf("work = %+v", work)
 	}
-	if _, err := Triage(context.Background(), scriptedLLM{triage: "[]"}, "report"); err == nil {
-		t.Error("empty triage should error")
+	if _, err := Triage(context.Background(), scriptedLLM{triage: "[]"}, "report"); !errors.Is(err, fixflow.ErrNoWork) {
+		t.Errorf("empty triage should report ErrNoWork, got %v", err)
 	}
 }
 

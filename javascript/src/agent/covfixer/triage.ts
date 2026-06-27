@@ -4,7 +4,7 @@
  */
 import type { BaseLlm } from '@google/adk';
 
-import { type FileWork, extractJsonArray } from '../fixflow/index';
+import { type FileWork, NoWorkError, extractJsonArray } from '../fixflow/index';
 import { generateText } from '../setup/generate';
 import { prompts } from './loader';
 
@@ -13,7 +13,7 @@ export async function triage(llm: BaseLlm, report: string): Promise<FileWork[]> 
   const out = await generateText(llm, prompts.mustGet('triage'), report);
   const work = parseTriage(out);
   if (work.length === 0) {
-    throw new Error('triage: no meaningful uncovered files found in report');
+    throw new NoWorkError('triage: no meaningful uncovered files found in report');
   }
   return work;
 }
@@ -43,6 +43,11 @@ export function parseTriage(out: string): FileWork[] {
       continue;
     }
     const uncovered = Array.isArray(f.uncovered) ? f.uncovered.map(String) : [];
+    // A file with nothing uncovered is no work — drop it so an all-empty report collapses to
+    // zero work and routes through the clean (NoWorkError) terminal outcome.
+    if (uncovered.length === 0) {
+      continue;
+    }
     work.push({ path, items: uncovered });
   }
   return work;

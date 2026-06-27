@@ -34,6 +34,7 @@ flowchart TD
     K["Kickoff(raw)"] --> KP["ParseKickoff{repo, base, report}"]
     KP --> DK["Driver.Kickoff: run fixer agent"]
     DK --> AF["apply_fix -> attemptOnce: Triage -> Open -> Analyze -> Commit (clone/branch/push/ensure PR)"]
+    AF -->|"triage found nothing (ErrNoWork)"| CLN["clean summary (CleanTitle) + clear; no PR, no park (StopWhen concludes)"]
     AF --> AW["await_ci (IsLongRunning)"]
     AW --> PK["ParkStore.Put(prKey=owner/repo#pr, attempts) + CITimeout timer"]
     PK --> SUS(["suspend (durable: survives restart)"])
@@ -59,8 +60,9 @@ flowchart TD
   deterministic sequencer model), and the Kickoff/Resume/onTimeout/`SweepTimeouts`
   lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record
   **and** the ADK session.
-- `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / max-iter
-  / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record.
+- `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean /
+  max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park
+  record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
 - `applyfix.go` — clone → branch (new/existing) → commit → push → ensure labeled PR.
 - `analyze.go` — `ParallelAnalyze`: one ADK parallel agent per `FileWork`, distinct
   state keys so they never collide.

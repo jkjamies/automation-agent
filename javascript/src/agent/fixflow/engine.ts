@@ -35,7 +35,23 @@ export interface FileWork {
   items: string[];
 }
 
-/** Normalizes an arbitrary tool report into per-file work (LLM-backed). */
+/**
+ * Thrown by a triage step when the report contains nothing actionable — the target is
+ * already clean. It is not a failure: the Driver reports it as a positive "nothing to
+ * address" outcome (a clean 👏 notification) instead of asking a human to review a fix
+ * that was never needed. Detected with `instanceof NoWorkError`.
+ */
+export class NoWorkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NoWorkError';
+  }
+}
+
+/**
+ * Normalizes an arbitrary tool report into per-file work (LLM-backed). Throws
+ * {@link NoWorkError} when the report has nothing actionable.
+ */
 export type TriageFunc = (llm: BaseLlm, report: string) => Promise<FileWork[]>;
 
 /**
@@ -70,6 +86,7 @@ export interface Spec {
   prTitle: string;
   successTitle: string; // notification title on success
   reviewTitle: string; // notification title when human review is needed
+  cleanTitle: string; // notification title when triage finds nothing to address
   triage: TriageFunc;
   analyze: AnalyzeFunc;
 }

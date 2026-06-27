@@ -144,6 +144,11 @@ class Sequencer(BaseLlm):
     action: str
     wait: str
     retry_when: Callable[[dict[str, Any]], bool] | None = None
+    # stop_when reports whether an Action result is already terminal — the loop concludes
+    # without ever calling Wait. None means always proceed to Wait. Use it for an Action that
+    # can finish the work itself (e.g. nothing to do), so the result is not forwarded to a Wait
+    # tool whose schema would reject it.
+    stop_when: Callable[[dict[str, Any]], bool] | None = None
     model_config = {"arbitrary_types_allowed": True}
 
     def __init__(
@@ -151,12 +156,14 @@ class Sequencer(BaseLlm):
         action: str,
         wait: str,
         retry_when: Callable[[dict[str, Any]], bool] | None = None,
+        stop_when: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
         super().__init__(  # type: ignore[call-arg]
             model=f"sequencer:{action}+{wait}",
             action=action,
             wait=wait,
             retry_when=retry_when,
+            stop_when=stop_when,
         )
 
     async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):  # type: ignore[override]
@@ -167,6 +174,7 @@ class Sequencer(BaseLlm):
 
         * none yet                  -> call Action
         * Action returned an error  -> conclude (nothing to wait on)
+        * Action result, stop_when  -> conclude (Action already finished the work)
         * Action returned a result  -> call Wait, forwarding the result as its args
         * Wait result, retry_when   -> call Action again
         * Wait result, otherwise    -> conclude
@@ -178,6 +186,8 @@ class Sequencer(BaseLlm):
             resp = dict(last.response or {})
             if "error" in resp:
                 return _sequencer_text(f"{self.action} failed: {resp['error']}")
+            if self.stop_when is not None and self.stop_when(resp):
+                return _sequencer_text("done")
             return self._call(self.wait, resp, contents)
         if last.name == self.wait:
             if self.retry_when is not None and self.retry_when(dict(last.response or {})):

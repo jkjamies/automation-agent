@@ -49,6 +49,59 @@ func TestLongRunDriverDeleteSession(t *testing.T) {
 	}
 }
 
+// TestSequencerStopWhen proves that when the Action result satisfies StopWhen, the loop
+// concludes immediately without ever calling Wait (so a terminal Action result is never
+// forwarded to a Wait tool whose schema would reject it).
+func TestSequencerStopWhen(t *testing.T) {
+	applied := 0
+	awaited := 0
+	apply, err := functiontool.New(functiontool.Config{Name: "apply", Description: "apply a fix"},
+		func(_ tool.Context, _ lrEmpty) (map[string]any, error) {
+			applied++
+			return map[string]any{"clean": true}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	await, err := functiontool.New(functiontool.Config{Name: "await", Description: "await CI", IsLongRunning: true},
+		func(_ tool.Context, _ lrArgs) (map[string]any, error) {
+			awaited++
+			return map[string]any{"status": "pending"}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewSequencerModel(SequencerConfig{
+		Action:   "apply",
+		Wait:     "await",
+		StopWhen: func(r map[string]any) bool { clean, _ := r["clean"].(bool); return clean },
+	})
+	ag, err := llmagent.New(llmagent.Config{
+		Name: "lr", Model: model, Instruction: "apply then await", Tools: []tool.Tool{apply, await},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewLongRunDriver("lr-app", "u", ag, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := d.Start(context.Background(), "s1", "go")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if res.ParkedCallID != "" {
+		t.Error("a clean (StopWhen) apply must not park")
+	}
+	if clean, _ := res.ToolResponses["apply"]["clean"].(bool); !clean {
+		t.Errorf("expected clean apply response, got %+v", res.ToolResponses["apply"])
+	}
+	if applied != 1 || awaited != 0 {
+		t.Errorf("StopWhen should run apply once and never await; applied=%d awaited=%d", applied, awaited)
+	}
+}
+
 type lrEmpty struct{}
 
 type lrArgs struct {

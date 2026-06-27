@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.string.shouldStartWith
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -81,6 +82,24 @@ class SummaryTest : BehaviorSpec({
             Then("no findings line is appended") {
                 val text = buildSummaryText(SummaryInput(outcome = TerminalOutcome.SUCCESS, workflow = "lint", fullRepo = "acme/api", prNumber = 1, attempts = 1, report = "   "))
                 text shouldNotContain "Targeted:"
+            }
+        }
+    }
+
+    Given("a clean outcome") {
+        When("building the summary") {
+            Then("it is a workflow-prefixed fun line plus the repo, never the review alarm (parity-locked)") {
+                val text = buildSummaryText(
+                    SummaryInput(outcome = TerminalOutcome.CLEAN, workflow = "lint", fullRepo = "acme/api", prNumber = 0, attempts = 0),
+                )
+                text shouldBe "Lint: all tidy already — I'll see myself out 🚪 — acme/api is already clean, no PR opened."
+                text shouldNotContain "review"
+            }
+            Then("a different repo rotates to a different line, still workflow-prefixed") {
+                val text = buildSummaryText(
+                    SummaryInput(outcome = TerminalOutcome.CLEAN, workflow = "coverage", fullRepo = "acme/web", prNumber = 0, attempts = 0),
+                )
+                text shouldStartWith "Coverage: "
             }
         }
     }

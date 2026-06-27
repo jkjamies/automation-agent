@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import type { AnalyzeInput, Deps } from '../fixflow/index';
+import { type AnalyzeInput, type Deps, NoWorkError } from '../fixflow/index';
 import { FakeLlm } from '../../testutil/fakes';
 import { analyze, buildFilePrompt } from './analyze';
 import { newLintEngine } from './lint';
@@ -13,18 +13,19 @@ import { parseTriage, triage } from './triage';
 describe('lintfixer triage', () => {
   it('parses a triage JSON array', () => {
     const work = parseTriage(
-      'x [{"path":"a.ts","problems":["unchecked error"]},{"path":"","problems":[]}] y',
+      'x [{"path":"a.ts","problems":["unchecked error"]},{"path":"","problems":[]},{"path":"b.ts","problems":[]}] y',
     );
+    // Empty-path and empty-problems files are both dropped (no work).
     expect(work).toHaveLength(1);
     expect(work[0]!.path).toBe('a.ts');
     expect(work[0]!.items).toHaveLength(1);
   });
 
-  it('runs triage and rejects an empty result', async () => {
+  it('runs triage and reports NoWorkError on an empty result', async () => {
     const work = await triage(new FakeLlm('[{"path":"a.ts","problems":["x"]}]'), 'report');
     expect(work).toHaveLength(1);
     expect(work[0]!.path).toBe('a.ts');
-    await expect(triage(new FakeLlm('[]'), 'report')).rejects.toThrow();
+    await expect(triage(new FakeLlm('[]'), 'report')).rejects.toThrow(NoWorkError);
   });
 });
 

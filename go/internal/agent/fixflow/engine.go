@@ -2,6 +2,7 @@ package fixflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,7 +26,14 @@ type FileWork struct {
 	Items []string
 }
 
-// TriageFunc normalizes an arbitrary tool report into per-file work (LLM-backed).
+// ErrNoWork is what a Triage step returns when the report contains nothing actionable —
+// the target is already clean. It is not a failure: the Driver reports it as a positive
+// "nothing to address" outcome (a clean ✅ notification) instead of asking a human to
+// review a fix that was never needed. Triage steps wrap it with %w so errors.Is detects it.
+var ErrNoWork = errors.New("no actionable work")
+
+// TriageFunc normalizes an arbitrary tool report into per-file work (LLM-backed). It
+// returns ErrNoWork (wrapped) when the report has nothing actionable.
 type TriageFunc func(ctx context.Context, llm model.LLM, report string) ([]FileWork, error)
 
 // AnalyzeInput is what an AnalyzeFunc receives. RepoDir is the checked-out working
@@ -72,6 +80,7 @@ type Spec struct {
 	PRTitle       string
 	SuccessTitle  string // notification title on success
 	ReviewTitle   string // notification title when human review is needed
+	CleanTitle    string // notification title when triage finds nothing to address
 	Triage        TriageFunc
 	Analyze       AnalyzeFunc
 }

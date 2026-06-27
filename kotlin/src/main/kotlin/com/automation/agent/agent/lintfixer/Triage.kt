@@ -2,6 +2,7 @@ package com.automation.agent.agent.lintfixer
 
 import com.google.adk.kt.models.Model
 import com.automation.agent.agent.fixflow.FileWork
+import com.automation.agent.agent.fixflow.NoWorkException
 import com.automation.agent.agent.fixflow.extractJsonArray
 import com.automation.agent.agent.setup.generateText
 import kotlinx.serialization.SerialName
@@ -18,7 +19,7 @@ suspend fun triage(llm: Model?, report: String): List<FileWork> {
     val model = requireNotNull(llm) { "triage: an LLM is required" }
     val out = generateText(model, prompts.get("triage"), report)
     val work = parseTriage(out)
-    require(work.isNotEmpty()) { "triage: no actionable files found in report" }
+    if (work.isEmpty()) throw NoWorkException("triage: no actionable files found in report")
     return work
 }
 
@@ -34,5 +35,7 @@ internal fun parseTriage(out: String): List<FileWork> {
         } catch (e: Exception) {
             throw IllegalArgumentException("decode triage JSON: ${e.message}")
         }
-    return files.filter { it.path.isNotBlank() }.map { FileWork(path = it.path, items = it.problems) }
+    // A file with no problems is no work — drop it so an all-empty report collapses to zero
+    // work and routes through the clean (NoWorkException) terminal outcome.
+    return files.filter { it.path.isNotBlank() && it.problems.isNotEmpty() }.map { FileWork(path = it.path, items = it.problems) }
 }

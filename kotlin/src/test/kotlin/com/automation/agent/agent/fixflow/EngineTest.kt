@@ -7,6 +7,7 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import com.automation.agent.agent.setup.ParkRecord
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.hours
@@ -25,11 +26,18 @@ private fun seedParked(prKey: String, sessionId: String, callId: String, attempt
 
 // A Spec with deterministic fake triage/analyze (no LLM). The analyze varies content per call so
 // every attempt is a real commit; [calls] counts attempts.
-private fun fixSpec(calls: AtomicInteger, triageThrows: Boolean = false): Spec =
+private fun fixSpec(calls: AtomicInteger, triageThrows: Boolean = false, triageClean: Boolean = false): Spec =
     Spec(
         name = "test", branch = "agent/fix", checkName = "agent-test-verify",
         commitMessage = "fix", prTitle = "Fix", successTitle = "Fix succeeded", reviewTitle = "Needs human review",
-        triage = TriageFunc { _, _ -> if (triageThrows) throw RuntimeException("triage boom") else listOf(FileWork("a.go", listOf("x"))) },
+        cleanTitle = "Already clean",
+        triage = TriageFunc { _, _ ->
+            when {
+                triageClean -> throw NoWorkException("triage: nothing here")
+                triageThrows -> throw RuntimeException("triage boom")
+                else -> listOf(FileWork("a.go", listOf("x")))
+            }
+        },
         analyze = AnalyzeFunc { listOf(FileEdit("a.go", "package a\n// v${calls.incrementAndGet()}\n")) },
     )
 
@@ -51,6 +59,25 @@ class EngineTest : BehaviorSpec({
                 gh.created?.head shouldBe "agent/fix"
                 gh.labeled shouldHaveSize 1
                 e.driver.parkedCount() shouldBe 1
+            }
+        }
+    }
+
+    Given("a kickoff whose triage finds nothing actionable") {
+        When("the engine handles it") {
+            Then("it finishes clean: no PR, no parked run, a positive notice (not review), and no error") {
+                val gh = FakeGitHub()
+                val n = FakeNotifier()
+                val e = Engine(
+                    fixSpec(AtomicInteger(0), triageClean = true),
+                    Deps(gh = gh, notifier = n, maxIter = 3, ciTimeout = 1.hours, cloneUrl = { _, _ -> seedRemote() }),
+                )
+                e.kickoff(kickoffRaw) // returns normally — the dispatcher sees success, not a failure
+                gh.created shouldBe null
+                e.driver.parkedCount() shouldBe 0
+                n.msgs shouldHaveSize 1
+                n.msgs[0].title shouldBe "Already clean"
+                n.msgs[0].text shouldNotContain "review"
             }
         }
     }

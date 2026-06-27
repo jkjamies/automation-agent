@@ -38,6 +38,11 @@ model.
 The generic suspend/resume plumbing (`LongRunDriver`, `newSequencerModel`) and the `ParkStore` +
 session-service backends live in `agent.setup`.
 
+When triage finds nothing actionable it throws `NoWorkException`; the apply_fix tool turns that
+into a clean result, the sequencer's `stopWhen` concludes without parking, and `finishClean` sends
+a positive `cleanTitle` notice (a workflow-prefixed fun line rotated deterministically by repo) —
+no PR, no review alarm. Every other error path is unchanged.
+
 Multiple engines can each be handed a `check_run` event; only the one whose `checkName` matches
 acts. Tested with fake triage/analyze + a JGit-seeded local repo + fakes, driving the real ADK
 runner through park/resume.

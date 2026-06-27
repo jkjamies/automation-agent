@@ -20,6 +20,7 @@ class TerminalOutcome(Enum):
     SUCCESS = "success"
     EXHAUSTED = "exhausted"
     TIMEOUT = "timeout"
+    CLEAN = "clean"  # triage found nothing to address — already clean, no PR opened
 
 
 @dataclass
@@ -69,7 +70,29 @@ def build_summary_text(in_: SummaryInput) -> str:
             f"({_attempts_phrase(in_.attempts)}). Please review. {changed}"
         )
         return _append_findings(text, "Targeted", in_.report)
+    if in_.outcome == TerminalOutcome.CLEAN:
+        return _clean_text(in_.workflow, in_.full_repo)
     return f"{in_.full_repo}: the {in_.workflow} fix reached an unknown terminal state."
+
+
+# Light-hearted "nothing to do" lines, rotated deterministically by repo name (a given repo
+# always gets the same line — stable and testable — while different repos vary). Each rendered
+# line is prefixed with the capitalized workflow name (Lint, Coverage, …) so the relation is
+# obvious at a glance. Kept byte-for-byte identical across all four ports (parity). Repo names
+# are ASCII, so the code-point sum is identical in every language.
+_CLEAN_MESSAGES = (
+    "nothing to see here 👏",
+    "squeaky clean, no work for me 🧹",
+    "all tidy already — I'll see myself out 🚪",
+    "spotless, not a thing to fix 🫧",
+    "already shipshape, standing down ✨",
+)
+
+
+def _clean_text(workflow: str, full_repo: str) -> str:
+    idx = sum(ord(c) for c in full_repo) % len(_CLEAN_MESSAGES)
+    title = workflow[:1].upper() + workflow[1:]
+    return f"{title}: {_CLEAN_MESSAGES[idx]} — {full_repo} is already clean, no PR opened."
 
 
 def _attempts_phrase(n: int) -> str:

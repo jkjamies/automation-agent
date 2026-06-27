@@ -7,6 +7,7 @@ import com.automation.agent.agent.fixflow.AnalyzeInput
 import com.automation.agent.agent.fixflow.Deps
 import com.automation.agent.agent.fixflow.FileWork
 import com.automation.agent.agent.fixflow.GitHub
+import com.automation.agent.agent.fixflow.NoWorkException
 import com.automation.agent.agent.setup.assistantText
 import com.automation.agent.githubapi.Comparison
 import com.automation.agent.githubapi.Pr
@@ -38,8 +39,8 @@ private val noopGitHub = object : GitHub {
 class LintTest : BehaviorSpec({
     Given("a triage JSON array in noisy output") {
         When("parsing it") {
-            Then("non-empty entries are kept") {
-                val work = parseTriage("""x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]}] y""")
+            Then("non-empty entries are kept; empty-path and empty-problems files are dropped") {
+                val work = parseTriage("""x [{"path":"a.go","problems":["unchecked error"]},{"path":"","problems":[]},{"path":"b.go","problems":[]}] y""")
                 work shouldHaveSize 1
                 work[0].path shouldBe "a.go"
                 work[0].items shouldHaveSize 1
@@ -49,11 +50,11 @@ class LintTest : BehaviorSpec({
 
     Given("a stub LLM") {
         When("triaging") {
-            Then("it returns work, and an empty array errors") {
+            Then("it returns work, and an empty array reports no work") {
                 val work = triage(StubModel("""[{"path":"a.go","problems":["x"]}]"""), "report")
                 work shouldHaveSize 1
                 work[0].path shouldBe "a.go"
-                shouldThrow<IllegalArgumentException> { triage(StubModel("[]"), "report") }
+                shouldThrow<NoWorkException> { triage(StubModel("[]"), "report") }
             }
         }
     }

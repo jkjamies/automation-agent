@@ -166,6 +166,13 @@ export class LongRunDriver {
 export type RetryWhen = (response: Record<string, unknown>) => boolean;
 
 /**
+ * Decides whether an Action result is already terminal — the loop concludes without ever
+ * calling Wait. Use it for an Action that can finish the work itself (e.g. nothing to do),
+ * so the result is not forwarded to a Wait tool whose schema would reject it.
+ */
+export type StopWhen = (response: Record<string, unknown>) => boolean;
+
+/**
  * A deterministic `BaseLlm` that emits a fixed Action -> Wait tool sequence.
  *
  * Call `action` (a normal tool), then `wait` (a long-running tool that suspends the
@@ -179,6 +186,7 @@ export class Sequencer extends BaseLlm {
     private readonly action: string,
     private readonly wait: string,
     private readonly retryWhen?: RetryWhen,
+    private readonly stopWhen?: StopWhen,
   ) {
     super({ model: `sequencer:${action}+${wait}` });
   }
@@ -195,6 +203,7 @@ export class Sequencer extends BaseLlm {
    * Choose the next step from the most recent function response in history:
    * - none yet                 -> call Action
    * - Action returned an error -> conclude (nothing to wait on)
+   * - Action result, stopWhen  -> conclude (Action already finished the work)
    * - Action returned a result -> call Wait, forwarding the result as its args
    * - Wait result, retryWhen   -> call Action again
    * - Wait result, otherwise   -> conclude
@@ -208,6 +217,9 @@ export class Sequencer extends BaseLlm {
       const resp = { ...(last.response ?? {}) };
       if ('error' in resp) {
         return sequencerText(`${this.action} failed: ${String(resp.error)}`);
+      }
+      if (this.stopWhen && this.stopWhen(resp)) {
+        return sequencerText('done');
       }
       return this.call(this.wait, resp, contents);
     }

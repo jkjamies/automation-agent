@@ -12,6 +12,7 @@ flowchart TD
     PK --> DRV["Driver.kickoff: LongRunDriver.start"]
     DRV --> AF["apply_fix tool -> Engine.attemptOnce"]
     AF --> TR["spec.triage(llm, report) -> FileWork[]"]
+    TR -->|"nothing actionable (NoWorkError)"| CLN["clean: notify cleanTitle, clear run; no PR, no park (stopWhen concludes)"]
     TR --> OR["openRepo (clone + checkout branch)"]
     OR --> AN["spec.analyze(input) -> FileEdit[]"]
     AN --> CM["commit: write edits -> commitAll -> push -> ensure labeled PR"]

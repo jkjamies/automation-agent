@@ -17,6 +17,7 @@ from automation_agent.agent.fixflow import (
     Engine,
     FileEdit,
     FileWork,
+    NoWorkError,
     Spec,
     new_engine,
 )
@@ -115,6 +116,7 @@ def _spec() -> Spec:
         pr_title="Fix",
         success_title="Fix succeeded",
         review_title="Needs human review",
+        clean_title="Already clean",
         triage=_triage,
         analyze=_analyze,
     )
@@ -339,6 +341,36 @@ async def test_engine_kickoff_triage_error(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         await e.kickoff(b'{"repo":"acme/api","report":"r"}')
     assert await e.driver.parked_count() == 0
+
+
+async def test_engine_kickoff_clean(tmp_path) -> None:
+    # Triage finding nothing actionable finishes as a positive clean outcome: no PR is
+    # opened, no run is parked, the clean notification (not the review alarm) is sent, and
+    # kickoff does not raise so the dispatcher does not log a no-op as a failure.
+    spec = _spec()
+
+    async def nothing(_llm, _report) -> list[FileWork]:
+        raise NoWorkError("triage: nothing here")
+
+    spec.triage = nothing
+    gh = FakeGH()
+    n = FakeNotifier()
+    e = new_engine(
+        spec,
+        Deps(
+            gh=gh,
+            notify=n,
+            ci_timeout=timedelta(hours=1),
+            clone_url=lambda _o, _r: _seed_remote(tmp_path, "r3"),
+        ),
+    )
+
+    await e.kickoff(b'{"repo":"acme/api","base":"master","report":"r"}')
+    assert gh.created is None
+    assert await e.driver.parked_count() == 0
+    assert len(n.msgs) == 1
+    assert n.msgs[0].title == "Already clean"
+    assert "review" not in n.msgs[0].text.lower()
 
 
 async def test_engine_kickoff_apply_failure_notifies(tmp_path) -> None:

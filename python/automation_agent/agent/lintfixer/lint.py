@@ -23,6 +23,7 @@ def new_lint_engine(d: Deps) -> Engine:
             pr_title="automation-agent: fix lint problems",
             success_title="Lint fix succeeded ✅",
             review_title="Lint fix needs human review ⚠️",
+            clean_title="Lint already clean 👏",
             triage=triage,
             analyze=analyze,
         ),

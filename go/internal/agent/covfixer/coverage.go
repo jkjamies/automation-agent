@@ -26,6 +26,7 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 		PRTitle:       "automation-agent: add test coverage",
 		SuccessTitle:  "Coverage fix succeeded ✅",
 		ReviewTitle:   "Coverage fix needs human review ⚠️",
+		CleanTitle:    "Coverage already sufficient 👏",
 		Triage:        Triage,
 		Analyze:       Analyze,
 	}, d)

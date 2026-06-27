@@ -10,7 +10,7 @@ import json
 from google.adk.models import BaseLlm
 
 from automation_agent.agent import setup
-from automation_agent.agent.fixflow import FileWork, extract_json_array
+from automation_agent.agent.fixflow import FileWork, NoWorkError, extract_json_array
 from automation_agent.agent.lintfixer.loader import prompts
 
 
@@ -19,7 +19,7 @@ async def triage(llm: BaseLlm, report: str) -> list[FileWork]:
     out = await setup.generate_text(llm, prompts.must_get("triage"), report)
     work = _parse_triage(out)
     if not work:
-        raise ValueError("triage: no actionable files found in report")
+        raise NoWorkError("triage: no actionable files found in report")
     return work
 
 
@@ -34,7 +34,9 @@ def _parse_triage(out: str) -> list[FileWork]:
     work: list[FileWork] = []
     for f in files:
         path = (f.get("path") or "") if isinstance(f, dict) else ""
-        if isinstance(path, str) and path.strip() != "":
-            problems = f.get("problems") or []
+        problems = (f.get("problems") or []) if isinstance(f, dict) else []
+        # A file with no problems is no work — drop it so an all-empty report collapses to
+        # zero work and routes through the clean (NoWorkError) terminal outcome.
+        if isinstance(path, str) and path.strip() != "" and problems:
             work.append(FileWork(path=path, items=list(problems)))
     return work

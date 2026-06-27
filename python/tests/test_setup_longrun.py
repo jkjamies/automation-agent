@@ -113,6 +113,37 @@ def test_sequencer_decide() -> None:
     assert name == "" and text != ""
 
 
+def test_sequencer_stop_when() -> None:
+    # When the action result satisfies stop_when, the loop concludes immediately without ever
+    # calling await_ci (so a terminal action result is never forwarded to a wait tool whose
+    # schema would reject it).
+    s = Sequencer(
+        action="apply",
+        wait="await_ci",
+        stop_when=lambda r: bool(r.get("clean")),
+    )
+
+    def fc_name(content: types.Content) -> tuple[str, str]:
+        text = ""
+        for p in content.parts or []:
+            if p.function_call is not None:
+                return p.function_call.name, ""
+            if p.text:
+                text += p.text
+        return "", text
+
+    def resp(name: str, body: dict) -> types.Content:
+        return types.Content(
+            parts=[types.Part(function_response=types.FunctionResponse(name=name, response=body))]
+        )
+
+    # apply clean -> conclude (no await_ci).
+    name, text = fc_name(s._decide([resp("apply", {"clean": True})]).content)
+    assert name == "" and "done" in text
+    # apply not clean -> still call await_ci.
+    assert fc_name(s._decide([resp("apply", {"pr_number": 7})]).content)[0] == "await_ci"
+
+
 async def test_late_webhook_after_timeout() -> None:
     """A late/duplicate resume on a concluded run must not re-park (defense in depth
     behind the park store's atomic claim)."""

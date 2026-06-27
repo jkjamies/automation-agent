@@ -3,6 +3,7 @@ package fixflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -112,6 +113,9 @@ func newDriver(e *Engine) (*Driver, error) {
 		// The Driver only resumes a run when it has already decided to retry, so a
 		// resumed failure always means "apply again". (success/timeout never resume.)
 		RetryWhen: func(resp map[string]any) bool { return fmt.Sprint(resp["conclusion"]) == "failure" },
+		// A clean apply (triage found nothing) is already terminal: conclude without
+		// parking on CI so the result is never forwarded to await_ci.
+		StopWhen: func(resp map[string]any) bool { clean, _ := resp["clean"].(bool); return clean },
 	})
 	fixer, err := llmagent.New(llmagent.Config{
 		Name:        "fixer-" + e.spec.Name,
@@ -154,6 +158,10 @@ type applyFixArgs struct{}
 type applyFixResult struct {
 	PRNumber int    `json:"pr_number"`
 	HeadSHA  string `json:"head_sha"`
+	// Clean is true when triage found nothing to address: no PR was opened, the sequencer
+	// concludes without parking on CI (StopWhen), and afterDrive reports a positive
+	// "already clean" outcome instead of asking for human review.
+	Clean bool `json:"clean"`
 }
 
 // applyFix runs one fix attempt for the calling session. The run params are loaded from the
@@ -173,6 +181,11 @@ func (dr *Driver) applyFix(tc tool.Context, _ applyFixArgs) (applyFixResult, err
 	}
 	res, err := dr.engine.attemptOnce(tc, rp)
 	if err != nil {
+		// Triage finding nothing actionable is not a failure: report it as a clean result
+		// so the sequencer concludes (StopWhen) and afterDrive sends a positive notice.
+		if errors.Is(err, ErrNoWork) {
+			return applyFixResult{Clean: true}, nil
+		}
 		return applyFixResult{}, err
 	}
 	return applyFixResult{PRNumber: res.PR.Number, HeadSHA: res.HeadSHA}, nil
@@ -346,6 +359,9 @@ func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setu
 		if msg, bad := apply["error"]; bad {
 			return dr.failApply(ctx, sid, fullRepo, fmt.Sprintf("%v", msg))
 		}
+		if clean, _ := apply["clean"].(bool); clean {
+			return dr.finishClean(ctx, sid, fullRepo)
+		}
 	}
 	if res.ParkedCallID == "" {
 		return dr.failApply(ctx, sid, fullRepo, "run did not park on CI wait")
@@ -371,6 +387,17 @@ func (dr *Driver) failApply(ctx context.Context, sid, fullRepo, reason string) e
 	_ = dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
 		fmt.Sprintf("%s: the %s fix could not be applied (%s). Please review.", fullRepo, dr.engine.spec.Name, reason), "")
 	return fmt.Errorf("%s %s: %s", fullRepo, dr.engine.spec.Name, reason)
+}
+
+// finishClean resolves a run whose triage found nothing to address. No PR was opened and
+// the run never parked, so it just frees the run and sends a positive "already clean"
+// notice — never the human-review alarm. Returns nil so the dispatcher does not log a
+// no-op as a failure.
+func (dr *Driver) finishClean(ctx context.Context, sid, fullRepo string) error {
+	dr.engine.d.Log.Info("nothing to address; already clean", "workflow", dr.engine.spec.Name, "repo", fullRepo)
+	dr.clear(ctx, sid)
+	text := buildSummaryText(summaryInput{outcome: outcomeClean, workflow: dr.engine.spec.Name, fullRepo: fullRepo})
+	return dr.engine.notify(ctx, dr.engine.spec.CleanTitle, text, "")
 }
 
 // newSessionID returns a globally unique session id. A UUID (not a process-local counter)

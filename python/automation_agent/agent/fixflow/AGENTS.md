@@ -34,6 +34,7 @@ flowchart TD
     K["kickoff(raw)"] --> KP["parse_kickoff{repo, base, report}"]
     KP --> DK["Driver.kickoff: run fixer agent"]
     DK --> AF["apply_fix -> attempt_once: triage -> open -> analyze -> commit (clone/branch/push/ensure PR)"]
+    AF -->|"triage found nothing (NoWorkError)"| CLN["clean summary (clean_title) + clear; no PR, no park (stop_when concludes)"]
     AF --> AW["await_ci (IsLongRunning)"]
     AW --> PK["ParkStore.put(pr_key=owner/repo#pr, attempts) + ci_timeout timer"]
     PK --> SUS(["suspend (durable: survives restart)"])
@@ -62,8 +63,9 @@ flowchart TD
   record **and** the ADK session. Triage re-runs on every attempt (no cache): a retry resumes
   on a fresh process — under scale-to-zero, a new instance — so a cache would miss anyway.
   Terminal paths build a status-aware summary via `summary.build_summary_text` + `gh.compare`.
-- `summary.py` — `build_summary_text`: the status-aware terminal summary (success / max-iter
-  / timeout framings) enriched with `gh.compare` (base...head diff) + the park record. Pure.
+- `summary.py` — `build_summary_text`: the status-aware terminal summary (success / clean /
+  max-iter / timeout framings) enriched with `gh.compare` (base...head diff) + the park record.
+  The clean framing is a workflow-prefixed fun line rotated deterministically by repo. Pure.
 - `applyfix.py` — clone -> branch (new/existing) -> commit -> push -> ensure labeled PR.
 - `analyze.py` — `parallel_analyze`: one ADK parallel agent per `FileWork`, distinct
   state keys so they never collide.

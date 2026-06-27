@@ -28,7 +28,7 @@ import { type ParkRecord, type ParkStore, MemoryParkStore } from '../setup/parks
 import { Type } from '../setup/genai';
 import { LongRunDriver, Sequencer, type DriveResult } from '../setup/longrun';
 import type { Comparison } from '../../githubapi/client';
-import type { Engine, Logger, ResumeInput } from './engine';
+import { NoWorkError, type Engine, type Logger, type ResumeInput } from './engine';
 import type { Kickoff } from './envelope';
 import { type SummaryInput, TerminalOutcome, buildSummaryText } from './summary';
 
@@ -78,6 +78,9 @@ export class Driver {
       // The Driver only resumes a run when it has already decided to retry, so a
       // resumed failure always means "apply again". (success/timeout never resume.)
       (resp) => String(resp.conclusion) === 'failure',
+      // A clean apply (triage found nothing) is already terminal: conclude without
+      // parking on CI so the result is never forwarded to await_ci.
+      (resp) => resp.clean === true,
     );
 
     const applyFixTool = new FunctionTool({
@@ -119,7 +122,9 @@ export class Driver {
   /**
    * Run one fix attempt for the calling session. The run params are loaded from the store
    * by session id (Driver-owned), so the model's args cannot influence the target. Returns
-   * `{ error }` on failure so the Sequencer's apply-error branch can conclude.
+   * `{ error }` on failure so the Sequencer's apply-error branch can conclude, or
+   * `{ clean: true }` when triage found nothing to address so the sequencer concludes
+   * (stopWhen) and afterDrive sends a positive notice instead of the review alarm.
    */
   private async applyFixTool(ctx?: { sessionId?: string }): Promise<Record<string, unknown>> {
     try {
@@ -131,6 +136,11 @@ export class Driver {
       const res = await this.engine.attemptOnce(runParamsFromJson(rec.params));
       return { pr_number: res.pr.number, head_sha: res.headSha };
     } catch (err) {
+      // Triage finding nothing actionable is not a failure: report it as a clean result so
+      // the sequencer concludes (stopWhen) and afterDrive sends a positive notice.
+      if (err instanceof NoWorkError) {
+        return { clean: true };
+      }
       return { error: (err as Error).message };
     }
   }
@@ -370,6 +380,10 @@ export class Driver {
       await this.failApply(sid, fullRepo, String(apply.error));
       return;
     }
+    if (apply && apply.clean === true) {
+      await this.finishClean(sid, fullRepo);
+      return;
+    }
     if (res.parkedCallId === '') {
       await this.failApply(sid, fullRepo, 'run did not park on CI wait');
       return;
@@ -438,6 +452,30 @@ export class Driver {
       this.log('warn', 'apply-failure notification failed', { repo: fullRepo, err: String(err) });
     }
     throw new Error(`${fullRepo} ${this.engine.spec.name}: ${reason}`);
+  }
+
+  /**
+   * Resolve a run whose triage found nothing to address. No PR was opened and the run never
+   * parked, so it just frees the run and sends a positive "already clean" notice — never the
+   * human-review alarm. Returns without throwing so the dispatcher does not log a no-op as a
+   * failure.
+   */
+  private async finishClean(sid: string, fullRepo: string): Promise<void> {
+    this.log('info', 'nothing to address; already clean', { repo: fullRepo });
+    await this.clear(sid);
+    const text = buildSummaryText({
+      outcome: TerminalOutcome.Clean,
+      workflow: this.engine.spec.name,
+      fullRepo,
+      prNumber: 0,
+      attempts: 0,
+      report: '',
+      lastOutput: '',
+      timeout: '',
+      checkName: '',
+      changed: { totalCommits: 0, files: [] },
+    });
+    await this.engine.notify(this.engine.spec.cleanTitle, text, '');
   }
 
   /** Emit through the optional structured logger, tagging every line with this workflow's name. */

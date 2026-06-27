@@ -7,6 +7,7 @@ import com.automation.agent.agent.fixflow.AnalyzeInput
 import com.automation.agent.agent.fixflow.Deps
 import com.automation.agent.agent.fixflow.FileWork
 import com.automation.agent.agent.fixflow.GitHub
+import com.automation.agent.agent.fixflow.NoWorkException
 import com.automation.agent.agent.setup.assistantText
 import com.automation.agent.agent.setup.contentText
 import com.automation.agent.githubapi.Comparison
@@ -47,8 +48,8 @@ private val noopGitHub = object : GitHub {
 class CoverageTest : BehaviorSpec({
     Given("a coverage triage array") {
         When("parsing it") {
-            Then("non-empty entries with their uncovered items are kept") {
-                val work = parseTriage("""[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]}]""")
+            Then("non-empty entries are kept; empty-path and empty-uncovered files are dropped") {
+                val work = parseTriage("""[{"path":"calc.go","uncovered":["Divide error path","Add edge cases"]},{"path":"","uncovered":[]},{"path":"empty.go","uncovered":[]}]""")
                 work shouldHaveSize 1
                 work[0].path shouldBe "calc.go"
                 work[0].items shouldHaveSize 2
@@ -58,11 +59,11 @@ class CoverageTest : BehaviorSpec({
 
     Given("a scripted LLM") {
         When("triaging") {
-            Then("it returns work, and an empty array errors") {
+            Then("it returns work, and an empty array reports no work") {
                 val work = triage(ScriptedModel(triage = """[{"path":"calc.go","uncovered":["Divide"]}]"""), "jacoco xml")
                 work shouldHaveSize 1
                 work[0].path shouldBe "calc.go"
-                shouldThrow<IllegalArgumentException> { triage(ScriptedModel(triage = "[]"), "report") }
+                shouldThrow<NoWorkException> { triage(ScriptedModel(triage = "[]"), "report") }
             }
         }
     }

@@ -136,11 +136,16 @@ class LongRunDriver(private val runner: Runner, private val userId: String) {
  * @property retryWhen reports whether a resumed wait result warrants another action. `null` means
  *   never retry. Policy that needs out-of-band state (attempt counts, deadlines) belongs in the
  *   caller, which simply declines to resume when it does not want a loop.
+ * @property stopWhen reports whether an [action] result is already terminal — the loop concludes
+ *   without ever calling [wait]. `null` means always proceed to [wait]. Use it for an action that can
+ *   finish the work itself (e.g. nothing to do), so the result is not forwarded to a wait tool whose
+ *   schema would reject it.
  */
 data class SequencerConfig(
     val action: String,
     val wait: String,
     val retryWhen: ((waitResponse: Map<String, Any?>) -> Boolean)? = null,
+    val stopWhen: ((actionResponse: Map<String, Any?>) -> Boolean)? = null,
 )
 
 /**
@@ -162,6 +167,7 @@ internal class Sequencer(private val cfg: SequencerConfig) : Model {
      * Chooses the next step from the most recent function response in history:
      *  - none yet                 -> call action
      *  - action returned an error -> conclude (nothing to wait on)
+     *  - action result, stopWhen  -> conclude (action already finished the work)
      *  - action returned a result -> call wait, forwarding the result as its args
      *  - wait result, retryWhen   -> call action again
      *  - wait result, otherwise   -> conclude
@@ -171,10 +177,10 @@ internal class Sequencer(private val cfg: SequencerConfig) : Model {
         return when {
             last == null -> call(cfg.action, emptyMap(), contents)
             last.name == cfg.action ->
-                if (last.response.containsKey("error")) {
-                    sequencerText("${cfg.action} failed: ${last.response["error"]}")
-                } else {
-                    call(cfg.wait, last.response, contents)
+                when {
+                    last.response.containsKey("error") -> sequencerText("${cfg.action} failed: ${last.response["error"]}")
+                    cfg.stopWhen?.invoke(last.response) == true -> sequencerText("done")
+                    else -> call(cfg.wait, last.response, contents)
                 }
             last.name == cfg.wait ->
                 if (cfg.retryWhen?.invoke(last.response) == true) call(cfg.action, emptyMap(), contents) else sequencerText("done")

@@ -46,7 +46,41 @@ private class AwaitTool : BaseTool(name = "await", description = "await CI", isL
     override suspend fun run(context: ToolContext, args: Map<String, Any>): Any = mapOf("status" to "pending")
 }
 
+/** A clean `apply`: triage found nothing, so it returns the clean sentinel instead of a PR. */
+private class CleanApplyTool(private val applied: AtomicInteger) :
+    BaseTool(name = "apply", description = "apply a fix") {
+    override fun declaration(): FunctionDeclaration =
+        FunctionDeclaration(name = name, description = description, parameters = Schema(type = Type.OBJECT, properties = emptyMap()))
+
+    override suspend fun run(context: ToolContext, args: Map<String, Any>): Any {
+        applied.incrementAndGet()
+        return mapOf("clean" to true)
+    }
+}
+
+/** A counting `await`: records every call so a test can assert it was never reached. */
+private class CountingAwaitTool(private val awaited: AtomicInteger) :
+    BaseTool(name = "await", description = "await CI", isLongRunning = true) {
+    override fun declaration(): FunctionDeclaration =
+        FunctionDeclaration(
+            name = name,
+            description = description,
+            parameters =
+                Schema(
+                    type = Type.OBJECT,
+                    properties = mapOf("pr_number" to Schema(type = Type.INTEGER), "head_sha" to Schema(type = Type.STRING)),
+                ),
+        )
+
+    override suspend fun run(context: ToolContext, args: Map<String, Any>): Any {
+        awaited.incrementAndGet()
+        return mapOf("status" to "pending")
+    }
+}
+
 private fun ciFailure(response: Map<String, Any?>): Boolean = response["conclusion"]?.toString() == "failure"
+
+private fun isCleanResp(response: Map<String, Any?>): Boolean = response["clean"]?.toString().toBoolean()
 
 private fun buildDriver(calls: AtomicInteger, fail: AtomicBoolean): LongRunDriver {
     val agent =
@@ -85,6 +119,50 @@ class LongrunTest : BehaviorSpec({
                 val awaitOk = s.decide(listOf(history("await", mapOf("conclusion" to "success"))))
                 fcName(awaitOk) shouldBe null
                 text(awaitOk) shouldNotBe ""
+            }
+        }
+    }
+
+    Given("a sequencer with a stopWhen predicate") {
+        val s = Sequencer(SequencerConfig(action = "apply", wait = "await", stopWhen = ::isCleanResp))
+        fun fcName(r: com.google.adk.kt.models.LlmResponse): String? =
+            r.content?.parts?.firstNotNullOfOrNull { it.functionCall?.name }
+        fun history(name: String, body: Map<String, Any?>): Content =
+            Content(parts = listOf(Part(functionResponse = FunctionResponse(name = name, response = body))))
+
+        When("the action result satisfies stopWhen") {
+            Then("it concludes without ever calling wait") {
+                val clean = s.decide(listOf(history("apply", mapOf("clean" to true))))
+                fcName(clean) shouldBe null
+            }
+        }
+        When("the action result does not satisfy stopWhen") {
+            Then("it proceeds to wait as usual") {
+                fcName(s.decide(listOf(history("apply", mapOf("pr_number" to 7))))) shouldBe "await"
+            }
+        }
+    }
+
+    Given("a long-running apply/await agent whose apply finishes clean") {
+        When("driving start") {
+            Then("the loop concludes without parking and never calls await") {
+                val applied = AtomicInteger(0)
+                val awaited = AtomicInteger(0)
+                val agent =
+                    LlmAgent(
+                        name = "lr-clean",
+                        model = newSequencerModel(SequencerConfig(action = "apply", wait = "await", stopWhen = ::isCleanResp)),
+                        instruction = Instruction("apply then await"),
+                        tools = listOf(CleanApplyTool(applied), CountingAwaitTool(awaited)),
+                    )
+                val d = LongRunDriver.create("lr-clean-app", "u", agent)
+
+                val res = d.start("s1", "go")
+                res.parkedCallId shouldBe null
+                res.toolResponses.getValue("apply")["clean"].toString() shouldBe "true"
+                applied.get() shouldBe 1
+                awaited.get() shouldBe 0
+                res.final shouldContain "done"
             }
         }
     }

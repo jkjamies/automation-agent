@@ -116,6 +116,9 @@ class Driver:
             # The Driver only resumes a run when it has already decided to retry, so a
             # resumed failure always means "apply again". (success/timeout never resume.)
             retry_when=lambda resp: str(resp.get("conclusion")) == "failure",
+            # A clean apply (triage found nothing) is already terminal: conclude without
+            # parking on CI so the result is never forwarded to await_ci.
+            stop_when=lambda resp: bool(resp.get("clean")),
         )
         # The Sequencer emits tool calls by name ("apply_fix"/"await_ci"), and ADK derives a
         # FunctionTool's name from the callable's __name__ — so the tool callables must carry
@@ -156,6 +159,10 @@ class Driver:
 
         Wraps the work in try/except returning ``{"error": ...}`` so the Sequencer's
         apply-error branch can conclude (ADK propagates raised exceptions otherwise)."""
+        # Local import avoids the engine<->driver import cycle (engine imports RunParams from
+        # this module at its bottom).
+        from automation_agent.agent.fixflow.engine import NoWorkError
+
         try:
             sid = _session_id(tool_context)
             rec = await self.store.get(sid)
@@ -164,6 +171,11 @@ class Driver:
             rp = RunParams.from_json(rec.params)
             res = await self.engine.attempt_once(rp)
             return {"pr_number": res.pr.number, "head_sha": res.head_sha}
+        except NoWorkError:
+            # Triage found nothing actionable: not a failure. Return a clean-flagged result
+            # (never {"error": ...}) so the sequencer concludes (stop_when) and _after_drive
+            # sends a positive notice instead of the review alarm.
+            return {"clean": True}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
@@ -383,6 +395,9 @@ class Driver:
         apply = res.tool_responses.get(TOOL_APPLY_FIX)
         if apply is not None and "error" in apply:
             await self._fail(sid, full_repo, _pr_number_from(apply), str(apply["error"]))
+        if apply is not None and apply.get("clean"):
+            await self._finish_clean(sid, full_repo)
+            return
         if res.parked_call_id == "":
             await self._fail(sid, full_repo, _pr_number_from(apply), "run did not park on CI wait")
         pr = _pr_number_from(apply)
@@ -438,6 +453,24 @@ class Driver:
             link,
         )
         raise RuntimeError(f"{full_repo} {self.engine.spec.name}: {reason}")
+
+    async def _finish_clean(self, sid: str, full_repo: str) -> None:
+        """Resolve a run whose triage found nothing to address. No PR was opened and the run
+        never parked, so just free the run and send a positive "already clean" notice — never
+        the human-review alarm. Returns (does not raise) so the dispatcher does not log a no-op
+        as a failure."""
+        self._log(logging.INFO, "nothing to address; already clean", repo=full_repo)
+        await self._clear(sid)
+        text = build_summary_text(
+            SummaryInput(
+                outcome=TerminalOutcome.CLEAN,
+                workflow=self.engine.spec.name,
+                full_repo=full_repo,
+                pr_number=0,
+                attempts=0,
+            )
+        )
+        self.engine.notify(self.engine.spec.clean_title, text, "")
 
     async def _clear(self, sid: str) -> None:
         """Terminal cleanup: remove the park record and delete the ADK session so a durable
