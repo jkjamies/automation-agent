@@ -124,6 +124,45 @@ type GitHubApp struct {
 // path). False means the static PAT fallback is used.
 func (c Config) AppMode() bool { return c.GitHubApp.AppID != 0 }
 
+// String renders the config with every credential masked, so a debug/startup log
+// of it never leaks a secret. The default %+v would otherwise print the PAT,
+// webhook secret, internal token, webhook URLs, and (via GitHubApp) the App
+// private key verbatim. The plain alias drops this String method to avoid
+// infinite recursion. Keep the masked set in sync when adding a secret field.
+// (Mirrors Python's __repr__, JS's inspect redaction, and Kotlin's toString.)
+func (c Config) String() string {
+	type plain Config
+	p := plain(c)
+	p.GitHubToken = redactSecret(c.GitHubToken)
+	p.GitHubWebhookSecret = redactSecret(c.GitHubWebhookSecret)
+	p.InternalToken = redactSecret(c.InternalToken)
+	p.SlackWebhookURL = redactSecret(c.SlackWebhookURL)
+	p.TeamsWebhookURL = redactSecret(c.TeamsWebhookURL)
+	// The nested GitHubApp prints through its own String, which masks the key.
+	return fmt.Sprintf("%+v", p)
+}
+
+// String masks the App private key so it never reaches a log when a GitHubApp is
+// printed (nested in Config or on its own); the numeric ids are not secret. The key
+// is hand-formatted rather than %+v'd because a []byte renders as raw byte numbers
+// — recoverable, and never the readable mask.
+func (a GitHubApp) String() string {
+	key := ""
+	if len(a.PrivateKeyPEM) > 0 {
+		key = "***"
+	}
+	return fmt.Sprintf("{AppID:%d InstallationID:%d PrivateKeyPEM:%s}", a.AppID, a.InstallationID, key)
+}
+
+// redactSecret masks a secret for String: an unset value stays visibly empty, a
+// set value collapses to a fixed marker so its bytes never reach a log.
+func redactSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "***"
+}
+
 // Load reads configuration from the process environment, applying defaults.
 func Load() (Config, error) {
 	c, err := loadFrom(os.LookupEnv)
@@ -133,7 +172,10 @@ func Load() (Config, error) {
 	// When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
 	// CLI login so a local run authenticates to GitHub without a hand-set token. Any
 	// failure (gh absent, not logged in, timeout) leaves the token empty (anonymous).
-	if c.GitHubToken == "" {
+	// Skipped in App mode: the App provider mints its own tokens, so shelling out to
+	// gh would be a useless subprocess that could also hydrate a PAT the deployment
+	// never asked for.
+	if !c.AppMode() && c.GitHubToken == "" {
 		c.GitHubToken = ghCLIToken()
 	}
 	return c, nil
