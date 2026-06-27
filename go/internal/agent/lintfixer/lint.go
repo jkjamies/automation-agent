@@ -26,6 +26,7 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 		PRTitle:       "automation-agent: fix lint problems",
 		SuccessTitle:  "Lint fix succeeded ✅",
 		ReviewTitle:   "Lint fix needs human review ⚠️",
+		CleanTitle:    "Lint already clean 👏",
 		Triage:        Triage,
 		Analyze:       Analyze,
 	}, d)

@@ -7,6 +7,7 @@ import com.automation.agent.agent.fixflow.AnalyzeInput
 import com.automation.agent.agent.fixflow.Deps
 import com.automation.agent.agent.fixflow.FileWork
 import com.automation.agent.agent.fixflow.GitHub
+import com.automation.agent.agent.fixflow.NoWorkException
 import com.automation.agent.agent.setup.assistantText
 import com.automation.agent.githubapi.Comparison
 import com.automation.agent.githubapi.Pr
@@ -49,11 +50,11 @@ class LintTest : BehaviorSpec({
 
     Given("a stub LLM") {
         When("triaging") {
-            Then("it returns work, and an empty array errors") {
+            Then("it returns work, and an empty array reports no work") {
                 val work = triage(StubModel("""[{"path":"a.go","problems":["x"]}]"""), "report")
                 work shouldHaveSize 1
                 work[0].path shouldBe "a.go"
-                shouldThrow<IllegalArgumentException> { triage(StubModel("[]"), "report") }
+                shouldThrow<NoWorkException> { triage(StubModel("[]"), "report") }
             }
         }
     }

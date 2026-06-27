@@ -4,7 +4,7 @@
  */
 import type { BaseLlm } from '@google/adk';
 
-import { type FileWork, extractJsonArray } from '../fixflow/index';
+import { type FileWork, NoWorkError, extractJsonArray } from '../fixflow/index';
 import { generateText } from '../setup/generate';
 import { prompts } from './loader';
 
@@ -13,7 +13,7 @@ export async function triage(llm: BaseLlm, report: string): Promise<FileWork[]> 
   const out = await generateText(llm, prompts.mustGet('triage'), report);
   const work = parseTriage(out);
   if (work.length === 0) {
-    throw new Error('triage: no actionable files found in report');
+    throw new NoWorkError('triage: no actionable files found in report');
   }
   return work;
 }

@@ -21,7 +21,7 @@ from automation_agent.agent.covfixer.analyze import (
     analyze,
 )
 from automation_agent.agent.covfixer.triage import _parse_triage
-from automation_agent.agent.fixflow import AnalyzeInput, Deps, FileWork
+from automation_agent.agent.fixflow import AnalyzeInput, Deps, FileWork, NoWorkError
 from automation_agent.agent.setup import content_text
 
 
@@ -67,7 +67,7 @@ async def test_triage() -> None:
         ScriptedLlm(triage='[{"path":"calc.go","uncovered":["Divide"]}]'), "jacoco xml"
     )
     assert len(work) == 1 and work[0].path == "calc.go"
-    with pytest.raises(ValueError):
+    with pytest.raises(NoWorkError):
         await triage(ScriptedLlm(triage="[]"), "report")
 
 

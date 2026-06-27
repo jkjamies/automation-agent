@@ -16,7 +16,19 @@ import kotlin.time.Duration.Companion.minutes
 /** One file and the items to address in it (lint problems, uncovered regions, …). */
 data class FileWork(val path: String, val items: List<String> = emptyList())
 
-/** Normalizes an arbitrary tool report into per-file work (LLM-backed). */
+/**
+ * Signals that a triage step found nothing actionable — the target is already clean. It is not a
+ * failure: the Driver reports it as a positive "nothing to address" outcome (a clean 👏 notification)
+ * instead of asking a human to review a fix that was never needed. A triage step throws this (rather
+ * than a plain error) when its report has no work; the apply_fix tool catches it and returns a clean
+ * result. Scoped to the triage verdict only.
+ */
+class NoWorkException(message: String) : Exception(message)
+
+/**
+ * Normalizes an arbitrary tool report into per-file work (LLM-backed). Throws [NoWorkException] when
+ * the report has nothing actionable.
+ */
 fun interface TriageFunc {
     suspend operator fun invoke(llm: Model?, report: String): List<FileWork>
 }
@@ -52,6 +64,7 @@ data class Spec(
     val prTitle: String,
     val successTitle: String, // notification title on success
     val reviewTitle: String, // notification title when human review is needed
+    val cleanTitle: String, // notification title when triage finds nothing to address
     val triage: TriageFunc,
     val analyze: AnalyzeFunc,
 )

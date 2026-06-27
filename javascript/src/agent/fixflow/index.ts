@@ -26,6 +26,7 @@ export {
   type TriageFunc,
   type FileWork,
   Engine,
+  NoWorkError,
   coder,
   newEngine,
   pullUrl,

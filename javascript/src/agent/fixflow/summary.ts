@@ -14,6 +14,7 @@ export enum TerminalOutcome {
   Success = 'success',
   Exhausted = 'exhausted',
   Timeout = 'timeout',
+  Clean = 'clean', // triage found nothing to address — already clean, no PR opened
 }
 
 /** Everything a terminal summary needs. */
@@ -52,9 +53,33 @@ export function buildSummaryText(input: SummaryInput): string {
       const text = `${fullRepo}: the ${workflow} fix saw no CI result after ${input.timeout} waiting for ${input.checkName} (${attemptsPhrase(input.attempts)}). Please review. ${changed}`;
       return appendFindings(text, 'Targeted', input.report);
     }
+    case TerminalOutcome.Clean:
+      return cleanText(workflow, fullRepo);
     default:
       return `${fullRepo}: the ${workflow} fix reached an unknown terminal state.`;
   }
+}
+
+// Light-hearted "nothing to do" lines, rotated deterministically by repo name (a given repo
+// always gets the same line — stable and testable — while different repos vary). The rendered
+// line is prefixed with the capitalized workflow name (Lint, Coverage, …) so the relation is
+// obvious at a glance. Kept byte-for-byte identical across all four ports (parity); repo names
+// are ASCII, so the code-point sum is identical in every language.
+const cleanMessages = [
+  'nothing to see here 👏',
+  'squeaky clean, no work for me 🧹',
+  "all tidy already — I'll see myself out 🚪",
+  'spotless, not a thing to fix 🫧',
+  'already shipshape, standing down ✨',
+];
+
+/** Render the clean-outcome body: a workflow-prefixed fun line chosen deterministically by repo. */
+function cleanText(workflow: string, fullRepo: string): string {
+  let sum = 0;
+  for (const c of fullRepo) sum += c.charCodeAt(0);
+  const msg = cleanMessages[sum % cleanMessages.length];
+  const title = workflow ? workflow.charAt(0).toUpperCase() + workflow.slice(1) : workflow;
+  return `${title}: ${msg} — ${fullRepo} is already clean, no PR opened.`;
 }
 
 function attemptsPhrase(n: number): string {

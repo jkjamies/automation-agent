@@ -28,7 +28,7 @@ func testSpec() Spec {
 	return Spec{
 		Name: "test", Branch: "agent/fix", CheckName: "agent-test-verify",
 		CommitMessage: "fix", PRTitle: "Fix",
-		SuccessTitle: "Fix succeeded", ReviewTitle: "Needs human review",
+		SuccessTitle: "Fix succeeded", ReviewTitle: "Needs human review", CleanTitle: "Already clean",
 		Triage: func(_ context.Context, _ model.LLM, _ string) ([]FileWork, error) {
 			return []FileWork{{Path: "a.go", Items: []string{"x"}}}, nil
 		},
@@ -70,6 +70,38 @@ func TestEngineKickoffParks(t *testing.T) {
 	}
 	if e.driver.parkedCount() != 1 {
 		t.Errorf("expected one parked run awaiting CI, got %d", e.driver.parkedCount())
+	}
+}
+
+// Triage finding nothing actionable finishes as a positive clean outcome: no PR is
+// opened, no run is parked, the clean notification (not the review alarm) is sent, and
+// Kickoff returns nil so the dispatcher does not log a no-op as a failure.
+func TestEngineKickoffClean(t *testing.T) {
+	gh := &fakeGH{}
+	n := &fakeNotifier{}
+	spec := testSpec()
+	spec.Triage = func(_ context.Context, _ model.LLM, _ string) ([]FileWork, error) {
+		return nil, fmt.Errorf("triage: nothing here: %w", ErrNoWork)
+	}
+	e := NewEngine(spec, Deps{
+		GH: gh, Notify: n, MaxIter: 3, CITimeout: time.Hour, PRLabel: "automation-agent",
+		CloneURL: func(_, _ string) string { return seedRemote(t) },
+	})
+
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("clean kickoff should not error: %v", err)
+	}
+	if gh.created != nil {
+		t.Errorf("clean kickoff should not open a PR, got %+v", gh.created)
+	}
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("clean kickoff should not park a run, got %d", e.driver.parkedCount())
+	}
+	if len(n.msgs) != 1 || n.msgs[0].Title != "Already clean" {
+		t.Fatalf("expected one clean notification titled %q, got %+v", "Already clean", n.msgs)
+	}
+	if strings.Contains(n.msgs[0].Text, "review") {
+		t.Errorf("clean notice must not mention review: %q", n.msgs[0].Text)
 	}
 }
 

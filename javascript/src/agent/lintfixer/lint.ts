@@ -20,6 +20,7 @@ export function newLintEngine(d: Deps): Engine {
       prTitle: 'automation-agent: fix lint problems',
       successTitle: 'Lint fix succeeded ✅',
       reviewTitle: 'Lint fix needs human review ⚠️',
+      cleanTitle: 'Lint already clean 👏',
       triage,
       analyze,
     },

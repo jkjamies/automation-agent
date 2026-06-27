@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { AnalyzeInput, Deps, FileWork } from '../fixflow/index';
+import { type AnalyzeInput, type Deps, type FileWork, NoWorkError } from '../fixflow/index';
 import { FakeLlm, ScriptedLlm } from '../../testutil/fakes';
 import { analyze, buildExecuteInput, parsePlan, type PlanEntry } from './analyze';
 import { newCoverageEngine } from './coverage';
@@ -22,11 +22,11 @@ describe('covfixer triage', () => {
     expect(work[0]!.items).toHaveLength(2);
   });
 
-  it('runs triage and rejects an empty result', async () => {
+  it('runs triage and reports NoWorkError on an empty result', async () => {
     const work = await triage(new ScriptedLlm({ triage: '[{"path":"calc.ts","uncovered":["divide"]}]' }), 'report');
     expect(work).toHaveLength(1);
     expect(work[0]!.path).toBe('calc.ts');
-    await expect(triage(new ScriptedLlm({ triage: '[]' }), 'report')).rejects.toThrow();
+    await expect(triage(new ScriptedLlm({ triage: '[]' }), 'report')).rejects.toThrow(NoWorkError);
   });
 });
 

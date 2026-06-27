@@ -10,7 +10,7 @@ from google.adk.models import BaseLlm
 
 from automation_agent.agent import setup
 from automation_agent.agent.covfixer.loader import prompts
-from automation_agent.agent.fixflow import FileWork, extract_json_array
+from automation_agent.agent.fixflow import FileWork, NoWorkError, extract_json_array
 
 
 async def triage(llm: BaseLlm, report: str) -> list[FileWork]:
@@ -19,7 +19,7 @@ async def triage(llm: BaseLlm, report: str) -> list[FileWork]:
     out = await setup.generate_text(llm, prompts.must_get("triage"), report)
     work = _parse_triage(out)
     if not work:
-        raise ValueError("triage: no meaningful uncovered files found in report")
+        raise NoWorkError("triage: no meaningful uncovered files found in report")
     return work
 
 

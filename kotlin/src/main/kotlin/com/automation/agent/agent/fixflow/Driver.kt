@@ -97,6 +97,9 @@ class Driver private constructor(private val engine: Engine) {
                         // The Driver only resumes a run when it has already decided to retry, so a
                         // resumed failure always means "apply again". (success/timeout never resume.)
                         retryWhen = { it["conclusion"]?.toString() == "failure" },
+                        // A clean apply (triage found nothing) is already terminal: conclude without
+                        // parking on CI so the result is never forwarded to await_ci.
+                        stopWhen = { isClean(it) },
                     ),
                 )
             val fixer =
@@ -133,6 +136,10 @@ class Driver private constructor(private val engine: Engine) {
                 val rec = store.get(sid) ?: return mapOf("error" to "apply_fix: no run params for session \"$sid\"")
                 val res = engine.attemptOnce(runParamsFromJson(rec.params))
                 mapOf("pr_number" to res.pr.number, "head_sha" to res.headSha)
+            } catch (e: NoWorkException) {
+                // Triage found nothing actionable — not a failure. Report a clean result so the
+                // sequencer concludes (stopWhen) and afterDrive sends a positive notice.
+                mapOf("clean" to true)
             } catch (e: Exception) {
                 mapOf("error" to (e.message ?: e.toString()))
             }
@@ -284,6 +291,10 @@ class Driver private constructor(private val engine: Engine) {
         if (apply != null && apply.containsKey("error")) {
             fail(sid, fullRepo, "the fix could not be applied: ${apply["error"]}")
         }
+        if (isClean(apply)) {
+            finishClean(sid, fullRepo)
+            return
+        }
         val parkedCallId = res.parkedCallId
         if (parkedCallId == null) {
             fail(sid, fullRepo, "run did not park on CI wait")
@@ -323,6 +334,18 @@ class Driver private constructor(private val engine: Engine) {
         val msg = "$fullRepo ${engine.spec.name}: $reason"
         engine.notify(engine.spec.reviewTitle, "$msg. Please review.", "")
         throw RuntimeException(msg)
+    }
+
+    /**
+     * Resolves a run whose triage found nothing to address. No PR was opened and the run never parked,
+     * so it just frees the run and sends a positive "already clean" notice — never the human-review
+     * alarm. Returns normally so the dispatcher does not log a no-op as a failure.
+     */
+    private suspend fun finishClean(sid: String, fullRepo: String) {
+        engine.log.log(System.Logger.Level.INFO, "nothing to address; already clean workflow=${engine.spec.name} repo=$fullRepo")
+        clear(sid)
+        val text = buildSummaryText(SummaryInput(outcome = TerminalOutcome.CLEAN, workflow = engine.spec.name, fullRepo = fullRepo, prNumber = 0, attempts = 0))
+        engine.notify(engine.spec.cleanTitle, text, "")
     }
 
     private fun newSessionId(): String = UUID.randomUUID().toString()
@@ -382,6 +405,16 @@ internal fun splitPrKey(key: String): Pair<String, Int> {
 
 internal fun prNumberFrom(resp: Map<String, Any?>?): Int =
     resp?.get("pr_number")?.toString()?.toDoubleOrNull()?.toInt() ?: 0
+
+/**
+ * Whether an apply result is the clean sentinel (triage found nothing). Tolerant of the value being a
+ * Boolean or its string round-trip through the ADK function-response transport.
+ */
+internal fun isClean(resp: Map<String, Any?>?): Boolean =
+    when (val v = resp?.get("clean")) {
+        is Boolean -> v
+        else -> v?.toString()?.toBoolean() ?: false
+    }
 
 /** Formats a duration as a compact human string (e.g. `90m`, `1h`, `30s`) for the timeout summary. */
 internal fun formatTimeout(d: Duration): String {

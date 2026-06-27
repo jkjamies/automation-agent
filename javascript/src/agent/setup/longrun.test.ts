@@ -87,6 +87,49 @@ describe('LongRunDriver', () => {
   });
 });
 
+describe('Sequencer stopWhen', () => {
+  it('concludes without calling Wait when the Action result satisfies stopWhen', async () => {
+    let applied = 0;
+    let awaited = 0;
+    const seq = new Sequencer(
+      'apply',
+      'await_ci',
+      (r) => String(r.conclusion) === 'failure',
+      (r) => r.clean === true,
+    );
+    const agent = new LlmAgent({
+      name: 'lr',
+      model: seq,
+      instruction: 'apply then await',
+      tools: [
+        new FunctionTool({
+          name: 'apply',
+          description: 'apply',
+          execute: () => {
+            applied += 1;
+            return { clean: true };
+          },
+        }),
+        new LongRunningFunctionTool({
+          name: 'await_ci',
+          description: 'await CI',
+          execute: () => {
+            awaited += 1;
+            return null;
+          },
+        }),
+      ],
+    });
+    const d = new LongRunDriver('lr-app', 'u', agent);
+
+    const res = await d.start('s1', 'go');
+    expect(res.parkedCallId).toBe(''); // a clean (stopWhen) apply must not park
+    expect(res.toolResponses.apply!.clean).toBe(true);
+    expect(applied).toBe(1);
+    expect(awaited).toBe(0);
+  });
+});
+
 describe('Sequencer.decide', () => {
   const seq = new Sequencer('apply', 'await_ci', (r) => String(r.conclusion) === 'failure');
 

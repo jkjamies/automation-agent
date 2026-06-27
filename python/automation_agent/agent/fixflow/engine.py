@@ -42,7 +42,16 @@ class FileWork:
     items: list[str] = field(default_factory=list)
 
 
-# TriageFunc normalizes an arbitrary tool report into per-file work (LLM-backed).
+class NoWorkError(Exception):
+    """Raised by a triage step when the report contains nothing actionable — the target is
+    already clean. It is not a failure: the Driver reports it as a positive "nothing to
+    address" outcome (a clean 👏 notification) instead of asking a human to review a fix that
+    was never needed. The apply_fix tool catches it and returns a clean-flagged result (never
+    an ``{"error": ...}`` response), so the sequencer concludes without parking on CI."""
+
+
+# TriageFunc normalizes an arbitrary tool report into per-file work (LLM-backed). It raises
+# NoWorkError when the report has nothing actionable.
 TriageFunc = Callable[[BaseLlm, str], Awaitable[list[FileWork]]]
 
 
@@ -79,6 +88,7 @@ class Spec:
     pr_title: str
     success_title: str  # notification title on success
     review_title: str  # notification title when human review is needed
+    clean_title: str  # notification title when triage finds nothing to address
     triage: TriageFunc
     analyze: AnalyzeFunc
 

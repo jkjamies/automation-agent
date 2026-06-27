@@ -24,6 +24,7 @@ def new_coverage_engine(d: Deps) -> Engine:
             pr_title="automation-agent: add test coverage",
             success_title="Coverage fix succeeded ✅",
             review_title="Coverage fix needs human review ⚠️",
+            clean_title="Coverage already sufficient 👏",
             triage=triage,
             analyze=analyze,
         ),

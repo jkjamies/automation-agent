@@ -24,6 +24,7 @@ fun newEngine(deps: Deps): Engine =
             prTitle = "automation-agent: add test coverage",
             successTitle = "Coverage fix succeeded ✅",
             reviewTitle = "Coverage fix needs human review ⚠️",
+            cleanTitle = "Coverage already sufficient 👏",
             triage = ::triage,
             analyze = ::analyze,
         ),

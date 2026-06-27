@@ -123,6 +123,11 @@ type SequencerConfig struct {
 	// nil (never retry). Policy that needs out-of-band state (attempt counts, deadlines)
 	// belongs in the caller, which simply declines to resume when it does not want a loop.
 	RetryWhen func(waitResponse map[string]any) bool
+	// StopWhen reports whether an Action result is already terminal — the loop concludes
+	// without ever calling Wait. It may be nil (always proceed to Wait). Use it for an
+	// Action that can finish the work itself (e.g. nothing to do), so the result is not
+	// forwarded to a Wait tool whose schema would reject it.
+	StopWhen func(actionResponse map[string]any) bool
 }
 
 // NewSequencerModel returns a model.LLM that emits a fixed Action→Wait tool sequence
@@ -152,6 +157,7 @@ func (s *sequencer) GenerateContent(_ context.Context, req *model.LLMRequest, _ 
 // decide chooses the next step from the most recent function response in history:
 //   - none yet                  -> call Action
 //   - Action returned an error  -> conclude (nothing to wait on)
+//   - Action result, StopWhen   -> conclude (Action already finished the work)
 //   - Action returned a result  -> call Wait, forwarding the result as its args
 //   - Wait result, RetryWhen    -> call Action again
 //   - Wait result, otherwise    -> conclude
@@ -163,6 +169,9 @@ func (s *sequencer) decide(contents []*genai.Content) *model.LLMResponse {
 	case last.Name == s.cfg.Action:
 		if msg, bad := last.Response["error"]; bad {
 			return sequencerText(fmt.Sprintf("%s failed: %v", s.cfg.Action, msg))
+		}
+		if s.cfg.StopWhen != nil && s.cfg.StopWhen(last.Response) {
+			return sequencerText("done")
 		}
 		return s.call(s.cfg.Wait, last.Response, contents)
 	case last.Name == s.cfg.Wait:

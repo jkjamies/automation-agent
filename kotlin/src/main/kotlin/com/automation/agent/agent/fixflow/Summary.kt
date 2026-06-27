@@ -4,7 +4,7 @@ import com.automation.agent.githubapi.ChangedFile
 import com.automation.agent.githubapi.Comparison
 
 /** The way a fix run ended; it selects the summary framing. */
-enum class TerminalOutcome { SUCCESS, EXHAUSTED, TIMEOUT }
+enum class TerminalOutcome { SUCCESS, EXHAUSTED, TIMEOUT, CLEAN }
 
 /**
  * Everything a terminal summary needs. The per-attempt work product lives only in the PR (commits +
@@ -41,7 +41,30 @@ fun buildSummaryText(input: SummaryInput): String {
             appendFindings("${input.fullRepo}: the ${input.workflow} fix still fails CI after ${attemptsPhrase(input.attempts)}. Please review. $changed", "Remaining", input.lastOutput)
         TerminalOutcome.TIMEOUT ->
             appendFindings("${input.fullRepo}: the ${input.workflow} fix saw no CI result after ${input.timeout} waiting for ${input.checkName} (${attemptsPhrase(input.attempts)}). Please review. $changed", "Targeted", input.report)
+        TerminalOutcome.CLEAN ->
+            cleanText(input.workflow, input.fullRepo)
     }
+}
+
+// Light-hearted "nothing to do" lines, rotated deterministically by repo name (a given repo
+// always gets the same line — stable and testable — while different repos vary). The rendered
+// line is prefixed with the capitalized workflow name (Lint, Coverage, …) so the relation is
+// obvious at a glance. Kept byte-for-byte identical across all four ports (parity); repo names
+// are ASCII, so the code-point sum is identical in every language.
+private val cleanMessages = listOf(
+    "nothing to see here 👏",
+    "squeaky clean, no work for me 🧹",
+    "all tidy already — I'll see myself out 🚪",
+    "spotless, not a thing to fix 🫧",
+    "already shipshape, standing down ✨",
+)
+
+// cleanText renders the clean-outcome body: a workflow-prefixed fun line chosen
+// deterministically from cleanMessages by the repo name.
+private fun cleanText(workflow: String, fullRepo: String): String {
+    val msg = cleanMessages[fullRepo.sumOf { it.code } % cleanMessages.size]
+    val title = workflow.replaceFirstChar { it.uppercase() }
+    return "$title: $msg — $fullRepo is already clean, no PR opened."
 }
 
 private fun attemptsPhrase(n: Int): String = if (n == 1) "1 attempt" else "$n attempts"

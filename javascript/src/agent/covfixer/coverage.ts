@@ -21,6 +21,7 @@ export function newCoverageEngine(d: Deps): Engine {
       prTitle: 'automation-agent: add test coverage',
       successTitle: 'Coverage fix succeeded ✅',
       reviewTitle: 'Coverage fix needs human review ⚠️',
+      cleanTitle: 'Coverage already sufficient 👏',
       triage,
       analyze,
     },

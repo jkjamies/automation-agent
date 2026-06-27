@@ -52,6 +52,24 @@ func TestBuildSummaryTimeout(t *testing.T) {
 	}
 }
 
+// The clean outcome is a workflow-prefixed fun line plus the repo, deterministically chosen
+// by repo name — never the review alarm. The exact string is locked for cross-port parity.
+func TestBuildSummaryClean(t *testing.T) {
+	text := buildSummaryText(summaryInput{outcome: outcomeClean, workflow: "lint", fullRepo: "acme/api"})
+	want := "Lint: all tidy already — I'll see myself out 🚪 — acme/api is already clean, no PR opened."
+	if text != want {
+		t.Errorf("clean summary =\n%q\nwant\n%q", text, want)
+	}
+	if strings.Contains(text, "review") {
+		t.Errorf("clean summary must not mention review: %q", text)
+	}
+	// A different repo rotates to a different line (deterministic, but varied).
+	other := buildSummaryText(summaryInput{outcome: outcomeClean, workflow: "coverage", fullRepo: "acme/web"})
+	if !strings.HasPrefix(other, "Coverage: ") {
+		t.Errorf("clean summary should be prefixed by the workflow: %q", other)
+	}
+}
+
 // Long findings are truncated with an ellipsis; a long file list collapses to the first
 // few plus a "+N more" tail.
 func TestBuildSummaryTruncation(t *testing.T) {

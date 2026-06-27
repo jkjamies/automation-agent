@@ -24,7 +24,7 @@ func Triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWo
 		return nil, fmt.Errorf("triage: %w", err)
 	}
 	if len(work) == 0 {
-		return nil, fmt.Errorf("triage: no actionable files found in report")
+		return nil, fmt.Errorf("triage: no actionable files found in report: %w", fixflow.ErrNoWork)
 	}
 	return work, nil
 }

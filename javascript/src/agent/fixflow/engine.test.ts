@@ -11,7 +11,15 @@ import type { Comparison, PR, PRInput } from '../../githubapi/client';
 import type { Message, Notifier } from '../../notify/notify';
 import { FakeLlm } from '../../testutil/fakes';
 import type { GitHub } from './applyfix';
-import { type Deps, Engine, type FileEdit, type FileWork, type Spec, newEngine } from './engine';
+import {
+  type Deps,
+  Engine,
+  type FileEdit,
+  type FileWork,
+  NoWorkError,
+  type Spec,
+  newEngine,
+} from './engine';
 
 class FakeGH implements GitHub {
   created: PRInput | null = null;
@@ -75,6 +83,7 @@ function spec(): Spec {
     prTitle: 'Fix',
     successTitle: 'Fix succeeded',
     reviewTitle: 'Needs human review',
+    cleanTitle: 'Already clean',
     triage,
     analyze,
   };
@@ -135,6 +144,25 @@ describe('Engine', () => {
     expect(gh.created?.head).toBe('agent/fix');
     expect(gh.labeled).toHaveLength(1);
     expect(await e.driver.parkedCount()).toBe(1);
+  });
+
+  it('finishes clean when triage finds nothing to address', async () => {
+    // Triage finding nothing actionable is a positive clean outcome: no PR is opened, no run
+    // is parked, the clean notification (not the review alarm) is sent, and kickoff resolves
+    // so the dispatcher does not log a no-op as a failure.
+    const gh = new FakeGH();
+    const n = new FakeNotifier();
+    const s = spec();
+    s.triage = async () => {
+      throw new NoWorkError('triage: nothing here');
+    };
+    const e = newEngineFor(await seedRemote(), gh, n, s);
+    await e.kickoff('{"repo":"acme/api","base":"main","report":"r"}');
+    expect(gh.created).toBeNull();
+    expect(await e.driver.parkedCount()).toBe(0);
+    expect(n.msgs).toHaveLength(1);
+    expect(n.msgs[0]!.title).toBe('Already clean');
+    expect(n.msgs[0]!.text).not.toContain('review');
   });
 
   it('rejects a kickoff for a repo not in the allowlist', async () => {

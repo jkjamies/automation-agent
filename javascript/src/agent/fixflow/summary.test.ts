@@ -59,6 +59,17 @@ describe('buildSummaryText', () => {
     expect(text).toContain('Please review.');
   });
 
+  it('frames a clean outcome as a workflow-prefixed fun line (parity-locked)', () => {
+    const text = buildSummaryText(input({ outcome: TerminalOutcome.Clean }));
+    expect(text).toBe(
+      "Lint: all tidy already — I'll see myself out 🚪 — acme/api is already clean, no PR opened.",
+    );
+    expect(text).not.toContain('review');
+    // A different repo rotates to a different line, still workflow-prefixed.
+    const other = buildSummaryText(input({ outcome: TerminalOutcome.Clean, workflow: 'coverage', fullRepo: 'acme/web' }));
+    expect(other.startsWith('Coverage: ')).toBe(true);
+  });
+
   it('reports no changes when the comparison is empty', () => {
     const text = buildSummaryText(input({ changed: { totalCommits: 0, files: [] } }));
     expect(text).toContain('No changes were recorded on the PR.');
