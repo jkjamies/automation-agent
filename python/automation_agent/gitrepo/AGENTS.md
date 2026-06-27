@@ -53,6 +53,12 @@ flowchart TD
   decoupled from `auth`). The token is re-fetched **per git op**: `push()` re-resolves it
   and re-points the origin URL, so a short-lived (~1h) GitHub App installation token that
   was minted at clone time stays current by push.
+- The token is **never persisted to disk**: `clone` resets the origin URL to the clean
+  (token-free) form immediately after cloning, and `push` re-points it at the tokened form
+  only for the network call, restoring the clean URL in a `finally`. So `.git/config` never
+  holds the credential at rest — matching the Go reference, which supplies the token as
+  transport auth rather than embedding it in the URL (GitPython shells out to the git CLI,
+  which can't do transport auth, hence the set-url dance).
 - `checkout(branch, create)`, `commit_all(msg, author)` (stages all, returns SHA),
   `push()`, `head()`, `path(rel)`.
 

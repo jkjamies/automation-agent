@@ -6,6 +6,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { createPrivateKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 /** Looks up an environment variable, returning undefined when unset. */
 export type Lookup = (key: string) => string | undefined;
@@ -54,6 +56,13 @@ export interface Config {
   // GitHub / repos
   repos: string[];
   githubToken: string;
+  // GitHub App (production auth). githubAppId === 0 means App mode is off and the static
+  // githubToken (PAT) is used. See appMode() and specs/20260625-github-app-authentication.md.
+  // githubAppPrivateKeyPem holds the literal PEM (from the env var or the key file),
+  // unescaped and validated to parse as RSA at load time.
+  githubAppId: number;
+  githubAppInstallationId: number;
+  githubAppPrivateKeyPem: string;
   // gitTransport selects the git clone/push transport: 'https' (default — uses githubToken)
   // or 'ssh' (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub
   // REST API (open/label PR, read CI) still needs a token, so an ssh run without a token
@@ -151,6 +160,11 @@ export function loadFrom(get: Lookup): Config {
     geminiCodeModel: getOr(get, 'GEMINI_CODE_MODEL', ''),
     repos: splitList(getOr(get, 'REPOS', '')),
     githubToken: getOr(get, 'GITHUB_TOKEN', getOr(get, 'GH_TOKEN', '')),
+    // App credentials are resolved below (resolveGithubApp); absent App vars leave these
+    // zero values (PAT mode).
+    githubAppId: 0,
+    githubAppInstallationId: 0,
+    githubAppPrivateKeyPem: '',
     gitTransport: getOr(get, 'GIT_TRANSPORT', 'https'),
     gitSshKey: getOr(get, 'GIT_SSH_KEY', ''),
     notifyProvider: getOr(get, 'NOTIFY_PROVIDER', NotifyProvider.Slack) as NotifyProvider,
@@ -176,8 +190,126 @@ export function loadFrom(get: Lookup): Config {
     cfg.geminiCodeModel = cfg.geminiModel;
   }
 
+  // Resolve GitHub App credentials (production auth path). Absent App vars leave the zero
+  // values — PAT mode. Partial/misconfigured App vars are a startup error, never a silent
+  // fallback to PAT.
+  const app = resolveGithubApp(get);
+  cfg.githubAppId = app.appId;
+  cfg.githubAppInstallationId = app.installationId;
+  cfg.githubAppPrivateKeyPem = app.privateKeyPem;
+
   validate(cfg);
   return cfg;
+}
+
+/** Whether GitHub App authentication is configured (the production path). False means the
+ * static PAT fallback (githubToken) is used. */
+export function appMode(c: Config): boolean {
+  return c.githubAppId !== 0;
+}
+
+/**
+ * Read the `GITHUB_APP_*` vars and decide the auth mode, returning the resolved app id,
+ * installation id, and private-key PEM.
+ *
+ * With none set, returns zeros / '' — PAT mode. With any set, App mode is intended and
+ * every requirement is enforced (App ID, a pinned installation id, and exactly one
+ * private-key source), so a partial configuration is a startup error, not a silent
+ * fallback to PAT.
+ *
+ * @throws Error on a partial/misconfigured App setup, a non-positive id, an unreadable key
+ *   file, or a key that is not valid RSA PEM.
+ */
+function resolveGithubApp(get: Lookup): {
+  appId: number;
+  installationId: number;
+  privateKeyPem: string;
+} {
+  const appIdStr = getOr(get, 'GITHUB_APP_ID', '');
+  const installIdStr = getOr(get, 'GITHUB_APP_INSTALLATION_ID', '');
+  const keyLiteral = getOr(get, 'GITHUB_APP_PRIVATE_KEY', '');
+  const keyPath = getOr(get, 'GITHUB_APP_PRIVATE_KEY_PATH', '');
+
+  if (!appIdStr && !installIdStr && !keyLiteral && !keyPath) {
+    return { appId: 0, installationId: 0, privateKeyPem: '' }; // PAT mode — no App vars present.
+  }
+
+  // Any App var present signals intent to use App mode; require the full set.
+  if (!appIdStr) {
+    throw new Error('GITHUB_APP_* set but GITHUB_APP_ID is missing (App mode requires GITHUB_APP_ID)');
+  }
+  if (!installIdStr) {
+    throw new Error('App mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)');
+  }
+  if (keyLiteral && keyPath) {
+    throw new Error(
+      'set exactly one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both',
+    );
+  }
+  if (!keyLiteral && !keyPath) {
+    throw new Error('App mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH');
+  }
+
+  const appId = positiveId(appIdStr, 'GITHUB_APP_ID');
+  const installationId = positiveId(installIdStr, 'GITHUB_APP_INSTALLATION_ID');
+
+  let raw: string;
+  if (keyPath) {
+    try {
+      raw = readFileSync(keyPath, 'utf-8');
+    } catch (err) {
+      throw new Error(`read GITHUB_APP_PRIVATE_KEY_PATH ${JSON.stringify(keyPath)}: ${errMsg(err)}`);
+    }
+  } else {
+    raw = keyLiteral;
+  }
+  return { appId, installationId, privateKeyPem: normalizePrivateKeyPem(raw) };
+}
+
+/** Parse a positive integer id, rejecting non-numeric and <= 0 (0 would collide with
+ * appMode()'s zero-value sentinel and silently fall back to PAT). */
+function positiveId(raw: string, name: string): number {
+  if (!/^[+-]?\d+$/.test(raw)) {
+    throw new Error(`${name} must be numeric, got ${JSON.stringify(raw)}`);
+  }
+  const n = Number.parseInt(raw, 10);
+  if (n <= 0) {
+    throw new Error(`${name} must be > 0, got ${n}`);
+  }
+  return n;
+}
+
+/**
+ * Make the App private key robust to how it is delivered: CI secret stores often flatten
+ * newlines to the literal characters `\n`, so when the value looks like PEM and contains
+ * escaped `\n` sequences, restore them — even if a real trailing newline is also present.
+ * Then validate the key parses as an RSA private key, failing at startup with a clear
+ * message rather than a cryptic RS256 error at the first token exchange.
+ *
+ * @throws Error if the value is not valid PEM or is not an RSA private key.
+ */
+function normalizePrivateKeyPem(raw: string): string {
+  let pem = raw;
+  if (pem.includes('-----BEGIN') && pem.includes('\\n')) {
+    pem = pem.replaceAll('\\n', '\n');
+  }
+  let key;
+  try {
+    key = createPrivateKey(pem);
+  } catch (err) {
+    throw new Error(`GitHub App private key is not valid PEM / does not parse: ${errMsg(err)}`);
+  }
+  // GitHub App keys are RSA, and RS256 JWT signing requires an RSA key — reject EC/Ed25519
+  // here rather than failing cryptically at the first token exchange.
+  if (key.asymmetricKeyType !== 'rsa') {
+    throw new Error(`GitHub App private key must be RSA, got ${key.asymmetricKeyType ?? 'unknown'}`);
+  }
+  return pem;
+}
+
+/** Extract a message from a thrown value. */
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -215,6 +347,14 @@ export function validate(c: Config): void {
   }
   if (port < 1 || port > 65535) {
     throw new Error(`PORT must be in 1..65535, got ${port}`);
+  }
+  // In App mode an installation can see every repo it is installed on, so an empty
+  // allow-list ("act on all repos", the PAT-mode default) is a footgun — fail fast. PAT
+  // mode keeps "empty = all" for local-dev back-compat.
+  if (appMode(c) && c.repos.length === 0) {
+    throw new Error(
+      'REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)',
+    );
   }
 }
 

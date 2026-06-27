@@ -1,6 +1,10 @@
 // Tests for the config loader.
-import { describe, expect, it } from 'vitest';
-import { loadFrom, NotifyProvider, Provider, SessionBackend } from './config';
+import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend } from './config';
 
 function mapLookup(m: Record<string, string>) {
   return (key: string): string | undefined => m[key];
@@ -116,5 +120,135 @@ describe('config', () => {
 
   it('rejects a PORT out of range', () => {
     expect(() => loadFrom(mapLookup({ PORT: '70000' }))).toThrow();
+  });
+});
+
+// --- GitHub App mode ---------------------------------------------------------
+// Mirrors python/tests/test_config_app.py and go/internal/config/config_app_test.go: the
+// env-var contract, App-vs-PAT mode selection, positive-id and RSA-PEM validation, the
+// flattened-`\n` unescape (including the trailing-newline regression), and the empty-REPOS
+// rejection. No network — throwaway keys generated in-process.
+
+function rsaPem(pkcs1 = false): string {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: pkcs1 ? 'pkcs1' : 'pkcs8', format: 'pem' },
+  });
+  return privateKey;
+}
+
+function ecPem(): string {
+  const { privateKey } = generateKeyPairSync('ec', {
+    namedCurve: 'P-256',
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  return privateKey;
+}
+
+// A valid RSA key shared across cases that don't probe key parsing (keygen is slow).
+const APP_PEM = rsaPem();
+
+function appEnv(overrides: Record<string, string>): Record<string, string> {
+  // The full set of vars that select App mode; REPOS is included because App mode rejects
+  // an empty allow-list.
+  return {
+    GITHUB_APP_ID: '42',
+    GITHUB_APP_INSTALLATION_ID: '99',
+    GITHUB_APP_PRIVATE_KEY: APP_PEM,
+    REPOS: 'acme/api',
+    ...overrides,
+  };
+}
+
+describe('config: github app', () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'config-app-'));
+  afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
+
+  let keyFileSeq = 0;
+  function writeKeyFile(contents: string): string {
+    const p = join(tmpRoot, `key-${keyFileSeq++}.pem`);
+    writeFileSync(p, contents);
+    return p;
+  }
+
+  it('stays in PAT mode when no App vars are set', () => {
+    const c = loadFrom(mapLookup({ GITHUB_TOKEN: 'pat', REPOS: 'acme/api' }));
+    expect(appMode(c)).toBe(false);
+    expect(c.githubAppId).toBe(0);
+    expect(c.githubAppInstallationId).toBe(0);
+    expect(c.githubAppPrivateKeyPem).toBe('');
+  });
+
+  it('selects App mode from the full var set', () => {
+    const c = loadFrom(mapLookup(appEnv({})));
+    expect(appMode(c)).toBe(true);
+    expect(c.githubAppId).toBe(42);
+    expect(c.githubAppInstallationId).toBe(99);
+    expect(c.githubAppPrivateKeyPem).toContain('-----BEGIN');
+  });
+
+  it('accepts a PKCS#1 RSA key', () => {
+    const c = loadFrom(mapLookup(appEnv({ GITHUB_APP_PRIVATE_KEY: rsaPem(true) })));
+    expect(appMode(c)).toBe(true);
+  });
+
+  it('reads the key from a file', () => {
+    const keyPath = writeKeyFile(APP_PEM);
+    const c = loadFrom(
+      mapLookup(appEnv({ GITHUB_APP_PRIVATE_KEY: '', GITHUB_APP_PRIVATE_KEY_PATH: keyPath })),
+    );
+    expect(appMode(c)).toBe(true);
+    expect(c.githubAppPrivateKeyPem).toContain('-----BEGIN');
+  });
+
+  it('unescapes a flattened (literal \\n) key', () => {
+    const flattened = APP_PEM.replaceAll('\n', '\\n');
+    const c = loadFrom(mapLookup(appEnv({ GITHUB_APP_PRIVATE_KEY: flattened })));
+    expect(appMode(c)).toBe(true);
+    expect(c.githubAppPrivateKeyPem).not.toContain('\\n'); // escaped \n restored
+  });
+
+  it('unescapes a flattened key that also has a real trailing newline (from a file)', () => {
+    // A secret store can flatten newlines to literal `\n` and still append one real trailing
+    // newline; the unescape must run on the escaped sequences regardless. The file path is
+    // read untrimmed, so this exercises the corrected condition directly.
+    const keyPath = writeKeyFile(APP_PEM.replaceAll('\n', '\\n') + '\n');
+    const c = loadFrom(
+      mapLookup(appEnv({ GITHUB_APP_PRIVATE_KEY: '', GITHUB_APP_PRIVATE_KEY_PATH: keyPath })),
+    );
+    expect(appMode(c)).toBe(true);
+    expect(c.githubAppPrivateKeyPem).not.toContain('\\n');
+  });
+
+  it.each([
+    ['missing app id', { GITHUB_APP_ID: '' }],
+    ['missing installation', { GITHUB_APP_INSTALLATION_ID: '' }],
+    ['missing key', { GITHUB_APP_PRIVATE_KEY: '' }],
+    ['both key sources', { GITHUB_APP_PRIVATE_KEY_PATH: '/some/key.pem' }],
+    ['zero app id', { GITHUB_APP_ID: '0' }],
+    ['negative app id', { GITHUB_APP_ID: '-1' }],
+    ['non-numeric app id', { GITHUB_APP_ID: 'abc' }],
+    ['zero installation', { GITHUB_APP_INSTALLATION_ID: '0' }],
+    ['non-numeric installation', { GITHUB_APP_INSTALLATION_ID: 'x' }],
+    ['invalid pem', { GITHUB_APP_PRIVATE_KEY: 'not a pem' }],
+    ['empty repos in app mode', { REPOS: '' }],
+  ])('rejects %s', (_name, overrides) => {
+    expect(() => loadFrom(mapLookup(appEnv(overrides)))).toThrow();
+  });
+
+  it('rejects a non-RSA (EC) key', () => {
+    expect(() => loadFrom(mapLookup(appEnv({ GITHUB_APP_PRIVATE_KEY: ecPem() })))).toThrow(/RSA/);
+  });
+
+  it('rejects an unreadable key file', () => {
+    expect(() =>
+      loadFrom(
+        mapLookup(
+          appEnv({ GITHUB_APP_PRIVATE_KEY: '', GITHUB_APP_PRIVATE_KEY_PATH: '/no/such/key.pem' }),
+        ),
+      ),
+    ).toThrow(/read GITHUB_APP_PRIVATE_KEY_PATH/);
   });
 });

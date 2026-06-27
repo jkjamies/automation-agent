@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Comparison, PR, PRInput } from '../../githubapi/client';
-import { type Author, Repo } from '../../gitrepo/repo';
+import { type Author, Repo, type TokenProvider } from '../../gitrepo/repo';
 import { safeJoin } from './files';
 
 /** The slice of githubapi the apply step + terminal summary need (consumer-defined, fakeable). */
@@ -34,7 +34,8 @@ export interface ApplyConfig {
   owner: string;
   repo: string;
   cloneUrl: string;
-  token: string;
+  // provider resolves the git token per op (https remotes); null/anonymous for ssh/local.
+  provider: TokenProvider | null;
   base: string; // base branch the PR targets
   branch: string; // agent working branch
   newBranch: boolean; // true on kickoff (create from base); false on retry (reuse)
@@ -61,7 +62,10 @@ export async function openRepo(cfg: ApplyConfig): Promise<Repo> {
   const dir = mkdtempSync(join(tmpdir(), 'agentfix-'));
   let repo: Repo;
   try {
-    repo = await Repo.clone(cfg.cloneUrl, dir, cfg.token);
+    repo = await Repo.clone(cfg.cloneUrl, dir, {
+      provider: cfg.provider,
+      repo: `${cfg.owner}/${cfg.repo}`,
+    });
   } catch (err) {
     rmSync(dir, { recursive: true, force: true });
     throw err;

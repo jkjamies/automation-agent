@@ -7,7 +7,8 @@ flowchart TD
     Main["run(): load .env -> config.load()"] --> Cfg
     Cfg -->|err| Fatal["log + exit(1)"]
     Cfg --> LLM["buildLLM(cfg) + buildCodeLLM(cfg)"]
-    LLM --> GH["new Client(githubToken)"]
+    LLM --> Prov["buildTokenProvider(cfg): App installation token | PAT/anonymous"]
+    Prov --> GH["new Client(provider)"]
     GH --> Notif["buildNotifier(cfg) -> Notifier | null"]
     Notif --> SumA["buildSummary daily (null if no repos/notifier)"]
     SumA --> Eng["newLintEngine(FixDeps)\nnewCoverageEngine(FixDeps)\nengines = [lint, cov]"]
