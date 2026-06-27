@@ -148,6 +148,27 @@ data class Config(
      */
     fun appMode(): Boolean = githubAppId != 0L
 
+    /**
+     * Renders the config with every credential masked, so a debug/startup log that prints it never
+     * leaks a secret. The data class's synthesized [toString] would otherwise dump the App private
+     * key, PAT, webhook secret, internal token, and webhook URLs verbatim. Keep the secret set below
+     * in sync when adding a sensitive field. (Mirrors Go's redacting `String()`, Python's
+     * `repr=False`, and JS's `toJSON`.)
+     */
+    override fun toString(): String =
+        "Config(" +
+            "llmProvider=$llmProvider, ollamaHost=$ollamaHost, ollamaModel=$ollamaModel, " +
+            "geminiModel=$geminiModel, ollamaCodeModel=$ollamaCodeModel, geminiCodeModel=$geminiCodeModel, " +
+            "repos=$repos, githubToken=${redactSecret(githubToken)}, githubAppId=$githubAppId, " +
+            "githubAppInstallationId=$githubAppInstallationId, " +
+            "githubAppPrivateKeyPem=${redactSecret(githubAppPrivateKeyPem)}, gitTransport=$gitTransport, " +
+            "gitSshKey=$gitSshKey, notifyProvider=$notifyProvider, " +
+            "slackWebhookUrl=${redactSecret(slackWebhookUrl)}, teamsWebhookUrl=${redactSecret(teamsWebhookUrl)}, " +
+            "port=$port, maxIterations=$maxIterations, ciTimeout=$ciTimeout, " +
+            "githubWebhookSecret=${redactSecret(githubWebhookSecret)}, agentPrLabel=$agentPrLabel, " +
+            "sessionBackend=$sessionBackend, sqliteDsn=$sqliteDsn, firestoreProject=$firestoreProject, " +
+            "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)})"
+
     companion object {
         /** A function that resolves an environment key to its value, or null if unset. */
         fun interface Lookup {
@@ -157,9 +178,11 @@ data class Config(
         /** Load reads configuration from the process environment, applying defaults. */
         fun load(): Config {
             val c = loadFrom { key -> System.getenv(key) }
-            // When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's
-            // gh CLI login so a local run authenticates to GitHub without a hand-set token.
-            return if (c.githubToken.isEmpty()) c.copy(githubToken = ghCliToken()) else c
+            // When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh CLI
+            // login so a local run authenticates to GitHub without a hand-set token. Skipped in App
+            // mode: the App provider mints its own tokens, so shelling out to gh would be a useless
+            // subprocess that could also hydrate a PAT the deployment never asked for.
+            return if (!c.appMode() && c.githubToken.isEmpty()) c.copy(githubToken = ghCliToken()) else c
         }
 
         /**
@@ -232,6 +255,10 @@ data class Config(
         }
     }
 }
+
+// Masks a secret for [Config.toString]: an unset value stays visibly empty (debugging a missing
+// credential is common), a set value collapses to a fixed marker so its bytes never reach a log.
+private fun redactSecret(s: String): String = if (s.isEmpty()) "\"\"" else "***"
 
 // Trims so trailing whitespace/newlines on a value from the real environment
 // (e.g. a CI secret with a trailing newline) do not leak into the setting.

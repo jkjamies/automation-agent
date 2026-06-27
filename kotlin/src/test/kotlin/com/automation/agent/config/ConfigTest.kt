@@ -338,6 +338,33 @@ class ConfigTest : BehaviorSpec({
         }
     }
 
+    Given("a config holding secrets") {
+        When("it is stringified (e.g. by a debug/startup log)") {
+            val c = Config.loadFrom(
+                lookupOf(
+                    appEnv(
+                        mapOf(
+                            "GITHUB_TOKEN" to "ghp_supersecretpat",
+                            "GITHUB_WEBHOOK_SECRET" to "webhook-shhh",
+                            "INTERNAL_TOKEN" to "internal-shhh",
+                            "SLACK_WEBHOOK_URL" to "https://hooks.slack.com/services/SECRETPATH",
+                        ),
+                    ),
+                ),
+            )
+            val s = c.toString()
+            Then("every credential value is masked and none leaks verbatim") {
+                s shouldNotContain "ghp_supersecretpat"
+                s shouldNotContain "webhook-shhh"
+                s shouldNotContain "internal-shhh"
+                s shouldNotContain "SECRETPATH"
+                s shouldNotContain "-----BEGIN" // the App private key PEM must never appear
+                s shouldContain "***"
+                s shouldContain "githubAppId=42" // non-secret fields stay visible for debugging
+            }
+        }
+    }
+
     Given("a misconfigured GitHub App env") {
         listOf(
             "missing app id" to mapOf("GITHUB_APP_ID" to ""),
