@@ -28,9 +28,11 @@ type FileEdit struct {
 
 // ApplyConfig parameterizes one apply.
 type ApplyConfig struct {
-	Owner, Repo   string
-	CloneURL      string
-	Token         string
+	Owner, Repo string
+	CloneURL    string
+	// Provider yields the GitHub token for https git transport, fetched fresh per op
+	// (scoped to Owner/Repo). Nil/empty token means anonymous. Ignored for an ssh CloneURL.
+	Provider gitrepo.TokenProvider
 	// SSHKey is the explicit private-key path for an ssh CloneURL (GIT_SSH_KEY); empty
 	// falls back to ssh-agent then default identities. Ignored for an https CloneURL.
 	SSHKey        string
@@ -59,7 +61,9 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tempdir: %w", err)
 	}
-	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, gitrepo.Auth{Token: cfg.Token, SSHKey: cfg.SSHKey})
+	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, gitrepo.Auth{
+		Provider: cfg.Provider, Repo: cfg.Owner + "/" + cfg.Repo, SSHKey: cfg.SSHKey,
+	})
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err

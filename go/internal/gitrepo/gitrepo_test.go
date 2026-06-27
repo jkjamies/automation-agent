@@ -28,9 +28,25 @@ func TestIsSSHURL(t *testing.T) {
 	}
 }
 
+// fakeProvider is a TokenProvider returning a fixed token, recording the repo it
+// was asked for so tests can assert the per-op token is scoped to the right repo.
+type fakeProvider struct {
+	tok      string
+	lastRepo string
+	calls    int
+}
+
+func (f *fakeProvider) Token(_ context.Context, repo string) (string, error) {
+	f.calls++
+	f.lastRepo = repo
+	return f.tok, nil
+}
+
 func TestAuthForHTTPS(t *testing.T) {
-	// A token yields x-access-token basic auth; an empty token is anonymous (nil).
-	m, err := authFor("https://github.com/acme/api.git", Auth{Token: "tok"})
+	// A provider token yields x-access-token basic auth, scoped to the repo; a nil
+	// provider is anonymous (nil).
+	p := &fakeProvider{tok: "tok"}
+	m, err := authFor(context.Background(), "https://github.com/acme/api.git", Auth{Provider: p, Repo: "acme/api"})
 	if err != nil {
 		t.Fatalf("authFor https+token: %v", err)
 	}
@@ -41,7 +57,10 @@ func TestAuthForHTTPS(t *testing.T) {
 	if ba.Username != "x-access-token" || ba.Password != "tok" {
 		t.Errorf("basic auth = %s/%s, want x-access-token/tok", ba.Username, ba.Password)
 	}
-	if m, err := authFor("https://github.com/acme/api.git", Auth{}); err != nil || m != nil {
+	if p.lastRepo != "acme/api" {
+		t.Errorf("provider asked for repo %q, want acme/api", p.lastRepo)
+	}
+	if m, err := authFor(context.Background(), "https://github.com/acme/api.git", Auth{}); err != nil || m != nil {
 		t.Errorf("authFor https anonymous = (%v, %v), want (nil, nil)", m, err)
 	}
 }
@@ -49,7 +68,7 @@ func TestAuthForHTTPS(t *testing.T) {
 func TestAuthForSSHExplicitKeyMissing(t *testing.T) {
 	// An ssh URL routes to ssh auth; a non-existent explicit key path is a clear error
 	// rather than a silent fallthrough to token auth.
-	_, err := authFor("git@github.com:acme/api.git", Auth{SSHKey: filepath.Join(t.TempDir(), "absent_key")})
+	_, err := authFor(context.Background(), "git@github.com:acme/api.git", Auth{SSHKey: filepath.Join(t.TempDir(), "absent_key")})
 	if err == nil {
 		t.Fatal("expected an error for a missing ssh key file")
 	}
@@ -79,6 +98,45 @@ func seedRemote(t *testing.T) string {
 		t.Fatalf("seed commit: %v", err)
 	}
 	return dir
+}
+
+// TestAuthForReResolvesPerOp verifies the per-op token contract directly on authFor
+// (the single resolution point Clone and Push both call): each invocation against an
+// https remote re-fetches from the provider, so a short-lived installation token is
+// re-read rather than captured stale. The https token path itself is asserted in
+// TestAuthForHTTPS.
+func TestAuthForReResolvesPerOp(t *testing.T) {
+	p := &fakeProvider{tok: "tok"}
+	a := Auth{Provider: p, Repo: "acme/api"}
+	for i := 0; i < 2; i++ {
+		if _, err := authFor(context.Background(), "https://github.com/acme/api.git", a); err != nil {
+			t.Fatalf("authFor #%d: %v", i, err)
+		}
+	}
+	if p.calls != 2 {
+		t.Errorf("provider consulted %d times over 2 ops, want 2 (per-op re-resolution)", p.calls)
+	}
+}
+
+// TestLocalRemoteSkipsProvider guards the fix that local/file remotes never mint a
+// token: a local seed remote clones and pushes anonymously, without consulting the
+// provider (which in App mode would be a needless GitHub installation-token request).
+func TestLocalRemoteSkipsProvider(t *testing.T) {
+	remote := seedRemote(t)
+	work := filepath.Join(t.TempDir(), "work")
+	ctx := context.Background()
+	p := &fakeProvider{tok: "tok"}
+
+	r, err := Clone(ctx, remote, work, Auth{Provider: p, Repo: "acme/api"})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if err := r.Push(ctx); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if p.calls != 0 {
+		t.Errorf("provider consulted %d times for a local remote, want 0 (anonymous)", p.calls)
+	}
 }
 
 func TestCloneBranchCommitPush(t *testing.T) {

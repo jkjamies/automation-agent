@@ -4,7 +4,12 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -70,6 +75,10 @@ type Config struct {
 	// GitHub / repos
 	Repos       []string
 	GitHubToken string
+	// GitHubApp carries the resolved GitHub App credentials. A zero value
+	// (AppID == 0) means App mode is off and the static GitHubToken (PAT) is used.
+	// See AppMode and specs/20260625-github-app-authentication.md.
+	GitHubApp GitHubApp
 	// GitTransport selects the git clone/push transport: "https" (default — uses GitHubToken)
 	// or "ssh" (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub
 	// REST API (open/label PR, read CI) still needs a token, so an ssh run without a token
@@ -100,6 +109,20 @@ type Config struct {
 	// (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
 	AgentPRLabel string
 }
+
+// GitHubApp holds the GitHub App installation-token credentials, resolved at load
+// time. It is populated only in App mode (production); in PAT mode it is the zero
+// value. PrivateKeyPEM holds the literal PEM bytes (sourced from the literal env
+// var or the key file), already unescaped and validated to parse.
+type GitHubApp struct {
+	AppID          int64
+	InstallationID int64
+	PrivateKeyPEM  []byte
+}
+
+// AppMode reports whether GitHub App authentication is configured (production
+// path). False means the static PAT fallback is used.
+func (c Config) AppMode() bool { return c.GitHubApp.AppID != 0 }
 
 // Load reads configuration from the process environment, applying defaults.
 func Load() (Config, error) {
@@ -173,6 +196,13 @@ func loadFrom(get lookup) (Config, error) {
 		c.GeminiCodeModel = c.GeminiModel
 	}
 
+	// Resolve GitHub App credentials (production auth path). Absent App vars leave
+	// GitHubApp zero — PAT mode. Partial/misconfigured App vars are a startup error,
+	// never a silent fallback (Decision §4).
+	if c.GitHubApp, err = resolveGitHubApp(get); err != nil {
+		return Config{}, err
+	}
+
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -214,7 +244,99 @@ func (c Config) Validate() error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("PORT must be in 1..65535, got %d", port)
 	}
+	// In App mode an installation can see every repo it is installed on, so an empty
+	// allow-list ("act on all repos", the PAT-mode default) is a footgun — fail fast
+	// (Decision §3). PAT mode keeps "empty = all" for local-dev back-compat.
+	if c.AppMode() && len(c.Repos) == 0 {
+		return errors.New("REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)")
+	}
 	return nil
+}
+
+// resolveGitHubApp reads the GITHUB_APP_* vars and decides the auth mode. With none
+// set, it returns the zero value (PAT mode). With any set, App mode is intended and
+// every requirement is enforced — App ID, a pinned installation id, and exactly one
+// private-key source — so a partial configuration is a startup error, not a silent
+// fallback to PAT (mode-selection rule, spec §"Config / env" + Decision §4).
+func resolveGitHubApp(get lookup) (GitHubApp, error) {
+	appIDStr := getOr(get, "GITHUB_APP_ID", "")
+	installIDStr := getOr(get, "GITHUB_APP_INSTALLATION_ID", "")
+	keyLiteral := getOr(get, "GITHUB_APP_PRIVATE_KEY", "")
+	keyPath := getOr(get, "GITHUB_APP_PRIVATE_KEY_PATH", "")
+
+	if appIDStr == "" && installIDStr == "" && keyLiteral == "" && keyPath == "" {
+		return GitHubApp{}, nil // PAT mode — no App vars present.
+	}
+	// Any App var present signals intent to use App mode; require the full set.
+	if appIDStr == "" {
+		return GitHubApp{}, errors.New("GITHUB_APP_* set but GITHUB_APP_ID is missing (App mode requires GITHUB_APP_ID)")
+	}
+	if installIDStr == "" {
+		return GitHubApp{}, errors.New("App mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)")
+	}
+	switch {
+	case keyLiteral != "" && keyPath != "":
+		return GitHubApp{}, errors.New("set exactly one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both")
+	case keyLiteral == "" && keyPath == "":
+		return GitHubApp{}, errors.New("App mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH")
+	}
+
+	appID, err := strconv.ParseInt(appIDStr, 10, 64)
+	if err != nil {
+		return GitHubApp{}, fmt.Errorf("GITHUB_APP_ID must be numeric, got %q", appIDStr)
+	}
+	// A non-positive App ID is invalid and, worse, 0 would collide with AppMode's
+	// zero-value sentinel and silently fall back to PAT — reject it explicitly.
+	if appID <= 0 {
+		return GitHubApp{}, fmt.Errorf("GITHUB_APP_ID must be > 0, got %d", appID)
+	}
+	installID, err := strconv.ParseInt(installIDStr, 10, 64)
+	if err != nil {
+		return GitHubApp{}, fmt.Errorf("GITHUB_APP_INSTALLATION_ID must be numeric, got %q", installIDStr)
+	}
+	if installID <= 0 {
+		return GitHubApp{}, fmt.Errorf("GITHUB_APP_INSTALLATION_ID must be > 0, got %d", installID)
+	}
+
+	raw := []byte(keyLiteral)
+	if keyPath != "" {
+		if raw, err = os.ReadFile(keyPath); err != nil {
+			return GitHubApp{}, fmt.Errorf("read GITHUB_APP_PRIVATE_KEY_PATH %q: %w", keyPath, err)
+		}
+	}
+	pemBytes, err := normalizePrivateKeyPEM(raw)
+	if err != nil {
+		return GitHubApp{}, err
+	}
+	return GitHubApp{AppID: appID, InstallationID: installID, PrivateKeyPEM: pemBytes}, nil
+}
+
+// normalizePrivateKeyPEM makes the App private key robust to how it is delivered
+// (Decision §4): CI secret stores often flatten newlines to the literal characters
+// `\n`, so when the value looks like PEM but has no real newline, restore them.
+// It then validates the key parses as an RSA private key, failing at startup with a
+// clear message rather than a cryptic RS256 error at first token exchange.
+func normalizePrivateKeyPEM(raw []byte) ([]byte, error) {
+	if bytes.Contains(raw, []byte("-----BEGIN")) && !bytes.Contains(raw, []byte("\n")) {
+		raw = bytes.ReplaceAll(raw, []byte(`\n`), []byte("\n"))
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, errors.New("GitHub App private key is not valid PEM (no PEM block found)")
+	}
+	// GitHub App keys are RSA, and RS256 JWT signing requires an RSA key. Accept a
+	// PKCS#1 key, or a PKCS#8 key only if it is specifically RSA — reject EC/Ed25519
+	// here rather than failing cryptically at the first token exchange.
+	if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+		key, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err2 != nil {
+			return nil, fmt.Errorf("GitHub App private key does not parse as an RSA key: %w", err)
+		}
+		if _, ok := key.(*rsa.PrivateKey); !ok {
+			return nil, fmt.Errorf("GitHub App private key must be RSA, got %T", key)
+		}
+	}
+	return raw, nil
 }
 
 type lookup func(string) (string, bool)

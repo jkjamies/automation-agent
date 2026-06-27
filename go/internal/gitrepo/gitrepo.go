@@ -26,22 +26,37 @@ type Author struct {
 	Email string
 }
 
-// Repo is a cloned working tree.
+// Repo is a cloned working tree. It keeps the clone URL and Auth so Push can
+// re-resolve credentials per operation — GitHub App installation tokens are
+// short-lived (~1h), so a token captured at clone time may be stale by push.
 type Repo struct {
 	repo *git.Repository
 	wt   *git.Worktree
 	dir  string
-	auth transport.AuthMethod
+	url  string
+	auth Auth
 	now  func() time.Time
 }
 
+// TokenProvider yields a valid GitHub token for a repo ("owner/name"), re-fetched
+// per git operation. It is the gitrepo-local view of auth.TokenProvider (a narrow
+// interface kept here so gitrepo stays decoupled from the auth package).
+type TokenProvider interface {
+	Token(ctx context.Context, repo string) (string, error)
+}
+
 // Auth carries the credentials Clone/Push use. Which one applies is chosen by the
-// clone URL scheme, not by the caller: an https remote uses Token (GitHub x-access-token
-// basic auth), an ssh remote (git@… / ssh://…) uses SSHKey or the ssh-agent.
+// clone URL scheme, not by the caller: an https remote uses Provider (GitHub
+// x-access-token basic auth), an ssh remote (git@… / ssh://…) uses SSHKey or the
+// ssh-agent.
 type Auth struct {
-	// Token is the GitHub token used as x-access-token basic auth on https remotes.
-	// Empty means anonymous (public read only). Ignored for ssh remotes.
-	Token string
+	// Provider yields the GitHub token used as x-access-token basic auth on https
+	// remotes, fetched fresh per git op (scoped to Repo) so a short-lived
+	// installation token is always current. Nil — or a token of "" — means
+	// anonymous (public read only). Ignored for ssh remotes.
+	Provider TokenProvider
+	// Repo is "owner/name", passed to Provider so App mode can scope the token.
+	Repo string
 	// SSHKey is an explicit private-key path for ssh remotes. Empty falls back to the
 	// ssh-agent, then the default identity files (~/.ssh/id_ed25519, id_rsa, id_ecdsa),
 	// mirroring the ssh binary. Ignored for https remotes.
@@ -58,16 +73,31 @@ func isSSHURL(url string) bool {
 }
 
 // authFor selects the auth method by URL scheme: ssh keys/agent for an ssh remote,
-// x-access-token basic auth (or nil/anonymous) for an https remote. Host-key checking
-// stays on for ssh — go-git defaults HostKeyCallback to the user's known_hosts.
-func authFor(url string, a Auth) (transport.AuthMethod, error) {
+// x-access-token basic auth (or nil/anonymous) for an https remote. For https it
+// fetches a fresh, repo-scoped token from the provider at call time, so each git op
+// uses a currently-valid token. Host-key checking stays on for ssh — go-git defaults
+// HostKeyCallback to the user's known_hosts.
+func authFor(ctx context.Context, url string, a Auth) (transport.AuthMethod, error) {
 	if isSSHURL(url) {
 		return sshAuth(a.SSHKey)
 	}
-	if a.Token == "" {
+	// Only http(s) remotes use token auth. A local path or file:// remote needs no
+	// credentials, and fetching a token for one would mint a needless GitHub
+	// installation token (a real API round-trip) in App mode.
+	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
 		return nil, nil
 	}
-	return &githttp.BasicAuth{Username: "x-access-token", Password: a.Token}, nil
+	if a.Provider == nil {
+		return nil, nil
+	}
+	tok, err := a.Provider.Token(ctx, a.Repo)
+	if err != nil {
+		return nil, fmt.Errorf("get token for %s: %w", a.Repo, err)
+	}
+	if tok == "" {
+		return nil, nil
+	}
+	return &githttp.BasicAuth{Username: "x-access-token", Password: tok}, nil
 }
 
 // sshAuth resolves ssh credentials like the ssh binary: an explicit key path wins;
@@ -106,7 +136,7 @@ func sshAuth(keyPath string) (transport.AuthMethod, error) {
 // Clone clones url into dir (which must not already exist). The auth applied is chosen
 // by url's scheme — see Auth.
 func Clone(ctx context.Context, url, dir string, auth Auth) (*Repo, error) {
-	am, err := authFor(url, auth)
+	am, err := authFor(ctx, url, auth)
 	if err != nil {
 		return nil, fmt.Errorf("auth for %s: %w", url, err)
 	}
@@ -118,7 +148,7 @@ func Clone(ctx context.Context, url, dir string, auth Auth) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
-	return &Repo{repo: repo, wt: wt, dir: dir, auth: am, now: time.Now}, nil
+	return &Repo{repo: repo, wt: wt, dir: dir, url: url, auth: auth, now: time.Now}, nil
 }
 
 // Dir returns the working-tree directory; callers write file edits under it.
@@ -185,8 +215,14 @@ func (r *Repo) CommitAll(msg string, a Author) (string, error) {
 }
 
 // Push pushes the current branch to origin. An up-to-date push is not an error.
+// Credentials are re-resolved here (not reused from clone) so a fresh, repo-scoped
+// token authenticates the push even if the clone-time token has since expired.
 func (r *Repo) Push(ctx context.Context) error {
-	err := r.repo.PushContext(ctx, &git.PushOptions{Auth: r.auth})
+	am, err := authFor(ctx, r.url, r.auth)
+	if err != nil {
+		return fmt.Errorf("auth for push: %w", err)
+	}
+	err = r.repo.PushContext(ctx, &git.PushOptions{Auth: am})
 	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("push: %w", err)
 	}

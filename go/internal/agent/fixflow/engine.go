@@ -89,11 +89,13 @@ type Spec struct {
 // the code-change steps (typically larger); it falls back to LLM when nil. CITimeout
 // bounds how long a single suspended run waits for its CI result before it is freed.
 type Deps struct {
-	LLM       model.LLM
-	CodeLLM   model.LLM
-	GH        GitHub
-	Notify    notify.Notifier
-	Token     string
+	LLM     model.LLM
+	CodeLLM model.LLM
+	GH      GitHub
+	Notify  notify.Notifier
+	// Provider authenticates git transport (https x-access-token) per op. A static
+	// PAT in local dev, an auto-refreshed App installation token in production.
+	Provider  gitrepo.TokenProvider
 	MaxIter   int
 	CITimeout time.Duration
 	// PRLabel is the single human-facing label applied to every agent PR on creation
@@ -227,7 +229,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 	}
 
 	cfg := ApplyConfig{
-		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Token: e.d.Token, SSHKey: e.d.SSHKey,
+		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Provider: e.d.Provider, SSHKey: e.d.SSHKey,
 		Base: rp.base, Branch: e.spec.Branch, NewBranch: rp.newBranch, Label: e.d.PRLabel,
 		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work),
 		Author: e.d.Author,

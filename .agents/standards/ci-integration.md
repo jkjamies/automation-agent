@@ -209,7 +209,10 @@ jobs:
 ```
 
 The check's `check_run` event is delivered to `POST /webhooks/github` (verified with
-`GITHUB_WEBHOOK_SECRET` via the `X-Hub-Signature-256` HMAC). The agent then:
+`GITHUB_WEBHOOK_SECRET` via the `X-Hub-Signature-256` HMAC). In production the
+delivery comes from a **single App-level webhook** on the deployment's GitHub App
+(its Webhook secret is set to `GITHUB_WEBHOOK_SECRET`) — there are **no per-repo
+webhooks** to wire (see [`deployment.md`](deployment.md)). The agent then:
 
 - **success** → posts a status-aware success summary to Slack/Teams (commits + changed files,
   via `githubapi.Compare`, plus the original findings),
@@ -224,9 +227,10 @@ a restart can't leave a run waiting forever. Either way the agent posts a timeou
 "needs human review" + PR link. (Go reference; see
 `.agents/standards/architecture-design.md` §8 and `DEPLOYMENT.md`.)
 
-Configure the webhook on each repo (Settings → Webhooks): payload URL
-`https://<agent-host>/webhooks/github`, content type `application/json`, secret =
-`GITHUB_WEBHOOK_SECRET`, events = **Check runs**.
+In production this delivery is configured **once** as the deployment's GitHub App
+webhook (URL `https://<agent-host>/webhooks/github`, content type `application/json`,
+secret = `GITHUB_WEBHOOK_SECRET`, events = **Check runs**) — not per repo. See the
+[GitHub App setup](deployment.md#github-app-setup-production-auth) in `deployment.md`.
 
 ---
 
