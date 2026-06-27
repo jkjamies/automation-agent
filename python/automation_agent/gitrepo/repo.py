@@ -10,6 +10,7 @@ parameter to plumb through.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 from dataclasses import dataclass
@@ -155,6 +156,15 @@ class Repo:
             repo = GitRepo.clone_from(clone_url, dir, env=env)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"clone {url}: {exc}") from exc
+        if token:
+            # Don't persist the credential: clone_from records the tokened URL as origin in
+            # .git/config. Reset it to the clean URL; push() re-applies a fresh token only for
+            # the network op and strips it again, so the token never lingers on disk (matching
+            # the Go reference, which uses transport auth rather than an in-URL credential).
+            try:
+                repo.remote("origin").set_url(url)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"clone {url}: reset remote url: {exc}") from exc
         if env:
             # GitPython does NOT carry the clone env onto the returned Repo; set it
             # explicitly so push() (and any later ssh op) keeps using GIT_SSH_COMMAND.
@@ -221,16 +231,23 @@ class Repo:
         Credentials are re-resolved here (not reused from clone) so a fresh, repo-scoped
         token authenticates the push even if the clone-time token has since expired — for
         an https remote the origin URL is re-pointed at the freshly-tokened form; an ssh
-        remote carries no in-URL credential (its auth is the persisted GIT_SSH_COMMAND)."""
+        remote carries no in-URL credential (its auth is the persisted GIT_SSH_COMMAND). The
+        tokened URL is applied only for the push and stripped again in a ``finally`` so the
+        credential never lingers in .git/config (the clone-time origin URL is already clean)."""
+        token = _token_for(self._url, self._auth)
         try:
             origin = self._repo.remote("origin")
             branch = self._repo.active_branch.name
-            token = _token_for(self._url, self._auth)
             if token:
                 origin.set_url(_auth_url(self._url, token))
             results = origin.push(refspec=f"{branch}:{branch}")
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"push: {exc}") from exc
+        finally:
+            if token:
+                # Best effort: the temp checkout is removed after the attempt anyway.
+                with contextlib.suppress(Exception):
+                    self._repo.remote("origin").set_url(self._url)
         for info in results:
             if info.flags & info.ERROR:
                 raise ValueError(f"push: {info.summary}")

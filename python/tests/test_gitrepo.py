@@ -157,9 +157,20 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
         def update_environment(self, **env: str) -> None:
             self.persisted.update(env)
 
+    class FakeRemote:
+        def __init__(self) -> None:
+            self.url_history: list[str] = []
+
+        def set_url(self, url: str) -> None:
+            self.url_history.append(url)
+
     class FakeRepo:
         def __init__(self) -> None:
             self.git = FakeGit()
+            self._remote = FakeRemote()
+
+        def remote(self, name: str) -> FakeRemote:
+            return self._remote
 
     def fake_clone_from(url, dir, env=None):
         captured["url"] = url
@@ -182,8 +193,8 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
         "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
     }
 
-    # An https URL ignores ssh_key (no ssh env), resolves a token from the provider, and
-    # keeps the token-embedded URL.
+    # An https URL ignores ssh_key (no ssh env), resolves a token from the provider, clones
+    # with the token-embedded URL, then resets origin to the clean URL (no token on disk).
     prov = _FakeProvider("tok")
     Repo.clone(
         "https://github.com/acme/api.git",
@@ -192,6 +203,8 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
     )
     assert captured["env"] is None
     assert captured["url"] == "https://x-access-token:tok@github.com/acme/api.git"
+    # The tokened URL is used only for the clone; origin is reset to the credential-free URL.
+    assert captured["repo"].remote("origin").url_history == ["https://github.com/acme/api.git"]
     assert prov.calls == ["acme/api"]  # per-op, repo-scoped lookup happened.
 
     # An ssh URL with no explicit key: no env, so system git resolves creds (ssh-agent etc).
