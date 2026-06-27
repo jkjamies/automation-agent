@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/go-github/v78/github"
+
+	"automation-agent/internal/auth"
 )
 
 // httpTimeout bounds every GitHub request. Without it the client relies solely on the
@@ -24,13 +26,15 @@ type Client struct {
 	gh *github.Client
 }
 
-// New builds a Client. An empty token yields an unauthenticated client (fine for
-// public reads and tests).
-func New(token string) *Client {
-	gh := github.NewClient(&http.Client{Timeout: httpTimeout})
-	if token != "" {
-		gh = gh.WithAuthToken(token)
-	}
+// New builds a Client whose every REST request is authenticated by a fresh token
+// from the provider (a static PAT, or an auto-refreshed App installation token).
+// A StaticProvider holding an empty token yields an unauthenticated client (fine
+// for public reads and tests).
+func New(provider auth.TokenProvider) *Client {
+	gh := github.NewClient(&http.Client{
+		Timeout:   httpTimeout,
+		Transport: auth.NewRoundTripper(nil, provider),
+	})
 	return &Client{gh: gh}
 }
 

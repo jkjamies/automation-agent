@@ -26,6 +26,7 @@ import (
 	"automation-agent/internal/agent/root"
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/agent/summary"
+	"automation-agent/internal/auth"
 	"automation-agent/internal/config"
 	"automation-agent/internal/githubapi"
 	"automation-agent/internal/ingest"
@@ -63,11 +64,16 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build code llm: %w", err)
 	}
-	gh := githubapi.New(cfg.GitHubToken)
+	provider, err := buildTokenProvider(logger, cfg)
+	if err != nil {
+		return fmt.Errorf("build token provider: %w", err)
+	}
+	gh := githubapi.New(provider)
 	// SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
 	// and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
 	// rather than fail so read-only/dry-run flows still work, but PR operations will not.
-	if cfg.GitTransport == "ssh" && cfg.GitHubToken == "" {
+	// In App mode the provider always yields a token, so this only applies to PAT mode.
+	if !cfg.AppMode() && cfg.GitTransport == "ssh" && cfg.GitHubToken == "" {
 		logger.Warn("GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); git clone+push will use ssh, but PR operations against the REST API will fail — run `gh auth login` or set a token")
 	}
 	notifier := buildNotifier(logger, cfg)
@@ -102,7 +108,7 @@ func run(logger *slog.Logger) error {
 
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
-		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Token: cfg.GitHubToken,
+		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Provider: provider,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
 		PRLabel:        cfg.AgentPRLabel,
 		SessionService: sessions, ParkStore: parkStore,
@@ -213,6 +219,23 @@ func drain(logger *slog.Logger, wg *sync.WaitGroup, timeout time.Duration) {
 	case <-time.After(timeout):
 		logger.Warn("drain timed out; exiting with work still in flight")
 	}
+}
+
+// buildTokenProvider selects the GitHub auth path: App installation tokens in
+// production (when the GITHUB_APP_* vars are set — auto-minted, repo-scoped,
+// short-lived), else the static PAT fallback for local dev. The provider is shared
+// by the REST client and the git transport.
+func buildTokenProvider(logger *slog.Logger, cfg config.Config) (auth.TokenProvider, error) {
+	if cfg.AppMode() {
+		p, err := auth.NewAppProvider(nil, cfg.GitHubApp.AppID, cfg.GitHubApp.InstallationID, cfg.GitHubApp.PrivateKeyPEM)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info("github auth: app mode", "app_id", cfg.GitHubApp.AppID, "installation_id", cfg.GitHubApp.InstallationID)
+		return p, nil
+	}
+	logger.Info("github auth: pat mode (local-dev fallback)")
+	return auth.NewStaticProvider(cfg.GitHubToken), nil
 }
 
 // buildNotifier returns a Notifier, or nil (with a warning) if not configured.

@@ -87,9 +87,59 @@ vars that matter specifically for a **cloud** deploy:
 | `GITHUB_WEBHOOK_SECRET` | **set** — from Secret Manager |
 | `INTERNAL_TOKEN` | **set** — from Secret Manager (else cron/sweep are 404) |
 | `CI_TIMEOUT` | `90m` (default) — per-run CI wait before the timer/sweep frees a parked run |
-| `GITHUB_TOKEN`, notifier URLs | **set** — from Secret Manager |
-| `REPOS` | the kickoff allowlist |
+| `GITHUB_APP_ID` / `GITHUB_APP_INSTALLATION_ID` | **set** — the production auth path (GitHub App installation tokens). One pinned installation per deployment (single org) |
+| `GITHUB_APP_PRIVATE_KEY` | **set** — the App private-key PEM, from Secret Manager (a flattened `\n` is auto-restored) |
+| `GITHUB_TOKEN`, notifier URLs | notifier URLs **set** — from Secret Manager. `GITHUB_TOKEN` is the local-dev fallback only; in App mode it is unused |
+| `REPOS` | the kickoff allowlist — **required** in App mode (empty is rejected) |
 | `FIRESTORE_PROJECT` / `FIRESTORE_COLLECTION` | blank = detect from ADC / default `automation_agent` |
+
+### GitHub App setup (production auth)
+
+Production authenticates as a **GitHub App** — short-lived (~1 h), repo-scoped
+installation tokens instead of a long-lived PAT (bot identity on PRs, per-installation
+rate limits, least-privilege, no personal-account coupling). **One App per deployment,
+one org** (single-org topology — another org stands up its own deployment). Do this once,
+before the GCP steps below; you end up with four values the service consumes.
+
+1. **Create the App.** GitHub → your org → **Settings → Developer settings → GitHub Apps
+   → New GitHub App**. Name it (e.g. `automation-agent-<org>`); homepage URL can be the repo.
+2. **Permissions (least privilege).** Under **Repository permissions** set exactly these,
+   leaving everything else **No access**:
+   - **Contents** — Read & write (push fixer branches)
+   - **Pull requests** — Read & write (open PRs, comment/review)
+   - **Checks** — Read & write (create + receive `check_run`)
+   - **Metadata** — Read-only (mandatory; auto-selected)
+
+   The PR-review agent adds **no** new scopes beyond these.
+3. **Webhook.** Tick **Active**. Set **Webhook URL** = `https://<service-host>/webhooks/github`
+   and **Webhook secret** = the *same string* you will set as `GITHUB_WEBHOOK_SECRET`. This
+   match is **mandatory** — if they differ, GitHub's `X-Hub-Signature-256` fails and every
+   delivery 401s. (You can fill the URL in after Cloud Run has a hostname, but set the secret now.)
+4. **Subscribe to events.** Check **Check run**. (The reviewer spec later adds **Pull request**.)
+5. **Installation scope.** "Where can this app be installed?" → **Only on this account**.
+6. **Create**, then note the numeric **App ID** from the App's *General* page → this is
+   `GITHUB_APP_ID`.
+7. **Generate a private key.** App page → **Private keys → Generate a private key**. A `.pem`
+   downloads — it is the only copy; store it in a secret manager, never in git.
+8. **Install the App.** App page → **Install App** → install on your org → choose **Only
+   select repositories** and pick the repos the agent may act on (this physically scopes the
+   tokens). The post-install URL ends `…/installations/<id>` → that `<id>` is
+   `GITHUB_APP_INSTALLATION_ID`.
+
+**Private-key delivery (set exactly one — both is a startup error):**
+- **Cloud Run** → store the PEM in **Secret Manager**, mount as `GITHUB_APP_PRIVATE_KEY`
+  (the literal multi-line PEM). A store that flattens newlines to literal `\n` is fine —
+  the loader auto-restores them and validates the key parses (RSA) at startup.
+- **Local dev** → `GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem` (sidesteps multi-line
+  `.env` quoting).
+
+**`REPOS` is required in App mode** (`owner/repo,owner/repo`) — an empty list is rejected so
+the App never acts on every repo it can see. App mode engages automatically once
+`GITHUB_APP_ID` + a key + `GITHUB_APP_INSTALLATION_ID` are all present; a partial set is a
+startup error, never a silent PAT fallback.
+
+**No App? (local dev)** Omit all `GITHUB_APP_*` vars and the service falls back to a PAT
+(`GITHUB_TOKEN` / `gh auth token`) + SSH — behaviour identical to the pre-App path.
 
 ### GCP production setup (step by step)
 
@@ -98,14 +148,19 @@ vars that matter specifically for a **cloud** deploy:
 2. **Auth (ADC)** — give the Cloud Run service account `roles/datastore.user` (Firestore)
    and, for Gemini-on-Vertex, `roles/aiplatform.user`. No keys needed; ADC is automatic on
    Cloud Run.
-3. **Build + deploy to Cloud Run.** `make docker` (or `docker build -t automation-agent
+3. **GitHub App** — register it once per the [GitHub App setup](#github-app-setup-production-auth)
+   section above. Have `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, the private-key PEM,
+   and the shared `GITHUB_WEBHOOK_SECRET` ready before deploying.
+4. **Build + deploy to Cloud Run.** `make docker` (or `docker build -t automation-agent
    go/`) builds `cmd/agent` only. Deploy with env: `SESSION_BACKEND=firestore`,
    `GOOGLE_CLOUD_PROJECT`, `LLM_PROVIDER=gemini` (+ `GOOGLE_GENAI_USE_VERTEXAI=TRUE`),
-   `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `INTERNAL_TOKEN`, `NOTIFY_PROVIDER` + webhook
-   URL, `REPOS`. Store secrets in **Secret Manager** and mount them as env — not `.env`.
-4. **GitHub webhook** — in each target repo's settings add a webhook →
-   `https://<service>/webhooks/github`, content-type `application/json`, secret =
-   `GITHUB_WEBHOOK_SECRET`, events: **Check runs**. The lint/coverage kickoffs
+   `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (the PEM),
+   `GITHUB_WEBHOOK_SECRET`, `INTERNAL_TOKEN`, `NOTIFY_PROVIDER` + webhook URL, `REPOS`.
+   Store secrets (the App private key, webhook secret, internal token) in **Secret
+   Manager** and mount them as env — not `.env`. (Omit the `GITHUB_APP_*` vars to fall
+   back to a `GITHUB_TOKEN` PAT — the local-dev path, not recommended for production.)
+   The App-level webhook from step 3 delivers `check_run` to `/webhooks/github`; there
+   are **no per-repo webhooks** to configure. The lint/coverage kickoffs
    (`/webhooks/{lint,coverage}`) are POSTed by your CI with the same secret in
    `X-Hub-Signature-256` (see [`ci-integration.md`](ci-integration.md)).
 5. **Cloud Scheduler** — two jobs, each an HTTP POST with header

@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"automation-agent/internal/auth"
 )
 
 // testClient points a real *github.Client at a stub server (go-github's testing
@@ -16,7 +18,7 @@ func testClient(t *testing.T, h http.Handler) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c := New("")
+	c := New(auth.NewStaticProvider(""))
 	u, _ := url.Parse(srv.URL + "/")
 	c.gh.BaseURL = u
 	return c

@@ -663,8 +663,12 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `SQLITE_DSN` | sqlite data source (used when `=sqlite`) | `file:automation-agent.db?_pragma=busy_timeout(5000)` |
 | `FIRESTORE_PROJECT` | GCP project (used when `=firestore`); blank = detect from ADC / `GOOGLE_CLOUD_PROJECT` | — |
 | `FIRESTORE_COLLECTION` | collection-name prefix (`_sessions`, `_app_state`, `_user_state`, `_parked_runs`) | `automation_agent` |
-| `REPOS` | comma-separated `owner/repo`; also the kickoff allowlist — when non-empty, the fix-loop only acts on listed repos (empty = no restriction) | — |
-| `GITHUB_TOKEN` | go-github auth (PR create/label/compare); also `https` git transport (x-access-token) | — |
+| `REPOS` | comma-separated `owner/repo`; also the kickoff allowlist — when non-empty, the fix-loop only acts on listed repos (empty = no restriction in PAT mode; **required** in App mode — empty is rejected) | — |
+| `GITHUB_TOKEN` | PAT auth (PR create/label/compare + `https` git transport x-access-token); the **local-dev fallback**, used when the `GITHUB_APP_*` vars are unset | — |
+| `GITHUB_APP_ID` | numeric GitHub App ID; presence (with a key + installation id) selects **App mode** (production auth — short-lived, repo-scoped installation tokens) | — |
+| `GITHUB_APP_INSTALLATION_ID` | pinned installation for this deployment's single org; **required in App mode** | — |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | path to the App private-key `.pem` (local dev); exactly one of key/path required in App mode | — |
+| `GITHUB_APP_PRIVATE_KEY` | literal PEM contents of the App private key (cloud / Secret Manager); a flattened `\n` is auto-restored | — |
 | `GIT_TRANSPORT` | git clone/push transport: `https` (token / GitHub App) \| `ssh` (local dev — ssh-agent/keys). SSH covers only the git transport; the REST API still needs `GITHUB_TOKEN`/`gh` login (an `ssh` run without one warns at startup) | `https` |
 | `GIT_SSH_KEY` | `GIT_TRANSPORT=ssh`: explicit private-key path; blank = ssh-agent then `~/.ssh/id_ed25519\|id_rsa\|id_ecdsa` | — |
 | `NOTIFY_PROVIDER` | `slack` \| `teams` | `slack` |

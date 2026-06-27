@@ -6,9 +6,9 @@ A thin wrapper over `go-github/v78` exposing only what this service needs:
 
 ```mermaid
 flowchart TD
-    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["New(token)"]
-    NEW -->|"token != \"\""| AUTH["gh.WithAuthToken(token)"]
-    NEW -->|empty token| ANON[unauthenticated client]
+    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["New(auth.TokenProvider)"]
+    NEW -->|"auth.NewRoundTripper injects Bearer per request"| AUTH["http.Client.Transport"]
+    NEW -->|"empty static token → no header"| ANON[unauthenticated requests]
     AUTH --> C["Client{gh *github.Client}"]
     ANON --> C
 
