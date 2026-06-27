@@ -6,7 +6,7 @@ clone, branch, stage-all, commit, push. Pure-JVM (no git binary). Deterministic 
 
 ## Details
 
-- `GitRepo.kt` — `Repo`: `Repo.clone(url, dir, token, sshKey = "")` (suspend, off
+- `GitRepo.kt` — `Repo`: `Repo.clone(url, dir, Auth(provider, repo, sshKey))` (suspend, off
   `Dispatchers.IO`), `checkout`, `checkoutRemote`, `commitAll`, `push` (suspend), `head`, `dir`,
   `path`. `Author` is a data class.
 - JGit operations used: `Git.cloneRepository`, `checkout().setCreateBranch(…)`,
@@ -19,9 +19,14 @@ clone, branch, stage-all, commit, push. Pure-JVM (no git binary). Deterministic 
 
 `Repo.clone` routes on the URL, so the engine just builds the right URL (`GIT_TRANSPORT`):
 
-- **https** (`https://…`) — a non-empty token becomes
-  `UsernamePasswordCredentialsProvider("x-access-token", token)`; empty = anonymous. This is the
-  cloud default.
+- **https** (`https://…`) — `tokenFor` resolves a token from `Auth.provider` (the gitrepo-local view
+  of the `auth.TokenProvider` seam, re-fetched **per git op** so a short-lived ~1h App installation
+  token minted at clone time stays current by push) and supplies it as
+  `UsernamePasswordCredentialsProvider("x-access-token", token)`; empty / no provider = anonymous.
+  This is the cloud default. The credential is **in-memory transport auth**, never embedded in the
+  remote URL — so the token never lands in `.git/config` (matching the Go reference; no set-url dance
+  is needed, unlike the shell-out JS/Python ports). A plaintext `http://` remote is **refused**
+  (`tokenFor` throws) — sending a token as basic auth over an unencrypted transport would leak it.
 - **ssh** (`git@…` / `ssh://…`) — local-dev convenience. The token is ignored for transport; a
   `SshdSessionFactory` (Apache MINA sshd, from `org.eclipse.jgit.ssh.apache`) is attached via a
   `TransportConfigCallback` (`SshTransport.setSshSessionFactory`) on **both** clone and push, with

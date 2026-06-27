@@ -8,7 +8,10 @@ a feature package under `com.automation.agent`.
 ```mermaid
 flowchart TD
     Cfg["Config.load()"] --> LLM["buildLLM / buildCodeLLM"]
-    Cfg --> GH["githubapi.Client (+ adapters)"]
+    Cfg --> AUTH["buildTokenProvider (App vs PAT)"]
+    AUTH --> GH["githubapi.Client (+ adapters)"]
+    AUTH --> FIX
+    Cfg --> GH
     Cfg --> N["newNotifier (optional)"]
     LLM --> SUM["buildSummaryAgent (if repos + notifier)"]
     LLM --> FIX["lintfixer / covfixer engines"]
@@ -20,7 +23,10 @@ flowchart TD
 ```
 
 `main()` wires configuration → the model → tooling → the root/summary/fix agents → the
-webhook server, then blocks until interrupted. One `newSessionService` + `newParkStore` pair
+webhook server, then blocks until interrupted. `buildTokenProvider` selects the GitHub auth seam
+(`auth.TokenProvider`): App mode (a validated App id, installation id, and exactly one private-key
+source) mints/caches installation tokens, otherwise a static PAT (or anonymous). The one provider is adapted to the REST client's `TokenSource`
+and the fix engines' git `TokenProvider`, so both share a single cached credential. One `newSessionService` + `newParkStore` pair
 (selected by `SESSION_BACKEND`: memory/sqlite/firestore) is built here and shared by both fix
 engines, giving them durable suspend/resume. `POST /internal/sweep` is wired to a `SweepFunc` that
 calls every engine's `sweepTimeouts` (collect-and-continue across all engines, then rethrow the first

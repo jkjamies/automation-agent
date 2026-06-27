@@ -5,6 +5,7 @@ import com.google.adk.kt.sessions.SessionService
 import com.automation.agent.agent.setup.ParkStore
 import com.automation.agent.githubapi.Client
 import com.automation.agent.gitrepo.Author
+import com.automation.agent.gitrepo.TokenProvider
 import com.automation.agent.notify.Message
 import com.automation.agent.notify.Notifier
 import kotlinx.coroutines.Dispatchers
@@ -81,12 +82,16 @@ data class Deps(
     val llm: Model? = null,
     val codeLlm: Model? = null,
     val notifier: Notifier? = null,
-    val token: String = "",
     /**
-     * Git clone/push transport: "https" (default — token / GitHub App) or "ssh" (local dev —
-     * ssh-agent/keys). It only changes the URL the default [cloneUrl] builds; the test-injected
-     * [cloneUrl] override bypasses it. SSH covers the git transport only — the REST API still needs
-     * [token].
+     * Token provider for https clone/push (the `auth.TokenProvider` seam, as the gitrepo-local
+     * interface). null = anonymous. Threaded into each [ApplyConfig] and re-consulted per git op.
+     */
+    val provider: TokenProvider? = null,
+    /**
+     * Git clone/push transport: "https" (default — PAT / GitHub App via [provider]) or "ssh" (local
+     * dev — ssh-agent/keys). It only changes the URL the default [cloneUrl] builds; the test-injected
+     * [cloneUrl] override bypasses it. SSH covers the git transport only — the REST API still needs a
+     * token from [provider].
      */
     val gitTransport: String = "https",
     /**
@@ -171,7 +176,7 @@ class Engine(val spec: Spec, val deps: Deps) {
         val work = spec.triage(deps.llm, rp.report)
         val cfg =
             ApplyConfig(
-                owner = rp.owner, repo = rp.repo, cloneUrl = cloneUrl(rp.owner, rp.repo), token = deps.token,
+                owner = rp.owner, repo = rp.repo, cloneUrl = cloneUrl(rp.owner, rp.repo), provider = deps.provider,
                 sshKey = deps.sshKey,
                 base = rp.base, branch = spec.branch, newBranch = rp.newBranch, label = deps.prLabel,
                 commitMessage = spec.commitMessage, prTitle = spec.prTitle, prBody = prBody(spec, work), author = author,

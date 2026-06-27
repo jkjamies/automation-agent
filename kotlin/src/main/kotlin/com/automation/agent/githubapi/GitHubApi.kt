@@ -13,6 +13,7 @@ import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.HttpRequestPipeline
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -94,13 +95,20 @@ data class CheckEvent(
     val outputText: String,
 )
 
+/** Yields a currently-valid GitHub token for the REST client, or `""` for anonymous requests. The
+ * githubapi-local view of the `auth.TokenProvider` seam (a narrow interface kept here so githubapi
+ * stays decoupled from `auth`; the composition root adapts the real provider to it). */
+fun interface TokenSource {
+    suspend fun token(): String
+}
+
 /**
  * A thin wrapper over the GitHub REST API. Owner/repo are passed per call so one client
- * serves many repositories. An empty [token] yields unauthenticated requests (fine for
- * public reads and tests).
+ * serves many repositories. A null [tokenSource] (or one yielding `""`) leaves requests
+ * unauthenticated (fine for public reads and tests).
  */
 class Client(
-    private val token: String = "",
+    private val tokenSource: TokenSource? = null,
     private val baseUrl: String = "https://api.github.com/",
     httpClient: HttpClient? = null,
 ) {
@@ -113,7 +121,18 @@ class Client(
         }
         defaultRequest {
             header(HttpHeaders.Accept, "application/vnd.github+json")
-            if (token.isNotEmpty()) header(HttpHeaders.Authorization, "Bearer $token")
+        }
+    }
+
+    init {
+        // Inject a fresh bearer token per request from the provider seam (the analogue of the Go
+        // reference's token-injecting RoundTripper). The provider caches/refreshes a short-lived App
+        // installation token, so this stays cheap; an empty token leaves the request anonymous.
+        tokenSource?.let { source ->
+            http.requestPipeline.intercept(HttpRequestPipeline.State) {
+                val token = source.token()
+                if (token.isNotEmpty()) context.header(HttpHeaders.Authorization, "Bearer $token")
+            }
         }
     }
 

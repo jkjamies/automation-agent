@@ -3,8 +3,10 @@ package com.automation.agent.agent.fixflow
 import com.automation.agent.githubapi.Comparison
 import com.automation.agent.githubapi.Pr
 import com.automation.agent.githubapi.PrInput
+import com.automation.agent.gitrepo.Auth
 import com.automation.agent.gitrepo.Author
 import com.automation.agent.gitrepo.Repo
+import com.automation.agent.gitrepo.TokenProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -28,7 +30,12 @@ data class ApplyConfig(
     val owner: String,
     val repo: String,
     val cloneUrl: String,
-    val token: String = "",
+    /**
+     * Token provider for an https [cloneUrl] (the `auth.TokenProvider` seam, as the gitrepo-local
+     * interface); null = anonymous. Re-consulted per git op so a short-lived App installation token
+     * stays current. Ignored for an ssh [cloneUrl].
+     */
+    val provider: TokenProvider? = null,
     /**
      * Explicit private-key path for an ssh [cloneUrl] (GIT_SSH_KEY); empty falls back to ssh-agent
      * then the default identity files. Ignored for an https [cloneUrl].
@@ -57,7 +64,7 @@ suspend fun open(cfg: ApplyConfig): Repo {
     val dir = withContext(Dispatchers.IO) { Files.createTempDirectory("agentfix-").toFile() }
     val repo =
         try {
-            Repo.clone(cfg.cloneUrl, dir.path, cfg.token, cfg.sshKey)
+            Repo.clone(cfg.cloneUrl, dir.path, Auth(provider = cfg.provider, repo = "${cfg.owner}/${cfg.repo}", sshKey = cfg.sshKey))
         } catch (e: Throwable) {
             withContext(Dispatchers.IO) { dir.deleteRecursively() }
             throw e

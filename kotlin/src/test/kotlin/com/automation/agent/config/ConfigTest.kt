@@ -3,9 +3,62 @@ package com.automation.agent.config
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter
+import org.bouncycastle.openssl.jcajce.JcaPKCS8Generator
+import org.bouncycastle.util.io.pem.PemObject
+import java.io.StringWriter
+import java.nio.file.Files
+import java.security.KeyPair
+import java.security.KeyPairGenerator
 
 private fun lookupOf(m: Map<String, String>): Config.Companion.Lookup =
     Config.Companion.Lookup { m[it] }
+
+private fun rsaPair(): KeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+
+private fun pkcs8Pem(kp: KeyPair): String {
+    val sw = StringWriter()
+    JcaPEMWriter(sw).use { it.writeObject(JcaPKCS8Generator(kp.private, null)) }
+    return sw.toString()
+}
+
+private fun pkcs1Pem(kp: KeyPair): String {
+    val pkcs1 = PrivateKeyInfo.getInstance(kp.private.encoded).parsePrivateKey().toASN1Primitive().encoded
+    val sw = StringWriter()
+    JcaPEMWriter(sw).use { it.writeObject(PemObject("RSA PRIVATE KEY", pkcs1)) }
+    return sw.toString()
+}
+
+private fun ecPem(): String {
+    val kp = KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair()
+    val sw = StringWriter()
+    JcaPEMWriter(sw).use { it.writeObject(JcaPKCS8Generator(kp.private, null)) }
+    return sw.toString()
+}
+
+/** A throwaway RSA key in PKCS#8 PEM, reused across the App-mode cases. */
+private val APP_PEM: String = pkcs8Pem(rsaPair())
+
+/** The full App env, with [overrides] merged in. An override value of "" reads as unset (getOr). */
+private fun appEnv(overrides: Map<String, String> = emptyMap()): Map<String, String> {
+    val base = mutableMapOf(
+        "GITHUB_APP_ID" to "42",
+        "GITHUB_APP_INSTALLATION_ID" to "99",
+        "GITHUB_APP_PRIVATE_KEY" to APP_PEM,
+        "REPOS" to "acme/api",
+    )
+    base.putAll(overrides)
+    return base
+}
+
+private fun writeKeyFile(contents: String): String {
+    val p = Files.createTempFile("config-app-", ".pem")
+    Files.writeString(p, contents)
+    return p.toString()
+}
 
 class ConfigTest : BehaviorSpec({
     Given("an environment with no variables set") {
@@ -217,6 +270,122 @@ class ConfigTest : BehaviorSpec({
                 shouldThrow<IllegalArgumentException> {
                     Config.loadFrom(lookupOf(mapOf("PORT" to "70000")))
                 }
+            }
+        }
+    }
+
+    Given("no GitHub App vars") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(lookupOf(mapOf("GITHUB_TOKEN" to "pat", "REPOS" to "acme/api")))
+            Then("it stays in PAT mode with zero App fields") {
+                c.appMode() shouldBe false
+                c.githubAppId shouldBe 0L
+                c.githubAppInstallationId shouldBe 0L
+                c.githubAppPrivateKeyPem shouldBe ""
+            }
+        }
+    }
+
+    Given("the full GitHub App var set") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(lookupOf(appEnv()))
+            Then("App mode is selected and the credentials are read") {
+                c.appMode() shouldBe true
+                c.githubAppId shouldBe 42L
+                c.githubAppInstallationId shouldBe 99L
+                c.githubAppPrivateKeyPem shouldContain "-----BEGIN"
+            }
+        }
+
+        When("the key is a PKCS#1 RSA key") {
+            val c = Config.loadFrom(lookupOf(appEnv(mapOf("GITHUB_APP_PRIVATE_KEY" to pkcs1Pem(rsaPair())))))
+            Then("it is accepted") {
+                c.appMode() shouldBe true
+            }
+        }
+
+        When("the key is read from a file") {
+            val path = writeKeyFile(APP_PEM)
+            val c = Config.loadFrom(
+                lookupOf(appEnv(mapOf("GITHUB_APP_PRIVATE_KEY" to "", "GITHUB_APP_PRIVATE_KEY_PATH" to path))),
+            )
+            Then("App mode is selected from the file contents") {
+                c.appMode() shouldBe true
+                c.githubAppPrivateKeyPem shouldContain "-----BEGIN"
+            }
+        }
+
+        When("the key is flattened to literal \\n") {
+            val c = Config.loadFrom(lookupOf(appEnv(mapOf("GITHUB_APP_PRIVATE_KEY" to APP_PEM.replace("\n", "\\n")))))
+            Then("the escaped newlines are restored") {
+                c.appMode() shouldBe true
+                c.githubAppPrivateKeyPem shouldNotContain "\\n"
+            }
+        }
+
+        When("the key is flattened AND has a real trailing newline (from a file)") {
+            // A secret store can flatten newlines to literal `\n` and still append one real trailing
+            // newline; the unescape must run on the escaped sequences regardless. The file path is
+            // read untrimmed, exercising the corrected condition directly.
+            val path = writeKeyFile(APP_PEM.replace("\n", "\\n") + "\n")
+            val c = Config.loadFrom(
+                lookupOf(appEnv(mapOf("GITHUB_APP_PRIVATE_KEY" to "", "GITHUB_APP_PRIVATE_KEY_PATH" to path))),
+            )
+            Then("the escaped newlines are still restored") {
+                c.appMode() shouldBe true
+                c.githubAppPrivateKeyPem shouldNotContain "\\n"
+            }
+        }
+    }
+
+    Given("a misconfigured GitHub App env") {
+        listOf(
+            "missing app id" to mapOf("GITHUB_APP_ID" to ""),
+            "missing installation" to mapOf("GITHUB_APP_INSTALLATION_ID" to ""),
+            "missing key" to mapOf("GITHUB_APP_PRIVATE_KEY" to ""),
+            "both key sources" to mapOf("GITHUB_APP_PRIVATE_KEY_PATH" to "/some/key.pem"),
+            "zero app id" to mapOf("GITHUB_APP_ID" to "0"),
+            "negative app id" to mapOf("GITHUB_APP_ID" to "-1"),
+            "non-numeric app id" to mapOf("GITHUB_APP_ID" to "abc"),
+            "zero installation" to mapOf("GITHUB_APP_INSTALLATION_ID" to "0"),
+            "non-numeric installation" to mapOf("GITHUB_APP_INSTALLATION_ID" to "x"),
+            "invalid pem" to mapOf("GITHUB_APP_PRIVATE_KEY" to "not a pem"),
+            "empty repos in app mode" to mapOf("REPOS" to ""),
+        ).forEach { (name, overrides) ->
+            When("loading with $name") {
+                Then("it fails") {
+                    shouldThrow<IllegalArgumentException> { Config.loadFrom(lookupOf(appEnv(overrides))) }
+                }
+            }
+        }
+
+        When("the key is a non-RSA (EC) key") {
+            Then("it is rejected as not RSA") {
+                val err = shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(appEnv(mapOf("GITHUB_APP_PRIVATE_KEY" to ecPem()))))
+                }
+                err.message shouldContain "RSA"
+            }
+        }
+
+        When("the key file is unreadable") {
+            Then("it reports the read failure") {
+                // A guaranteed-missing child of a fresh temp dir, so the read-failure branch is
+                // exercised deterministically (a host-dependent literal path could exist on a runner).
+                val missing = Files.createTempDirectory("config-app-missing-").resolve("missing.pem").toString()
+                val err = shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(
+                        lookupOf(
+                            appEnv(
+                                mapOf(
+                                    "GITHUB_APP_PRIVATE_KEY" to "",
+                                    "GITHUB_APP_PRIVATE_KEY_PATH" to missing,
+                                ),
+                            ),
+                        ),
+                    )
+                }
+                err.message shouldContain "read GITHUB_APP_PRIVATE_KEY_PATH"
             }
         }
     }

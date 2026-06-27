@@ -5,6 +5,9 @@
  */
 package com.automation.agent.config
 
+import com.automation.agent.auth.parseRsaPrivateKey
+import java.io.File
+import java.io.IOException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.microseconds
@@ -75,6 +78,15 @@ data class Config(
     // GitHub / repos
     val repos: List<String>,
     val githubToken: String,
+    // GitHub App credentials (production auth path). [githubAppId] == 0 means App mode is off and the
+    // static [githubToken] (PAT) is used. Resolved at load time; partial/misconfigured App vars are a
+    // startup error, never a silent fallback. See [appMode] and
+    // specs/20260625-github-app-authentication.md.
+    val githubAppId: Long,
+    val githubAppInstallationId: Long,
+    // The App private key in PEM form, already unescaped and validated to parse as RSA (the literal
+    // bytes from GITHUB_APP_PRIVATE_KEY or the GITHUB_APP_PRIVATE_KEY_PATH file).
+    val githubAppPrivateKeyPem: String,
     // gitTransport selects the git clone/push transport: "https" (default — uses githubToken) or
     // "ssh" (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub REST API
     // (open/label PR, read CI) still needs a token, so an ssh run without a token warns at startup.
@@ -122,7 +134,19 @@ data class Config(
         val portNum = port.toIntOrNull()
             ?: throw IllegalArgumentException("PORT must be numeric, got \"$port\"")
         require(portNum in 1..65535) { "PORT must be in 1..65535, got $portNum" }
+        // In App mode an installation can see every repo it is installed on, so an empty REPOS would
+        // silently act on every installed repo. Require an explicit allowlist (Decision §4).
+        require(!appMode() || repos.isNotEmpty()) {
+            "REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)"
+        }
     }
+
+    /**
+     * Whether GitHub App authentication is configured (the production auth path). False means PAT
+     * mode (the local-dev fallback). The App ID is the discriminant — a zero value means App mode
+     * is off, which is why a zero/negative App ID is rejected at load time.
+     */
+    fun appMode(): Boolean = githubAppId != 0L
 
     companion object {
         /** A function that resolves an environment key to its value, or null if unset. */
@@ -170,6 +194,11 @@ data class Config(
             val sessionBackend = SessionBackend.from(sessionBackendRaw)
                 ?: throw IllegalArgumentException("invalid SESSION_BACKEND \"$sessionBackendRaw\" (want memory|sqlite|firestore)")
 
+            // Resolve GitHub App credentials (production auth path). Absent App vars leave the zero
+            // value — PAT mode; partial/misconfigured App vars are a startup error, never a silent
+            // fallback to PAT (Decision §4).
+            val app = resolveGitHubApp(get)
+
             val c = Config(
                 llmProvider = llmProvider,
                 ollamaHost = getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
@@ -179,6 +208,9 @@ data class Config(
                 geminiCodeModel = geminiCodeModel,
                 repos = splitList(getOr(get, "REPOS", "")),
                 githubToken = getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
+                githubAppId = app.appId,
+                githubAppInstallationId = app.installationId,
+                githubAppPrivateKeyPem = app.privateKeyPem,
                 gitTransport = getOr(get, "GIT_TRANSPORT", "https"),
                 gitSshKey = getOr(get, "GIT_SSH_KEY", ""),
                 notifyProvider = notifyProvider,
@@ -235,6 +267,72 @@ private fun ghCliToken(): String {
         ""
     }
 }
+
+/** The resolved GitHub App credentials. The zero value (appId == 0) means PAT mode. */
+private data class GitHubApp(
+    val appId: Long = 0L,
+    val installationId: Long = 0L,
+    val privateKeyPem: String = "",
+)
+
+/**
+ * Reads the GITHUB_APP_* vars and decides the auth mode. With none set, returns the zero value (PAT
+ * mode). With any set, App mode is intended and every requirement is enforced — App ID, a pinned
+ * installation id, and exactly one private-key source — so a partial configuration is a startup
+ * error, not a silent fallback to PAT (mode-selection rule, spec §"Config / env" + Decision §4).
+ */
+private fun resolveGitHubApp(get: Config.Companion.Lookup): GitHubApp {
+    val appIdStr = getOr(get, "GITHUB_APP_ID", "")
+    val installIdStr = getOr(get, "GITHUB_APP_INSTALLATION_ID", "")
+    val keyLiteral = getOr(get, "GITHUB_APP_PRIVATE_KEY", "")
+    val keyPath = getOr(get, "GITHUB_APP_PRIVATE_KEY_PATH", "")
+
+    if (appIdStr.isEmpty() && installIdStr.isEmpty() && keyLiteral.isEmpty() && keyPath.isEmpty()) {
+        return GitHubApp() // PAT mode — no App vars present.
+    }
+    // Any App var present signals intent to use App mode; require the full set.
+    require(appIdStr.isNotEmpty()) { "GITHUB_APP_* set but GITHUB_APP_ID is missing (App mode requires GITHUB_APP_ID)" }
+    require(installIdStr.isNotEmpty()) { "App mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)" }
+    require(!(keyLiteral.isNotEmpty() && keyPath.isNotEmpty())) {
+        "set exactly one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both"
+    }
+    require(keyLiteral.isNotEmpty() || keyPath.isNotEmpty()) {
+        "App mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH"
+    }
+
+    val appId = positiveId(appIdStr, "GITHUB_APP_ID")
+    val installId = positiveId(installIdStr, "GITHUB_APP_INSTALLATION_ID")
+
+    val raw = if (keyPath.isNotEmpty()) {
+        try {
+            File(keyPath).readText()
+        } catch (e: IOException) {
+            throw IllegalArgumentException("read GITHUB_APP_PRIVATE_KEY_PATH \"$keyPath\": ${e.message}", e)
+        }
+    } else {
+        keyLiteral
+    }
+    val pem = normalizePrivateKeyPem(raw)
+    // Validate the key parses as RSA now, so a bad key fails at startup with a clear message rather
+    // than cryptically at the first token exchange. auth re-parses the same PEM for signing.
+    parseRsaPrivateKey(pem)
+    return GitHubApp(appId = appId, installationId = installId, privateKeyPem = pem)
+}
+
+/** Parses a strictly-positive id, rejecting non-numeric, zero, and negative values. */
+private fun positiveId(raw: String, name: String): Long {
+    val v = raw.toLongOrNull() ?: throw IllegalArgumentException("$name must be numeric, got \"$raw\"")
+    require(v > 0) { "$name must be > 0, got $v" }
+    return v
+}
+
+/**
+ * Makes the App private key robust to how it is delivered (Decision §4): CI secret stores often
+ * flatten newlines to the literal characters `\n`, so when the value looks like PEM and contains
+ * escaped `\n` sequences, restore them — even if a real trailing newline is also present.
+ */
+private fun normalizePrivateKeyPem(raw: String): String =
+    if (raw.contains("-----BEGIN") && raw.contains("\\n")) raw.replace("\\n", "\n") else raw
 
 private fun splitList(s: String): List<String> {
     if (s.isBlank()) return emptyList()
