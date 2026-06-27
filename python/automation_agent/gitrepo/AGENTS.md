@@ -45,8 +45,10 @@ flowchart TD
   an unencrypted transport would leak it. A `git@…`/`ssh://…` remote (built upstream when
   `GIT_TRANSPORT=ssh`) is left untouched, so the system `git` GitPython shells out to
   authenticates it via ssh-agent, the default identity files, and `known_hosts`. A
-  non-empty `ssh_key` (`GIT_SSH_KEY`) pins ssh to that key via `GIT_SSH_COMMAND`;
-  GitPython carries that env onto the repo so `push` reuses it.
+  non-empty `ssh_key` (`GIT_SSH_KEY`) pins ssh to that key via `GIT_SSH_COMMAND`. The env
+  passed to `clone_from(env=...)` is scoped to the clone subprocess only, so `clone()` then
+  calls `repo.git.update_environment(**env)` to persist `GIT_SSH_COMMAND` onto the repo's
+  Git instance — that explicit handoff is what lets a later `push()` reuse the same key.
 - The `provider` is the `auth.TokenProvider` seam (a local protocol here keeps gitrepo
   decoupled from `auth`). The token is re-fetched **per git op**: `push()` re-resolves it
   and re-points the origin URL, so a short-lived (~1h) GitHub App installation token that

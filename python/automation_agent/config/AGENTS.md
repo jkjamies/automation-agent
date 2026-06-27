@@ -41,5 +41,8 @@ flowchart TD
   partial/misconfigured App setup is a **startup error**, never a silent fallback to PAT.
   `Config.app_mode()` reports which path is active; the resolved key lives in
   `github_app_private_key_pem` (escaped `\n` unescaped + validated to parse as RSA at
-  load). The static-token vs installation-token choice is realized in `auth`.
+  load). The PAT-vs-App decision is made here in `config` (and acted on by the provider
+  wiring in `cmd/agent`) **before** `auth` is reached; `auth` only consumes the already-
+  resolved app id, installation id, private-key PEM, or PAT and builds the matching
+  provider — keep mode-selection and PEM/env handling in `config`, never in `auth`.
 - See `.agents/standards/architecture-design.md` §12 and `.env.example` for the full variable list.
