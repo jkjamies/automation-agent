@@ -12,7 +12,20 @@ import os
 import pytest
 from git import Repo as GitRepo
 
-from automation_agent.gitrepo import Author, NoChangesError, Repo
+from automation_agent.gitrepo import Auth, Author, NoChangesError, Repo
+
+
+class _FakeProvider:
+    """A gitrepo.TokenProvider that yields a fixed token and records its calls, so tests
+    can assert the per-op token lookup happened (or, for insecure remotes, did NOT)."""
+
+    def __init__(self, token: str = "") -> None:
+        self._token = token
+        self.calls: list[str] = []
+
+    def token(self, repo: str) -> str:
+        self.calls.append(repo)
+        return self._token
 
 
 def seed_remote(tmp_path) -> str:
@@ -33,7 +46,7 @@ def test_clone_branch_commit_push(tmp_path) -> None:
     remote = seed_remote(tmp_path)
     work = str(tmp_path / "work")
 
-    r = Repo.clone(remote, work, "")
+    r = Repo.clone(remote, work)
 
     r.checkout("agent/fix", create=True)
     with open(r.path("fix.txt"), "w") as f:
@@ -59,7 +72,7 @@ def test_checkout_remote(tmp_path) -> None:
     remote = seed_remote(tmp_path)
 
     # First clone: create and push a branch.
-    r1 = Repo.clone(remote, str(tmp_path / "w1"), "")
+    r1 = Repo.clone(remote, str(tmp_path / "w1"))
     r1.checkout("feature", create=True)
     with open(r1.path("f.txt"), "w") as f:
         f.write("x")
@@ -67,7 +80,7 @@ def test_checkout_remote(tmp_path) -> None:
     r1.push()
 
     # Second clone: check out the existing remote branch.
-    r2 = Repo.clone(remote, str(tmp_path / "w2"), "")
+    r2 = Repo.clone(remote, str(tmp_path / "w2"))
     r2.checkout_remote("feature")
     head = r2.head()
     assert head == sha
@@ -77,13 +90,13 @@ def test_checkout_remote(tmp_path) -> None:
 
 
 def test_checkout_missing_branch(tmp_path) -> None:
-    r = Repo.clone(seed_remote(tmp_path), str(tmp_path / "w"), "")
+    r = Repo.clone(seed_remote(tmp_path), str(tmp_path / "w"))
     with pytest.raises(ValueError):
         r.checkout("does-not-exist", create=False)
 
 
 def test_commit_nothing(tmp_path) -> None:
-    r = Repo.clone(seed_remote(tmp_path), str(tmp_path / "w"), "")
+    r = Repo.clone(seed_remote(tmp_path), str(tmp_path / "w"))
     with pytest.raises(NoChangesError):
         r.commit_all("nothing changed", Author(name="a", email="a@x"))
 
@@ -91,7 +104,7 @@ def test_commit_nothing(tmp_path) -> None:
 def test_clone_bad_url(tmp_path) -> None:
     work = str(tmp_path / "nope")
     with pytest.raises(ValueError):
-        Repo.clone(str(tmp_path / "does-not-exist"), work, "")
+        Repo.clone(str(tmp_path / "does-not-exist"), work)
 
 
 def test_auth_url_embeds_token(tmp_path) -> None:
@@ -157,7 +170,9 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(repomod.GitRepo, "clone_from", fake_clone_from)
 
-    Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w1"), "", "/k/id_ed25519")
+    Repo.clone(
+        "git@github.com:acme/api.git", str(tmp_path / "w1"), Auth(ssh_key="/k/id_ed25519")
+    )
     assert captured["env"] == {
         "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
     }
@@ -167,11 +182,43 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
         "GIT_SSH_COMMAND": "ssh -i /k/id_ed25519 -o IdentitiesOnly=yes"
     }
 
-    # An https URL ignores ssh_key (no ssh env) and keeps the token-embedded URL.
-    Repo.clone("https://github.com/acme/api.git", str(tmp_path / "w2"), "tok", "/k/id")
+    # An https URL ignores ssh_key (no ssh env), resolves a token from the provider, and
+    # keeps the token-embedded URL.
+    prov = _FakeProvider("tok")
+    Repo.clone(
+        "https://github.com/acme/api.git",
+        str(tmp_path / "w2"),
+        Auth(provider=prov, repo="acme/api", ssh_key="/k/id"),
+    )
     assert captured["env"] is None
     assert captured["url"] == "https://x-access-token:tok@github.com/acme/api.git"
+    assert prov.calls == ["acme/api"]  # per-op, repo-scoped lookup happened.
 
     # An ssh URL with no explicit key: no env, so system git resolves creds (ssh-agent etc).
-    Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w3"), "", "")
+    Repo.clone("git@github.com:acme/api.git", str(tmp_path / "w3"), Auth())
     assert captured["env"] is None
+
+
+def test_token_for_refuses_insecure_http() -> None:
+    # Sending a PAT/App token as basic auth over plaintext http:// would leak it; the token
+    # lookup must be refused outright and the provider never consulted.
+    from automation_agent.gitrepo.repo import _token_for
+
+    prov = _FakeProvider("tok")
+    with pytest.raises(ValueError, match="insecure http"):
+        _token_for("http://github.example/acme/api.git", Auth(provider=prov, repo="acme/api"))
+    assert prov.calls == []  # no token minted for the rejected remote.
+
+
+def test_token_for_skips_local_and_ssh() -> None:
+    # Local / file / ssh remotes need no token — the provider is not consulted (avoids a
+    # needless App installation-token mint).
+    from automation_agent.gitrepo.repo import _token_for
+
+    prov = _FakeProvider("tok")
+    assert _token_for("/local/path/repo", Auth(provider=prov, repo="o/r")) == ""
+    assert _token_for("git@github.com:o/r.git", Auth(provider=prov, repo="o/r")) == ""
+    assert prov.calls == []
+    # https with a provider does resolve a token.
+    assert _token_for("https://github.com/o/r.git", Auth(provider=prov, repo="o/r")) == "tok"
+    assert prov.calls == ["o/r"]

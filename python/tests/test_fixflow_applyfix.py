@@ -46,7 +46,7 @@ def _seed_remote(tmp_path) -> str:
 
 def _apply_cfg(remote: str) -> ApplyConfig:
     return ApplyConfig(
-        owner="acme", repo="api", clone_url=remote, token="", base="master",
+        owner="acme", repo="api", clone_url=remote, provider=None, base="master",
         branch="agent/fix", new_branch=True, label="automation-agent",
         commit_message="fix", pr_title="Fix", pr_body="auto",
         author=Author(name="agent", email="a@x"),

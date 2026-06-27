@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass
+from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from git import Actor
@@ -25,6 +26,33 @@ class Author:
 
     name: str
     email: str
+
+
+class TokenProvider(Protocol):
+    """Yields a valid GitHub token for a repo (``"owner/name"``), re-fetched per git op.
+    The gitrepo-local view of ``auth.TokenProvider`` (a narrow protocol kept here so
+    gitrepo stays decoupled from the ``auth`` package; structural typing matches the real
+    providers)."""
+
+    def token(self, repo: str) -> str: ...
+
+
+@dataclass
+class Auth:
+    """Credentials Clone/Push use. Which one applies is chosen by the clone URL scheme,
+    not by the caller: an https remote uses ``provider`` (GitHub ``x-access-token`` basic
+    auth, re-fetched per op so a short-lived installation token stays current), an ssh
+    remote (``git@…`` / ``ssh://…``) uses ``ssh_key`` or the ssh-agent."""
+
+    # provider yields the token embedded as x-access-token basic auth on https remotes,
+    # fetched fresh per git op (scoped to ``repo``). None — or a token of "" — means
+    # anonymous (public read only). Ignored for ssh remotes.
+    provider: TokenProvider | None = None
+    # repo is "owner/name", passed to provider so App mode can scope the token.
+    repo: str = ""
+    # ssh_key is an explicit private-key path for ssh remotes; empty falls back to the
+    # ssh-agent then default identities. Ignored for https remotes.
+    ssh_key: str = ""
 
 
 class NoChangesError(Exception):
@@ -51,6 +79,29 @@ def _auth_url(url: str, token: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def _token_for(url: str, auth: Auth) -> str:
+    """Resolve the token for an https git op, fetched fresh per op so a short-lived
+    installation token stays current. Returns ``""`` (anonymous) for ssh / local / file
+    remotes, which need no token — fetching one would needlessly mint a GitHub
+    installation token in App mode.
+
+    Raises:
+        ValueError: for a plaintext ``http://`` remote — sending a PAT/App token as basic
+            auth over an unencrypted transport would leak it; use https or ssh.
+    """
+    if _is_ssh_url(url):
+        return ""
+    if url.startswith("http://"):
+        raise ValueError(
+            "refusing to send GitHub token over insecure http remote; use https or ssh"
+        )
+    if not url.startswith("https://"):
+        return ""  # local path / file:// — no credentials.
+    if auth.provider is None:
+        return ""
+    return auth.provider.token(auth.repo)
+
+
 def _is_ssh_url(url: str) -> bool:
     """Whether url is an scp-style (``git@host:path``) or ``ssh://`` remote, as opposed to
     an https remote. The agent only ever builds these two forms (selected by GIT_TRANSPORT).
@@ -74,24 +125,32 @@ def _ssh_env(ssh_key: str) -> dict[str, str] | None:
 class Repo:
     """A cloned working tree."""
 
-    def __init__(self, repo: GitRepo, dir_: str) -> None:
+    def __init__(self, repo: GitRepo, dir_: str, url: str = "", auth: Auth | None = None) -> None:
         self._repo = repo
         self._dir = dir_
+        # The clean clone URL (no embedded credential) and auth are kept so :meth:`push`
+        # can re-resolve a fresh token per op — GitHub App installation tokens are
+        # short-lived (~1h), so a token captured at clone time may be stale by push.
+        self._url = url
+        self._auth = auth if auth is not None else Auth()
 
     @staticmethod
-    def clone(url: str, dir: str, token: str = "", ssh_key: str = "") -> Repo:
+    def clone(url: str, dir: str, auth: Auth | None = None) -> Repo:
         """Clone url into dir (which must not already exist). Auth is chosen by the URL
-        scheme: a non-empty token is embedded as GitHub HTTP auth for https URLs; an ssh
-        URL (``git@…``/``ssh://…``) is left untouched so system ``git`` authenticates it
-        via ssh-agent / default keys. A non-empty ``ssh_key`` pins ssh to that private key
-        (via ``GIT_SSH_COMMAND``); it is ignored for https URLs.
+        scheme: for an https URL a token from ``auth.provider`` is embedded as GitHub HTTP
+        basic auth; an ssh URL (``git@…``/``ssh://…``) is left untouched so system ``git``
+        authenticates it via ssh-agent / default keys. A non-empty ``auth.ssh_key`` pins
+        ssh to that private key (via ``GIT_SSH_COMMAND``); it is ignored for https URLs. A
+        plaintext ``http://`` remote with a provider is refused (token leak).
 
         ``clone_from(env=...)`` scopes the ssh environment to the clone subprocess only, so
         it is persisted onto the returned repo's Git instance — a later :meth:`push` over
-        ssh then reuses the same key (mirroring Go's per-repo auth).
+        ssh then reuses the same key (mirroring the Go reference's per-repo auth).
         """
+        auth = auth if auth is not None else Auth()
+        token = _token_for(url, auth)
         clone_url = _auth_url(url, token)
-        env = _ssh_env(ssh_key) if _is_ssh_url(url) else None
+        env = _ssh_env(auth.ssh_key) if _is_ssh_url(url) else None
         try:
             repo = GitRepo.clone_from(clone_url, dir, env=env)
         except Exception as exc:  # noqa: BLE001
@@ -100,7 +159,7 @@ class Repo:
             # GitPython does NOT carry the clone env onto the returned Repo; set it
             # explicitly so push() (and any later ssh op) keeps using GIT_SSH_COMMAND.
             repo.git.update_environment(**env)
-        return Repo(repo, dir)
+        return Repo(repo, dir, url, auth)
 
     def dir(self) -> str:
         """Return the working-tree directory; callers write file edits under it."""
@@ -158,10 +217,17 @@ class Repo:
         return commit.hexsha
 
     def push(self) -> None:
-        """Push the current branch to origin. An up-to-date push is not an error."""
+        """Push the current branch to origin. An up-to-date push is not an error.
+        Credentials are re-resolved here (not reused from clone) so a fresh, repo-scoped
+        token authenticates the push even if the clone-time token has since expired — for
+        an https remote the origin URL is re-pointed at the freshly-tokened form; an ssh
+        remote carries no in-URL credential (its auth is the persisted GIT_SSH_COMMAND)."""
         try:
             origin = self._repo.remote("origin")
             branch = self._repo.active_branch.name
+            token = _token_for(self._url, self._auth)
+            if token:
+                origin.set_url(_auth_url(self._url, token))
             results = origin.push(refspec=f"{branch}:{branch}")
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"push: {exc}") from exc

@@ -31,5 +31,18 @@ flowchart TD
 
 - `config.py` — `load_from(lookup)` keeps loading testable without touching the real
   environment.
-- `validate()` enforces invariants defaults can't (provider enums, `max_iterations >= 1`).
+- `validate()` enforces invariants defaults can't (provider enums, `max_iterations >= 1`,
+  and **non-empty `REPOS` in App mode** — empty "all repos" is a footgun once an App
+  installation can see more repos than intended).
+- **GitHub auth mode** (`_resolve_github_app`): with no `GITHUB_APP_*` vars set, the
+  loader stays in PAT mode (`GITHUB_TOKEN`). Once any `GITHUB_APP_*` var is present, App
+  mode is intended and requires `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and exactly
+  one of (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_PRIVATE_KEY_PATH`); any
+  partial/misconfigured App setup is a **startup error**, never a silent fallback to PAT.
+  `Config.app_mode()` reports which path is active; the resolved key lives in
+  `github_app_private_key_pem` (escaped `\n` unescaped + validated to parse as RSA at
+  load). The PAT-vs-App decision is made here in `config` (and acted on by the provider
+  wiring in `cmd/agent`) **before** `auth` is reached; `auth` only consumes the already-
+  resolved app id, installation id, private-key PEM, or PAT and builds the matching
+  provider — keep mode-selection and PEM/env handling in `config`, never in `auth`.
 - See `.agents/standards/architecture-design.md` §12 and `.env.example` for the full variable list.

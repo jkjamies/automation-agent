@@ -73,6 +73,14 @@ class Config:
     # GitHub / repos
     repos: list[str] = field(default_factory=list)
     github_token: str = ""
+    # GitHub App (production auth). ``github_app_id == 0`` means App mode is off and the
+    # static ``github_token`` (PAT) is used. See :meth:`app_mode` and
+    # ``specs/20260625-github-app-authentication.md``. ``github_app_private_key_pem`` holds
+    # the literal PEM bytes (from the env var or the key file), unescaped and validated to
+    # parse as RSA at load time.
+    github_app_id: int = 0
+    github_app_installation_id: int = 0
+    github_app_private_key_pem: bytes = b""
     # git_transport selects the git clone/push transport: "https" (default — uses
     # github_token) or "ssh" (local dev — ssh-agent/keys). SSH only covers the git
     # transport; the GitHub REST API (open/label PR, read CI) still needs a token, so an
@@ -102,6 +110,11 @@ class Config:
     # agent_pr_label is the single human-facing label applied to every agent PR on creation
     # (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
     agent_pr_label: str = "automation-agent"
+
+    def app_mode(self) -> bool:
+        """Whether GitHub App authentication is configured (production path). False means
+        the static PAT fallback (``github_token``) is used."""
+        return self.github_app_id != 0
 
     def validate(self) -> None:
         """Check invariants that defaults alone cannot guarantee.
@@ -138,6 +151,14 @@ class Config:
             raise ValueError(f"PORT must be numeric, got {self.port!r}") from exc
         if not (0 < port < 65536):
             raise ValueError(f"PORT must be in 1..65535, got {port}")
+        # In App mode an installation can see every repo it is installed on, so an empty
+        # allow-list ("act on all repos", the PAT-mode default) is a footgun — fail fast.
+        # PAT mode keeps "empty = all" for local-dev back-compat.
+        if self.app_mode() and not self.repos:
+            raise ValueError(
+                "REPOS must be set in GitHub App mode (empty REPOS = all repos is "
+                "rejected to avoid acting on every installed repo)"
+            )
 
 
 def load() -> Config:
@@ -226,6 +247,14 @@ def load_from(get: Lookup) -> Config:
     if cfg.gemini_code_model == "":
         cfg.gemini_code_model = cfg.gemini_model
 
+    # Resolve GitHub App credentials (production auth path). Absent App vars leave the
+    # zero values — PAT mode. Partial/misconfigured App vars are a startup error, never a
+    # silent fallback to PAT.
+    app_id, install_id, pem = _resolve_github_app(get)
+    cfg.github_app_id = app_id
+    cfg.github_app_installation_id = install_id
+    cfg.github_app_private_key_pem = pem
+
     cfg.validate()
     return cfg
 
@@ -245,6 +274,106 @@ def _split_list(s: str) -> list[str]:
     if not s.strip():
         return []
     return [t.strip() for t in s.split(",") if t.strip()]
+
+
+def _resolve_github_app(get: Lookup) -> tuple[int, int, bytes]:
+    """Read the ``GITHUB_APP_*`` vars and decide the auth mode, returning
+    ``(app_id, installation_id, private_key_pem)``.
+
+    With none set, returns ``(0, 0, b"")`` — PAT mode. With any set, App mode is intended
+    and every requirement is enforced (App ID, a pinned installation id, and exactly one
+    private-key source), so a partial configuration is a startup error, not a silent
+    fallback to PAT.
+
+    Raises:
+        ValueError: on a partial/misconfigured App setup, a non-positive id, an
+            unreadable key file, or a key that is not valid RSA PEM.
+    """
+    app_id_str = _get_or(get, "GITHUB_APP_ID", "")
+    install_id_str = _get_or(get, "GITHUB_APP_INSTALLATION_ID", "")
+    key_literal = _get_or(get, "GITHUB_APP_PRIVATE_KEY", "")
+    key_path = _get_or(get, "GITHUB_APP_PRIVATE_KEY_PATH", "")
+
+    if not app_id_str and not install_id_str and not key_literal and not key_path:
+        return 0, 0, b""  # PAT mode — no App vars present.
+
+    # Any App var present signals intent to use App mode; require the full set.
+    if not app_id_str:
+        raise ValueError(
+            "GITHUB_APP_* set but GITHUB_APP_ID is missing (App mode requires GITHUB_APP_ID)"
+        )
+    if not install_id_str:
+        raise ValueError(
+            "App mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)"
+        )
+    if key_literal and key_path:
+        raise ValueError(
+            "set exactly one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both"
+        )
+    if not key_literal and not key_path:
+        raise ValueError(
+            "App mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH"
+        )
+
+    try:
+        app_id = int(app_id_str)
+    except ValueError as exc:
+        raise ValueError(f"GITHUB_APP_ID must be numeric, got {app_id_str!r}") from exc
+    # A non-positive App ID is invalid and, worse, 0 would collide with app_mode()'s
+    # zero-value sentinel and silently fall back to PAT — reject it explicitly.
+    if app_id <= 0:
+        raise ValueError(f"GITHUB_APP_ID must be > 0, got {app_id}")
+    try:
+        install_id = int(install_id_str)
+    except ValueError as exc:
+        raise ValueError(
+            f"GITHUB_APP_INSTALLATION_ID must be numeric, got {install_id_str!r}"
+        ) from exc
+    if install_id <= 0:
+        raise ValueError(f"GITHUB_APP_INSTALLATION_ID must be > 0, got {install_id}")
+
+    if key_path:
+        try:
+            with open(key_path, "rb") as f:
+                raw = f.read()
+        except OSError as exc:
+            raise ValueError(
+                f"read GITHUB_APP_PRIVATE_KEY_PATH {key_path!r}: {exc}"
+            ) from exc
+    else:
+        raw = key_literal.encode("utf-8")
+    return app_id, install_id, _normalize_private_key_pem(raw)
+
+
+def _normalize_private_key_pem(raw: bytes) -> bytes:
+    """Make the App private key robust to how it is delivered: CI secret stores often
+    flatten newlines to the literal characters ``\\n``, so when the value looks like PEM
+    and contains escaped ``\\n`` sequences, restore them — even if a real trailing newline
+    is also present. Then validate the key parses as an RSA private key, failing at
+    startup with a clear message rather than a cryptic RS256 error at first token exchange.
+
+    Raises:
+        ValueError: if the bytes are not valid PEM or are not an RSA private key.
+    """
+    # Imported lazily so the common PAT path never pays the cryptography import cost.
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    if b"-----BEGIN" in raw and rb"\n" in raw:
+        raw = raw.replace(rb"\n", b"\n")
+    try:
+        key = load_pem_private_key(raw, password=None)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(
+            f"GitHub App private key is not valid PEM / does not parse: {exc}"
+        ) from exc
+    # GitHub App keys are RSA, and RS256 JWT signing requires an RSA key — reject
+    # EC/Ed25519 here rather than failing cryptically at the first token exchange.
+    if not isinstance(key, rsa.RSAPrivateKey):
+        raise ValueError(
+            f"GitHub App private key must be RSA, got {type(key).__name__}"
+        )
+    return raw
 
 
 # Duration unit table (subset that matters for CI_TIMEOUT).

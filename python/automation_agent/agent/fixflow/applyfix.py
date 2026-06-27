@@ -16,7 +16,7 @@ from typing import Protocol
 
 from automation_agent.agent.fixflow.files import safe_join
 from automation_agent.githubapi import PR, Comparison, PRInput
-from automation_agent.gitrepo import Author, Repo
+from automation_agent.gitrepo import Auth, Author, Repo, TokenProvider
 
 
 class GitHub(Protocol):
@@ -47,7 +47,10 @@ class ApplyConfig:
     owner: str
     repo: str
     clone_url: str
-    token: str
+    # provider yields the GitHub token for https git transport, fetched fresh per op
+    # (scoped to owner/repo). None / an empty token means anonymous. Ignored for an ssh
+    # clone_url.
+    provider: TokenProvider | None
     base: str  # base branch the PR targets
     branch: str  # agent working branch
     new_branch: bool  # True on kickoff (create from base); False on retry (reuse)
@@ -76,7 +79,11 @@ def open_repo(cfg: ApplyConfig) -> Repo:
     # gitrepo.Repo.clone requires the target dir not to already exist.
     os.rmdir(dir_)
     try:
-        repo = Repo.clone(cfg.clone_url, dir_, cfg.token, cfg.ssh_key)
+        repo = Repo.clone(
+            cfg.clone_url,
+            dir_,
+            Auth(provider=cfg.provider, repo=f"{cfg.owner}/{cfg.repo}", ssh_key=cfg.ssh_key),
+        )
     except Exception:
         _rmtree(dir_)
         raise
