@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from automation_agent.gitrepo.repo import Author, NoChangesError, Repo
+from automation_agent.gitrepo.repo import Auth, Author, NoChangesError, Repo, TokenProvider
 
-__all__ = ["Author", "NoChangesError", "Repo"]
+__all__ = ["Auth", "Author", "NoChangesError", "Repo", "TokenProvider"]

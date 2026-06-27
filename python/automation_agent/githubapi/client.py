@@ -13,9 +13,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
-from github import Auth, Github
+from github import Github
+
+
+class AuthProvider(Protocol):
+    """The slice of ``auth.TokenProvider`` this client needs: a ready PyGithub REST
+    client carrying the right credentials (a static PAT, an anonymous client, or
+    auto-refreshed GitHub App installation tokens). Declared locally so githubapi stays
+    decoupled from the ``auth`` package (structural typing matches the real providers)."""
+
+    def github(self) -> Github: ...
 
 
 @dataclass
@@ -102,14 +111,12 @@ class Client:
     per call so one client serves many repositories.
     """
 
-    def __init__(self, token: str = "") -> None:
-        """Build a Client. An empty token yields an unauthenticated client (fine
-        for public reads and tests).
+    def __init__(self, provider: AuthProvider) -> None:
+        """Build a Client from an auth provider (``auth.StaticProvider`` for PAT /
+        anonymous, ``auth.AppProvider`` for GitHub App installation tokens). The provider
+        owns the underlying PyGithub client and its token refresh.
         """
-        if token:
-            self._gh = Github(auth=Auth.Token(token))
-        else:
-            self._gh = Github()
+        self._gh = provider.github()
 
     def list_commits_since(self, owner: str, repo: str, since: datetime) -> list[Commit]:
         """Return commits to owner/repo authored since the given time."""

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from automation_agent.auth import StaticProvider
 from automation_agent.githubapi import (
     Client,
     PRInput,
@@ -133,7 +134,7 @@ class FakeGithub:
 
 
 def make_client(repo: FakeRepo) -> tuple[Client, FakeGithub]:
-    c = Client("")
+    c = Client(StaticProvider(""))
     gh = FakeGithub(repo)
     c._gh = gh
     return c, gh
@@ -313,7 +314,7 @@ def test_method_wraps_errors() -> None:
         def get_repo(self, full_name):
             raise RuntimeError("network down")
 
-    c = Client("")
+    c = Client(StaticProvider(""))
     c._gh = Boom(None)
     with pytest.raises(ValueError, match="list commits o/r"):
         c.list_commits_since("o", "r", datetime.now(tz=UTC))

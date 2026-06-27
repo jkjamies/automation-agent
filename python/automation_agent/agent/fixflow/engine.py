@@ -29,7 +29,7 @@ from automation_agent.agent.fixflow.applyfix import (
 from automation_agent.agent.fixflow.envelope import parse_kickoff
 from automation_agent.agent.setup import ParkStore
 from automation_agent.githubapi import parse_check_run_event
-from automation_agent.gitrepo import Author
+from automation_agent.gitrepo import Author, TokenProvider
 from automation_agent.notify import Message, Notifier
 
 
@@ -107,7 +107,10 @@ class Deps:
     code_llm: BaseLlm | None = None
     gh: GitHub | None = None
     notify: Notifier | None = None
-    token: str = ""
+    # provider authenticates git transport (https x-access-token) per op. A static PAT in
+    # local dev (auth.StaticProvider), an auto-refreshed App installation token in
+    # production (auth.AppProvider). None means anonymous.
+    provider: TokenProvider | None = None
     # pr_label is the single human-facing label applied to every agent PR on creation
     # (AGENT_PR_LABEL). Write-only — PR lookup is by branch, so it never gates behavior.
     pr_label: str = "automation-agent"
@@ -228,7 +231,7 @@ class Engine:
             owner=rp.owner,
             repo=rp.repo,
             clone_url=self._clone_url(rp.owner, rp.repo),
-            token=self.d.token,
+            provider=self.d.provider,
             ssh_key=self.d.ssh_key,
             base=rp.base,
             branch=self.spec.branch,

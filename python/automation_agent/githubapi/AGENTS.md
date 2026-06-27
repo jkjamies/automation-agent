@@ -6,11 +6,11 @@ A thin wrapper over `PyGithub` exposing only what this service needs:
 
 ```mermaid
 flowchart TD
-    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["new(token)"]
-    NEW -->|"token != ''"| AUTH["Github(auth=Token(token))"]
-    NEW -->|empty token| ANON[unauthenticated client]
+    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["Client(provider)"]
+    NEW -->|"provider.github()"| AUTH["auth.StaticProvider: PAT / anonymous"]
+    NEW -->|"provider.github()"| APP["auth.AppProvider: App installation token (auto-refresh)"]
     AUTH --> C["Client{gh: Github}"]
-    ANON --> C
+    APP --> C
 
     C --> M1["list_commits_since(owner, repo, since)"]
     C --> M2["create_pr(owner, repo, PRInput)"]
@@ -47,6 +47,12 @@ flowchart TD
   attempt; re-run-safe). See `.agents/standards/architecture-design.md` §8.
 - `agent_check` — the agent verify check's status/conclusion for a ref (resume).
 
+`Client(provider)` takes an auth provider (the `auth` seam) and uses
+`provider.github()` as its REST client: `StaticProvider` for a PAT or the anonymous
+client, `AppProvider` for auto-refreshed GitHub App installation tokens. A local
+`AuthProvider` protocol keeps githubapi decoupled from the `auth` package.
+
 Owner/repo are per-call so one client serves many repos. Deterministic tooling — no
-agent imports. Tested by intercepting the GitHub REST API with `respx` (no live calls).
+agent imports. Tested with PyGithub-shaped fakes (`respx`, being httpx-based, cannot
+intercept PyGithub's urllib3/requests calls), plus the pure `parse_check_run_event`.
 Consumers define their own narrow protocols over this client for faking.

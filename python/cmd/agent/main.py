@@ -24,6 +24,7 @@ from automation_agent.agent import covfixer, lintfixer, root, summary
 from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
+from automation_agent.auth import StaticProvider, TokenProvider, new_app_provider
 from automation_agent.config import Config, load
 from automation_agent.githubapi import Client
 from automation_agent.ingest import Envelope
@@ -36,6 +37,19 @@ log = logging.getLogger("automation_agent")
 # maxConcurrentDispatch): under a burst the ingest path applies backpressure rather than
 # spawning unbounded tasks.
 MAX_CONCURRENT_DISPATCH = 32
+
+
+def build_token_provider(cfg: Config) -> TokenProvider:
+    """Select the GitHub auth provider: App installation tokens in production (when the
+    GITHUB_APP_* vars are set), else the static PAT/anonymous fallback for local dev. One
+    provider authenticates both the REST client and git transport."""
+    if cfg.app_mode():
+        return new_app_provider(
+            cfg.github_app_id,
+            cfg.github_app_installation_id,
+            cfg.github_app_private_key_pem,
+        )
+    return StaticProvider(cfg.github_token)
 
 
 def build_notifier(cfg: Config) -> Notifier | None:
@@ -106,11 +120,14 @@ async def run() -> None:
 
     llm = agent_setup.build_llm(cfg)
     code_llm = agent_setup.build_code_llm(cfg)
-    gh = Client(cfg.github_token)
-    # SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
-    # and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
-    # rather than fail so read-only/dry-run flows still work, but PR operations will not.
-    if cfg.git_transport == "ssh" and not cfg.github_token:
+    provider = build_token_provider(cfg)
+    gh = Client(provider)
+    # SSH only authenticates the git transport (clone/push). In PAT mode the GitHub REST
+    # API — opening and labeling PRs, reading the CI check — still needs a token (or `gh`
+    # login). Warn rather than fail so read-only/dry-run flows still work, but PR
+    # operations will not. App mode authenticates the REST API with the App token
+    # regardless of git transport, so the warning does not apply there.
+    if cfg.git_transport == "ssh" and not cfg.github_token and not cfg.app_mode():
         log.warning(
             "GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth "
             "token`); git clone+push will use ssh, but PR operations against the REST API "
@@ -142,7 +159,7 @@ async def run() -> None:
         code_llm=code_llm,
         gh=gh,
         notify=notifier,
-        token=cfg.github_token,
+        provider=provider,
         git_transport=cfg.git_transport,
         ssh_key=cfg.git_ssh_key,
         pr_label=cfg.agent_pr_label,

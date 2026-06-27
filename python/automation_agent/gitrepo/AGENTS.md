@@ -6,11 +6,15 @@ Working-tree git operations via `GitPython`:
 
 ```mermaid
 flowchart TD
-    LF[lint-fixer] --> CL["Repo.clone(url, dir, token, ssh_key)"]
-    CL --> AF["_auth_url(url, token)"]
+    LF[lint-fixer] --> CL["Repo.clone(url, dir, Auth{provider, repo, ssh_key})"]
+    CL --> TF["_token_for(url, auth)"]
+    TF -->|"https + provider"| TOK["provider.token(repo) — fresh per op"]
+    TF -->|"http://"| ERR["raise ValueError (token leak refused)"]
+    TF -->|"local / file / ssh"| EMPTY["'' — anonymous, provider not consulted"]
+    TOK --> AF["_auth_url(url, token)"]
     AF -->|"https + token != ''"| BA["x-access-token:token in remote URL"]
     AF -->|"empty token or non-https"| NIL[url unchanged - anonymous / ssh]
-    CL --> SE["_ssh_env(ssh_key) when url is git@ / ssh://"]
+    CL --> SE["_ssh_env(auth.ssh_key) when url is git@ / ssh://"]
     SE -->|"ssh_key set"| GSC["GIT_SSH_COMMAND=ssh -i key -o IdentitiesOnly=yes"]
     SE -->|"ssh_key empty"| SYS[system git: ssh-agent / default keys / known_hosts]
     CL -->|"GitRepo.clone_from(clone_url, dir, env)"| REM[(git remote / GitHub)]
@@ -29,17 +33,24 @@ flowchart TD
     ST -->|clean| NC["raise NoChanges"]
     ST -->|dirty| CMT["index.commit() -> SHA (one commit per attempt)"]
     CMT --> PUSH["push()"]
-    PUSH -->|"origin.push (auth from clone URL)"| REM
+    PUSH -->|"re-resolve token, re-point origin URL, origin.push"| REM
     PUSH -->|already up to date| OKUP[no-op success]
     CMT --> HEAD["head() -> HEAD SHA"]
 ```
 
-- `clone(url, dir, token, ssh_key)` — auth is chosen by the URL scheme, not the caller. An
-  `https` remote uses `token` as GitHub `x-access-token` HTTP auth (anonymous when empty). A
-  `git@…`/`ssh://…` remote (built upstream when `GIT_TRANSPORT=ssh`) is left untouched, so
-  the system `git` GitPython shells out to authenticates it via ssh-agent, the default
-  identity files, and `known_hosts`. A non-empty `ssh_key` (`GIT_SSH_KEY`) pins ssh to that
-  key via `GIT_SSH_COMMAND`; GitPython carries that env onto the repo so `push` reuses it.
+- `clone(url, dir, Auth{provider, repo, ssh_key})` — auth is chosen by the URL scheme,
+  not the caller. An `https` remote resolves a token from `provider.token(repo)` and uses
+  it as GitHub `x-access-token` HTTP auth (anonymous when the provider is `None` or yields
+  `""`). A plaintext `http://` remote is **refused** — sending a token as basic auth over
+  an unencrypted transport would leak it. A `git@…`/`ssh://…` remote (built upstream when
+  `GIT_TRANSPORT=ssh`) is left untouched, so the system `git` GitPython shells out to
+  authenticates it via ssh-agent, the default identity files, and `known_hosts`. A
+  non-empty `ssh_key` (`GIT_SSH_KEY`) pins ssh to that key via `GIT_SSH_COMMAND`;
+  GitPython carries that env onto the repo so `push` reuses it.
+- The `provider` is the `auth.TokenProvider` seam (a local protocol here keeps gitrepo
+  decoupled from `auth`). The token is re-fetched **per git op**: `push()` re-resolves it
+  and re-points the origin URL, so a short-lived (~1h) GitHub App installation token that
+  was minted at clone time stays current by push.
 - `checkout(branch, create)`, `commit_all(msg, author)` (stages all, returns SHA),
   `push()`, `head()`, `path(rel)`.
 
