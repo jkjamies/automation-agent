@@ -212,6 +212,98 @@ def test_clone_threads_ssh_command(tmp_path, monkeypatch) -> None:
     assert captured["env"] is None
 
 
+def test_push_strips_token_in_finally(tmp_path) -> None:
+    # push() applies the tokened URL only for the network op, then restores the clean URL in a
+    # finally — so the credential never lingers in .git/config. Driven through fakes (no
+    # network) so url_history captures the full set/restore sequence.
+    class FakePushInfo:
+        ERROR = 1024
+
+        def __init__(self) -> None:
+            self.flags = 0
+            self.summary = "ok"
+
+    class FakeOrigin:
+        def __init__(self) -> None:
+            self.url_history: list[str] = []
+
+        def set_url(self, url: str) -> None:
+            self.url_history.append(url)
+
+        def push(self, refspec: str) -> list[FakePushInfo]:
+            return [FakePushInfo()]
+
+    class FakeBranch:
+        name = "agent/fix"
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self._origin = FakeOrigin()
+            self.active_branch = FakeBranch()
+
+        def remote(self, name: str) -> FakeOrigin:
+            return self._origin
+
+    fake = FakeRepo()
+    prov = _FakeProvider("tok")
+    r = Repo(
+        fake,
+        str(tmp_path),
+        "https://github.com/acme/api.git",
+        Auth(provider=prov, repo="acme/api"),
+    )
+    r.push()
+
+    # The tokened URL is applied for the push, then the clean URL is restored in finally.
+    assert fake.remote("origin").url_history == [
+        "https://x-access-token:tok@github.com/acme/api.git",
+        "https://github.com/acme/api.git",
+    ]
+
+
+def test_push_surfaces_reset_failure(tmp_path) -> None:
+    # If the post-push reset fails, the tokened origin would otherwise be left on disk — push()
+    # must surface the failure rather than swallow it.
+    class FakePushInfo:
+        ERROR = 1024
+
+        def __init__(self) -> None:
+            self.flags = 0
+            self.summary = "ok"
+
+    class FakeOrigin:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def set_url(self, url: str) -> None:
+            self.calls += 1
+            if self.calls > 1:  # the restore (second set_url) fails.
+                raise RuntimeError("config locked")
+
+        def push(self, refspec: str) -> list[FakePushInfo]:
+            return [FakePushInfo()]
+
+    class FakeBranch:
+        name = "agent/fix"
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self._origin = FakeOrigin()
+            self.active_branch = FakeBranch()
+
+        def remote(self, name: str) -> FakeOrigin:
+            return self._origin
+
+    r = Repo(
+        FakeRepo(),
+        str(tmp_path),
+        "https://github.com/acme/api.git",
+        Auth(provider=_FakeProvider("tok"), repo="acme/api"),
+    )
+    with pytest.raises(ValueError, match="reset remote url"):
+        r.push()
+
+
 def test_token_for_refuses_insecure_http() -> None:
     # Sending a PAT/App token as basic auth over plaintext http:// would leak it; the token
     # lookup must be refused outright and the provider never consulted.

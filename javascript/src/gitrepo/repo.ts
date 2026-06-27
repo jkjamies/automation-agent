@@ -9,6 +9,7 @@
  * a real failure. The operations are wrapped in async Promises.
  */
 
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
 
@@ -181,7 +182,20 @@ export class Repo {
       try {
         await git.remote(['set-url', 'origin', url]);
       } catch (err) {
-        throw new Error(`clone ${url}: reset remote url: ${errMsg(err)}`);
+        // A failed reset would leave the token in origin — delete the partial checkout so the
+        // credential can't survive on disk, then surface the failure (don't depend on the
+        // caller's temp-dir cleanup to scrub it).
+        let cleanupErr: unknown;
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch (rmErr) {
+          cleanupErr = rmErr;
+        }
+        throw new Error(
+          cleanupErr
+            ? `clone ${url}: reset remote url: ${errMsg(err)}; additionally failed to delete checkout: ${errMsg(cleanupErr)}`
+            : `clone ${url}: reset remote url: ${errMsg(err)}`,
+        );
       }
     }
     return new Repo(git, dir, url, auth);
@@ -296,6 +310,8 @@ export class Repo {
       throw new Error(`push: ${errMsg(err)}`);
     }
     const token = await tokenFor(this.url, this.auth);
+    let pushErr: unknown;
+    let resetErr: unknown;
     try {
       if (token) {
         // Apply the freshly-resolved token only for the network op.
@@ -303,17 +319,28 @@ export class Repo {
       }
       await this.git.push('origin', `${branch}:${branch}`);
     } catch (err) {
-      throw new Error(`push: ${errMsg(err)}`);
+      pushErr = err;
     } finally {
       // Strip the token back out of .git/config so it never lingers on disk (the clone-time
       // origin URL is already clean; only push re-tokenizes it transiently).
       if (token) {
         try {
           await this.git.remote(['set-url', 'origin', this.url]);
-        } catch {
-          // Best effort: the temp checkout is removed after the attempt regardless.
+        } catch (err) {
+          // A failed reset would leave the token in .git/config — capture it and surface it
+          // below rather than depend on the caller's temp-dir cleanup to scrub the credential.
+          resetErr = err;
         }
       }
+    }
+    if (resetErr) {
+      const resetMsg = `reset remote url: ${errMsg(resetErr)}`;
+      throw new Error(
+        pushErr ? `push: ${errMsg(pushErr)}; additionally ${resetMsg}` : `push: ${resetMsg}`,
+      );
+    }
+    if (pushErr) {
+      throw new Error(`push: ${errMsg(pushErr)}`);
     }
   }
 

@@ -50,12 +50,15 @@ flowchart TD
   decoupled from `auth`). The token is re-fetched **per git op**: `push()` re-resolves it
   and re-points the origin URL, so a short-lived (~1h) GitHub App installation token minted
   at clone time stays current by push.
-- The token is **never persisted to disk**: `clone` resets the origin URL to the clean
-  (token-free) form immediately after cloning, and `push` re-tokenizes the URL only for the
-  network call and strips it again in a `finally`. So `.git/config` never holds the
-  credential at rest — matching the Go reference, which supplies the token as transport auth
-  rather than embedding it in the URL (`simple-git` shells out to the git CLI, which can't do
-  transport auth, hence the set-url dance).
+- The token is **stripped back out of `.git/config` before control returns** on the normal
+  path: `clone` resets the origin URL to the clean (token-free) form immediately after
+  cloning, and `push` re-tokenizes the URL only for the network call before restoring the
+  clean URL in a `finally`. This keeps the credential from lingering in the working tree under
+  normal operation. (If a reset itself fails, `clone` deletes the partial checkout and `push`
+  surfaces the error rather than leaving a tokenized origin behind.) Unlike the Go reference —
+  which supplies the token as transport auth and so never writes it to disk at all —
+  `simple-git` shells out to the git CLI, which can't do transport auth, hence the set-url
+  dance.
 - `sshCommand(sshKey)` builds the `GIT_SSH_COMMAND` value (`ssh -i <key> -o IdentitiesOnly=yes`)
   that pins the ssh transport to an explicit `GIT_SSH_KEY`. The composition root
   (`cmd/agent/main.ts`) exports it into `process.env` once at startup so every child `git`
