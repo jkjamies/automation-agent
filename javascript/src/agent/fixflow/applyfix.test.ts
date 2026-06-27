@@ -58,7 +58,7 @@ function applyCfg(remote: string): ApplyConfig {
     owner: 'acme',
     repo: 'api',
     cloneUrl: remote,
-    token: '',
+    provider: null,
     base: 'main',
     branch: 'agent/fix',
     newBranch: true,

@@ -7,7 +7,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Author, authUrl, NoChangesError, Repo, sshCommand } from './repo';
+import { type Auth, Author, authUrl, NoChangesError, Repo, sshCommand, tokenFor } from './repo';
+
+/** Records which repos the provider was asked for, to assert it is (not) consulted. */
+class FakeProvider {
+  calls: string[] = [];
+  token(repo: string): Promise<string> {
+    this.calls.push(repo);
+    return Promise.resolve('ghs_installation_token');
+  }
+}
 
 let tmpRoot: string;
 
@@ -48,7 +57,7 @@ describe('gitrepo', () => {
     const remote = await seedRemote();
     const work = workDir('cbcp');
 
-    const r = await Repo.clone(remote, work, '');
+    const r = await Repo.clone(remote, work);
 
     await r.checkout('agent/fix', true);
     await writeFile(r.path('fix.txt'), 'patched');
@@ -74,14 +83,14 @@ describe('gitrepo', () => {
     const remote = await seedRemote();
 
     // First clone: create and push a branch.
-    const r1 = await Repo.clone(remote, workDir('cr1'), '');
+    const r1 = await Repo.clone(remote, workDir('cr1'));
     await r1.checkout('feature', true);
     await writeFile(r1.path('f.txt'), 'x');
     const sha = await r1.commitAll('feat', { name: 'a', email: 'a@x' });
     await r1.push();
 
     // Second clone: check out the existing remote branch.
-    const r2 = await Repo.clone(remote, workDir('cr2'), '');
+    const r2 = await Repo.clone(remote, workDir('cr2'));
     await r2.checkoutRemote('feature');
     expect(await r2.head()).toBe(sha);
 
@@ -89,12 +98,12 @@ describe('gitrepo', () => {
   });
 
   it('errors checking out a missing branch', async () => {
-    const r = await Repo.clone(await seedRemote(), workDir('miss'), '');
+    const r = await Repo.clone(await seedRemote(), workDir('miss'));
     await expect(r.checkout('does-not-exist', false)).rejects.toThrow();
   });
 
   it('raises NoChangesError committing a clean tree', async () => {
-    const r = await Repo.clone(await seedRemote(), workDir('clean'), '');
+    const r = await Repo.clone(await seedRemote(), workDir('clean'));
     await expect(r.commitAll('nothing changed', { name: 'a', email: 'a@x' })).rejects.toThrow(
       NoChangesError,
     );
@@ -102,7 +111,7 @@ describe('gitrepo', () => {
 
   it('errors cloning a nonexistent source', async () => {
     const work = workDir('nope');
-    await expect(Repo.clone(path.join(tmpRoot, 'does-not-exist'), work, '')).rejects.toThrow();
+    await expect(Repo.clone(path.join(tmpRoot, 'does-not-exist'), work)).rejects.toThrow();
   });
 
   it('embeds the token into https URLs only', () => {
@@ -141,5 +150,35 @@ describe('gitrepo', () => {
     );
     // An embedded single quote is escaped as '\'' so the wrapping stays balanced.
     expect(sshCommand("/k/a'b")).toBe("ssh -i '/k/a'\\''b' -o IdentitiesOnly=yes");
+  });
+});
+
+describe('tokenFor', () => {
+  it('resolves a token from the provider for an https remote', async () => {
+    const p = new FakeProvider();
+    const auth: Auth = { provider: p, repo: 'acme/api' };
+    expect(await tokenFor('https://github.com/acme/api.git', auth)).toBe('ghs_installation_token');
+    // The provider is scoped to the repo, fetched fresh per op.
+    expect(p.calls).toEqual(['acme/api']);
+  });
+
+  it('refuses an insecure http:// remote (token leak) without consulting the provider', async () => {
+    const p = new FakeProvider();
+    await expect(
+      tokenFor('http://github.com/acme/api.git', { provider: p, repo: 'acme/api' }),
+    ).rejects.toThrow(/insecure http/);
+    expect(p.calls).toEqual([]);
+  });
+
+  it('returns "" for ssh and local remotes, never minting a token', async () => {
+    const p = new FakeProvider();
+    expect(await tokenFor('git@github.com:acme/api.git', { provider: p, repo: 'acme/api' })).toBe('');
+    expect(await tokenFor('ssh://git@github.com/acme/api.git', { provider: p })).toBe('');
+    expect(await tokenFor('/local/path/repo', { provider: p })).toBe('');
+    expect(p.calls).toEqual([]);
+  });
+
+  it('returns "" on an https remote when no provider is set (anonymous)', async () => {
+    expect(await tokenFor('https://github.com/acme/api.git', {})).toBe('');
   });
 });

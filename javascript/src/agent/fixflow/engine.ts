@@ -10,7 +10,7 @@
 import type { BaseLlm, BaseSessionService } from '@google/adk';
 
 import { parseCheckRunEvent } from '../../githubapi/client';
-import type { Author } from '../../gitrepo/repo';
+import type { Author, TokenProvider } from '../../gitrepo/repo';
 import type { Message, Notifier } from '../../notify/notify';
 import type { ParkStore } from '../setup/parkstore';
 import {
@@ -121,7 +121,9 @@ export interface Deps {
   codeLlm?: BaseLlm | null;
   gh: GitHub;
   notify?: Notifier | null;
-  token?: string;
+  /** Resolves the git token per op (https remotes); null/anonymous for ssh/local. The
+   * `auth` seam's provider — PAT or auto-refreshed GitHub App installation token. */
+  provider?: TokenProvider | null;
   /** Kickoff allowlist (REPOS); when non-empty a kickoff whose repo is not listed is rejected. */
   repos?: string[];
   maxIter?: number;
@@ -160,7 +162,7 @@ export interface ResolvedDeps {
   codeLlm: BaseLlm | null;
   gh: GitHub;
   notify: Notifier | null;
-  token: string;
+  provider: TokenProvider | null;
   repos: string[];
   maxIter: number;
   ciTimeoutMs: number;
@@ -259,7 +261,7 @@ export class Engine {
       owner: rp.owner,
       repo: rp.repo,
       cloneUrl: this.d.cloneUrl(rp.owner, rp.repo),
-      token: this.d.token,
+      provider: this.d.provider,
       base: rp.base,
       branch: this.spec.branch,
       newBranch: rp.newBranch,
@@ -312,7 +314,7 @@ export function newEngine(spec: Spec, d: Deps): Engine {
     codeLlm: d.codeLlm ?? d.llm,
     gh: d.gh,
     notify: d.notify ?? null,
-    token: d.token ?? '',
+    provider: d.provider ?? null,
     repos: d.repos ?? [],
     maxIter: d.maxIter && d.maxIter > 0 ? d.maxIter : 3,
     ciTimeoutMs: d.ciTimeoutMs && d.ciTimeoutMs > 0 ? d.ciTimeoutMs : DEFAULT_CI_TIMEOUT_MS,

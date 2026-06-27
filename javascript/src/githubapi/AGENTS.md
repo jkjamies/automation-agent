@@ -6,11 +6,11 @@ A thin wrapper over `@octokit/rest` exposing only what this service needs:
 
 ```mermaid
 flowchart TD
-    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["new Client(token)"]
-    NEW -->|"token !== ''"| AUTH["new Octokit({ auth: token })"]
-    NEW -->|empty token| ANON["new Octokit() (unauthenticated)"]
+    Caller[summary / lint-fixer / coverage-fixer / webhook] --> NEW["new Client(provider)"]
+    NEW -->|"provider.github()"| AUTH["auth.StaticProvider: PAT / anonymous Octokit"]
+    NEW -->|"provider.github()"| APP["auth.AppProvider: App installation token (auto-refresh)"]
     AUTH --> C["Client{gh: Octokit}"]
-    ANON --> C
+    APP --> C
     TEST["Client.withOctokit(fake)"] -.->|tests inject a fake| C
 
     C --> M1["listCommitsSince(owner, repo, since)"]
@@ -43,6 +43,11 @@ flowchart TD
 - `agentCheck` — the agent verify check's status/conclusion for a ref (`filter: latest`,
   re-run-safe). Available for a future resume/timeout re-query; not yet wired in.
 - `getFileContent` — decoded file contents at a ref (`""` = default branch).
+
+`new Client(provider)` takes an auth provider (the `auth` seam) and uses
+`provider.github()` as its REST client: `StaticProvider` for a PAT or the anonymous
+client, `AppProvider` for auto-refreshed GitHub App installation tokens. A local
+`AuthProvider` interface keeps githubapi decoupled from the `auth` package.
 
 Each method returns its value or `throw`s an `Error`, and all I/O is `async` (every
 method returns a `Promise`). Owner/repo are per-call so one client serves many repos.

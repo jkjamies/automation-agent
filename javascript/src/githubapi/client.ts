@@ -11,9 +11,6 @@
 
 import { Octokit } from '@octokit/rest';
 
-/** Bounds every GitHub request so a stalled connection can't hang a long-running poll. */
-const HTTP_TIMEOUT_MS = 30_000;
-
 /** Minimal commit projection for digests. */
 export interface Commit {
   sha: string;
@@ -149,6 +146,15 @@ export interface OctokitLike {
 }
 
 /**
+ * Hands back the authenticated Octokit REST client this Client wraps. The `auth`
+ * seam's providers (StaticProvider / AppProvider) satisfy it structurally; declaring
+ * it locally keeps githubapi decoupled from the `auth` package.
+ */
+export interface AuthProvider {
+  github(): Octokit;
+}
+
+/**
  * A thin wrapper over an Octokit instance. Owner/repo are passed per call so one
  * client serves many repositories.
  */
@@ -156,18 +162,16 @@ export class Client {
   private readonly gh: OctokitLike;
 
   /**
-   * Build a Client. An empty/omitted token yields an unauthenticated client
-   * (fine for public reads and tests). A pre-built octokit-like object may be
-   * injected directly (used by tests).
+   * Build a Client from an auth provider (the `auth` seam): `StaticProvider` for a PAT
+   * or the anonymous client, `AppProvider` for auto-refreshed GitHub App installation
+   * tokens. The provider owns the Octokit instance (and its auth refresh), so REST and
+   * git share one credential.
    */
-  constructor(token = '') {
+  constructor(provider: AuthProvider) {
     // A real Octokit's overloaded method/paginate signatures are narrower than
     // the OctokitLike shape used for test fakes; cast through unknown at this
-    // single trusted boundary. A 30s request timeout bounds every call so a stalled
-    // GitHub connection can't hang a long-running poll.
-    const opts = { request: { timeout: HTTP_TIMEOUT_MS } };
-    const oct = token ? new Octokit({ auth: token, ...opts }) : new Octokit(opts);
-    this.gh = oct as unknown as OctokitLike;
+    // single trusted boundary.
+    this.gh = provider.github() as unknown as OctokitLike;
   }
 
   /**

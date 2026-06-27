@@ -17,7 +17,8 @@ import { newParkStore } from '../../src/agent/setup/parkstore';
 import { newSessionService } from '../../src/agent/setup/session';
 import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
-import { type Config, load } from '../../src/config/config';
+import { StaticProvider, newAppProvider, type TokenProvider } from '../../src/auth/auth';
+import { type Config, appMode, load } from '../../src/config/config';
 import { Client } from '../../src/githubapi/client';
 import { sshCommand } from '../../src/gitrepo/repo';
 import { type Envelope } from '../../src/ingest/envelope';
@@ -33,6 +34,18 @@ const log = {
 function emit(level: string, msg: string, fields?: Record<string, unknown>): void {
   const extra = fields && Object.keys(fields).length > 0 ? ' ' + JSON.stringify(fields) : '';
   console.log(`${new Date().toISOString()} ${level} automation-agent ${msg}${extra}`);
+}
+
+/**
+ * Pick the GitHub auth provider from config: an App installation-token provider when App
+ * mode is configured (the production path), else a static PAT/anonymous provider. The
+ * provider backs both the REST client and the git transport, so they share one credential.
+ */
+function buildTokenProvider(cfg: Config): TokenProvider {
+  if (appMode(cfg)) {
+    return newAppProvider(cfg.githubAppId, cfg.githubAppInstallationId, cfg.githubAppPrivateKeyPem);
+  }
+  return new StaticProvider(cfg.githubToken);
 }
 
 function buildNotifier(cfg: Config): Notifier | null {
@@ -122,11 +135,15 @@ async function run(): Promise<void> {
 
   const llm = buildLLM(cfg);
   const codeLlm = buildCodeLLM(cfg);
-  const gh = new Client(cfg.githubToken);
+  // One auth provider backs both the REST client and the git transport (PAT/anonymous or a
+  // GitHub App installation token), so they share one credential.
+  const provider = buildTokenProvider(cfg);
+  const gh = new Client(provider);
   // SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
   // and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
   // rather than fail so read-only/dry-run flows still work, but PR operations will not.
-  if (cfg.gitTransport === 'ssh' && cfg.githubToken === '') {
+  // App mode supplies its own REST credential, so the warning is PAT-mode only.
+  if (cfg.gitTransport === 'ssh' && cfg.githubToken === '' && !appMode(cfg)) {
     log.warn(
       'GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); git clone+push will use ssh, but PR operations against the REST API will fail — run `gh auth login` or set a token',
     );
@@ -155,7 +172,7 @@ async function run(): Promise<void> {
     codeLlm,
     gh,
     notify: notifier,
-    token: cfg.githubToken,
+    provider,
     gitTransport: cfg.gitTransport,
     repos: cfg.repos,
     maxIter: cfg.maxIterations,
