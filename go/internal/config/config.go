@@ -313,11 +313,12 @@ func resolveGitHubApp(get lookup) (GitHubApp, error) {
 
 // normalizePrivateKeyPEM makes the App private key robust to how it is delivered
 // (Decision §4): CI secret stores often flatten newlines to the literal characters
-// `\n`, so when the value looks like PEM but has no real newline, restore them.
+// `\n`, so when the value looks like PEM and contains escaped `\n` sequences, restore
+// them — even if a real trailing newline is also present.
 // It then validates the key parses as an RSA private key, failing at startup with a
 // clear message rather than a cryptic RS256 error at first token exchange.
 func normalizePrivateKeyPEM(raw []byte) ([]byte, error) {
-	if bytes.Contains(raw, []byte("-----BEGIN")) && !bytes.Contains(raw, []byte("\n")) {
+	if bytes.Contains(raw, []byte("-----BEGIN")) && bytes.Contains(raw, []byte(`\n`)) {
 		raw = bytes.ReplaceAll(raw, []byte(`\n`), []byte("\n"))
 	}
 	block, _ := pem.Decode(raw)

@@ -33,10 +33,11 @@ flowchart TD
 - `Validate()` enforces invariants defaults can't (provider enums, `MaxIterations >= 1`,
   and **non-empty `REPOS` in App mode** — empty "all repos" is a footgun once an App
   installation can see more repos than intended).
-- **GitHub auth mode** (`resolveGitHubApp`): App mode iff `GITHUB_APP_ID` **and**
-  `GITHUB_APP_INSTALLATION_ID` **and** exactly one of (`GITHUB_APP_PRIVATE_KEY`,
-  `GITHUB_APP_PRIVATE_KEY_PATH`) are set; otherwise PAT mode (`GITHUB_TOKEN`). Any
-  partial/misconfigured App setup is a **startup error**, never a silent fallback.
+- **GitHub auth mode** (`resolveGitHubApp`): with no `GITHUB_APP_*` vars set, the
+  loader stays in PAT mode (`GITHUB_TOKEN`). Once any `GITHUB_APP_*` var is present,
+  App mode is intended and requires `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
+  exactly one of (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_PRIVATE_KEY_PATH`); any
+  partial/misconfigured App setup is a **startup error**, never a silent fallback to PAT.
   `Config.AppMode()` reports which path is active; the resolved key lives in
   `Config.GitHubApp` (PEM unescaped + validated to parse at load). The static-token vs
   installation-token choice is realized in `internal/auth`.

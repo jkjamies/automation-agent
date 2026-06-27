@@ -65,6 +65,18 @@ func TestAuthForHTTPS(t *testing.T) {
 	}
 }
 
+func TestAuthForRefusesPlaintextHTTP(t *testing.T) {
+	// A plaintext http remote must never receive a token as Basic Auth — refuse before
+	// any token lookup so credentials can't leak over an unencrypted transport.
+	p := &fakeProvider{tok: "tok"}
+	if _, err := authFor(context.Background(), "http://example.com/acme/api.git", Auth{Provider: p, Repo: "acme/api"}); err == nil {
+		t.Fatal("expected an error for an http:// remote, got nil")
+	}
+	if p.calls != 0 {
+		t.Errorf("provider.Token called %d times for http remote, want 0", p.calls)
+	}
+}
+
 func TestAuthForSSHExplicitKeyMissing(t *testing.T) {
 	// An ssh URL routes to ssh auth; a non-existent explicit key path is a clear error
 	// rather than a silent fallthrough to token auth.

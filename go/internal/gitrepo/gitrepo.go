@@ -81,10 +81,14 @@ func authFor(ctx context.Context, url string, a Auth) (transport.AuthMethod, err
 	if isSSHURL(url) {
 		return sshAuth(a.SSHKey)
 	}
-	// Only http(s) remotes use token auth. A local path or file:// remote needs no
-	// credentials, and fetching a token for one would mint a needless GitHub
-	// installation token (a real API round-trip) in App mode.
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+	// Only https remotes use token auth. Refuse plaintext http — sending a PAT/App
+	// token as Basic Auth over an unencrypted transport would leak it. A local path
+	// or file:// remote needs no credentials, and fetching a token for one would mint
+	// a needless GitHub installation token (a real API round-trip) in App mode.
+	if strings.HasPrefix(url, "http://") {
+		return nil, errors.New("refusing to send GitHub token over insecure http remote; use https or ssh")
+	}
+	if !strings.HasPrefix(url, "https://") {
 		return nil, nil
 	}
 	if a.Provider == nil {

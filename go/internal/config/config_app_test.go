@@ -120,6 +120,22 @@ func TestAppModeFlattenedKeyIsUnescaped(t *testing.T) {
 	}
 }
 
+func TestAppModeFlattenedKeyWithTrailingNewlineIsUnescaped(t *testing.T) {
+	// A secret store can flatten newlines to literal `\n` and still append one real
+	// trailing newline; the unescape must run on the escaped sequences regardless.
+	flattened := strings.ReplaceAll(testPEM(t), "\n", `\n`) + "\n"
+	c, err := loadFrom(mapLookup(appEnv(t, map[string]string{"GITHUB_APP_PRIVATE_KEY": flattened})))
+	if err != nil {
+		t.Fatalf("loadFrom with flattened key + trailing newline: %v", err)
+	}
+	if !c.AppMode() {
+		t.Fatal("AppMode() = false after unescaping a flattened key with a trailing newline")
+	}
+	if strings.Contains(string(c.GitHubApp.PrivateKeyPEM), `\n`) {
+		t.Error("PrivateKeyPEM still contains escaped \\n after unescaping")
+	}
+}
+
 func TestAppModeErrors(t *testing.T) {
 	cases := map[string]map[string]string{
 		"missing installation": {"GITHUB_APP_ID": "42", "GITHUB_APP_PRIVATE_KEY": testPEM(t), "REPOS": "a/b"},
