@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,6 +162,36 @@ func TestAppModeErrors(t *testing.T) {
 				t.Errorf("loadFrom(%s) = nil error, want a startup error", name)
 			}
 		})
+	}
+}
+
+func TestStringRedactsSecrets(t *testing.T) {
+	c, err := loadFrom(mapLookup(appEnv(t, map[string]string{
+		"GITHUB_TOKEN":          "ghp_supersecretpat",
+		"GITHUB_WEBHOOK_SECRET": "webhook-shhh",
+		"INTERNAL_TOKEN":        "internal-shhh",
+		"SLACK_WEBHOOK_URL":     "https://hooks.slack.com/services/SECRETPATH",
+	})))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	// Every common formatting path must route through the redacting String methods.
+	rendered := []string{fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), c.String(), c.GitHubApp.String()}
+	leaks := []string{"ghp_supersecretpat", "webhook-shhh", "internal-shhh", "SECRETPATH", "PRIVATE KEY"}
+	for _, s := range rendered {
+		for _, leak := range leaks {
+			if strings.Contains(s, leak) {
+				t.Errorf("formatted config leaked %q:\n%s", leak, s)
+			}
+		}
+		if !strings.Contains(s, "***") {
+			t.Errorf("formatted config has no masked marker:\n%s", s)
+		}
+	}
+	// The raw private-key bytes (as printed by %v on a []byte) must not appear either.
+	rawKeyBytes := fmt.Sprintf("%v", c.GitHubApp.PrivateKeyPEM)
+	if strings.Contains(fmt.Sprintf("%+v", c), rawKeyBytes) {
+		t.Errorf("formatted config leaked the raw private-key bytes")
 	}
 }
 

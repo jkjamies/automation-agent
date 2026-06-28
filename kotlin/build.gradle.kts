@@ -51,7 +51,14 @@ dependencies {
     // backs the cmd/playground web runner. (Gradle resolves the -jvm variant of this KMP lib.)
     implementation("com.google.adk:google-adk-kotlin-core:0.4.0")
 
-    // Ktor — HTTP client (githubapi, the Ollama adapter) + server (webhook).
+    // Bouncy Castle — parses the GitHub App private key PEM. Unlike Go's x509 / Python's
+    // cryptography / JS's node:crypto, the JDK's KeyFactory reads only PKCS#8; GitHub App keys
+    // download as PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`), so the auth layer hand-parses both
+    // forms (PKCS#1 and PKCS#8) through Bouncy Castle's PEMParser. RS256 JWT signing itself uses
+    // the JDK's java.security.Signature (no extra dependency).
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
+    // Ktor — HTTP client (githubapi, the Ollama adapter, the App token exchange) + server (webhook).
     implementation("io.ktor:ktor-client-core:$ktorVersion")
     implementation("io.ktor:ktor-client-cio:$ktorVersion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")

@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { createPrivateKey } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { inspect } from 'node:util';
 
 /** Looks up an environment variable, returning undefined when unset. */
 export type Lookup = (key: string) => string | undefined;
@@ -109,12 +110,46 @@ export interface Config {
   agentPrLabel: string;
 }
 
+/** Config fields whose value is a credential and must never appear in a log. */
+const SECRET_KEYS = [
+  'githubToken',
+  'githubWebhookSecret',
+  'internalToken',
+  'slackWebhookUrl',
+  'teamsWebhookUrl',
+  'githubAppPrivateKeyPem',
+] as const satisfies readonly (keyof Config)[];
+
+/**
+ * Attach a custom inspect hook so console.log / util.inspect of the config masks every
+ * credential — an unset secret stays visibly empty, a set one collapses to '***'. The hook
+ * is non-enumerable, so it never affects property access, spreads, or JSON serialization.
+ * (Mirrors Go's String(), Python's __repr__, and Kotlin's toString.)
+ */
+function withRedactedInspect(cfg: Config): Config {
+  Object.defineProperty(cfg, inspect.custom, {
+    enumerable: false,
+    value(): Record<string, unknown> {
+      const masked: Record<string, unknown> = { ...cfg };
+      for (const key of SECRET_KEYS) {
+        if (masked[key]) {
+          masked[key] = '***';
+        }
+      }
+      return masked;
+    },
+  });
+  return cfg;
+}
+
 /** Read configuration from the process environment, applying defaults. */
 export function load(): Config {
   const cfg = loadFrom((key) => process.env[key]);
   // When neither GITHUB_TOKEN nor GH_TOKEN is set, fall back to the developer's gh
-  // CLI login so a local run authenticates to GitHub without a hand-set token.
-  if (cfg.githubToken === '') {
+  // CLI login so a local run authenticates to GitHub without a hand-set token. Skipped
+  // in App mode: the App provider mints its own tokens, so shelling out to gh would be a
+  // useless subprocess that could also hydrate a PAT the deployment never asked for.
+  if (!appMode(cfg) && cfg.githubToken === '') {
     cfg.githubToken = ghCliToken();
   }
   return cfg;
@@ -199,7 +234,7 @@ export function loadFrom(get: Lookup): Config {
   cfg.githubAppPrivateKeyPem = app.privateKeyPem;
 
   validate(cfg);
-  return cfg;
+  return withRedactedInspect(cfg);
 }
 
 /** Whether GitHub App authentication is configured (the production path). False means the

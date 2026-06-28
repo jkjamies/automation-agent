@@ -209,4 +209,44 @@ class GitHubApiTest : BehaviorSpec({
             }
         }
     }
+
+    Given("a token source") {
+        When("the client makes requests") {
+            Then("it injects a fresh Bearer token per request") {
+                val auths = mutableListOf<String>()
+                val engine = MockEngine { request ->
+                    auths += request.headers[HttpHeaders.Authorization] ?: ""
+                    respond("[]", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+                var n = 0
+                val c = Client(
+                    tokenSource = { "tok-${++n}" }, // a fresh (refreshed) token each request
+                    baseUrl = "https://api.github.test/",
+                    httpClient = HttpClient(engine) {
+                        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+                    },
+                )
+                c.listCommitsSince("o", "r", Instant.EPOCH)
+                c.listCommitsSince("o", "r", Instant.EPOCH)
+                auths shouldBe listOf("Bearer tok-1", "Bearer tok-2")
+            }
+        }
+        When("there is no token source") {
+            Then("requests are anonymous") {
+                val auths = mutableListOf<String>()
+                val engine = MockEngine { request ->
+                    auths += request.headers[HttpHeaders.Authorization] ?: ""
+                    respond("[]", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+                val c = Client(
+                    baseUrl = "https://api.github.test/",
+                    httpClient = HttpClient(engine) {
+                        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+                    },
+                )
+                c.listCommitsSince("o", "r", Instant.EPOCH)
+                auths shouldBe listOf("")
+            }
+        }
+    }
 })

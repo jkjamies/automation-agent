@@ -22,6 +22,9 @@ import com.automation.agent.agent.setup.newSessionService
 import com.automation.agent.agent.summary.CommitLister
 import com.automation.agent.agent.summary.SummaryDeps
 import com.automation.agent.agent.summary.buildSummaryAgent
+import com.automation.agent.auth.StaticProvider
+import com.automation.agent.auth.TokenProvider
+import com.automation.agent.auth.newAppProvider
 import com.automation.agent.config.Config
 import com.automation.agent.githubapi.Client
 import com.automation.agent.githubapi.PrInput
@@ -77,7 +80,10 @@ private fun run() {
     val llm = buildLLM(cfg)
     val codeLlm = buildCodeLLM(cfg)
 
-    val client = Client(token = cfg.githubToken)
+    // The auth seam: App mode (production) mints/caches installation tokens; otherwise a static PAT
+    // (or empty/anonymous). The REST client and the git layer share this one provider.
+    val provider = buildTokenProvider(cfg)
+    val client = Client(tokenSource = { provider.token("") })
     val commitLister = CommitLister { owner, repo, since -> client.listCommitsSince(owner, repo, since) }
     val gh = githubAdapter(client)
     val notifier = buildNotifier(cfg)
@@ -100,7 +106,7 @@ private fun run() {
     // SSH only covers the git transport; the GitHub REST API (open/label PR, read CI) still needs a
     // token. Warn rather than fail when ssh is selected without one — read-only/dry-run flows may not
     // hit the API, but any PR operation will fail.
-    if (cfg.gitTransport == "ssh" && cfg.githubToken.isEmpty()) {
+    if (cfg.gitTransport == "ssh" && cfg.githubToken.isEmpty() && !cfg.appMode()) {
         log.log(
             Level.WARNING,
             "GIT_TRANSPORT=ssh but no GitHub token found (GITHUB_TOKEN/GH_TOKEN/`gh auth token`); " +
@@ -112,7 +118,8 @@ private fun run() {
     // Fix engines are event-driven and work without a notifier — they just won't post results.
     val fixDeps =
         Deps(
-            gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier, token = cfg.githubToken,
+            gh = gh, llm = llm, codeLlm = codeLlm, notifier = notifier,
+            provider = { repo -> provider.token(repo) },
             gitTransport = cfg.gitTransport, sshKey = cfg.gitSshKey,
             maxIter = cfg.maxIterations, ciTimeout = cfg.ciTimeout, repos = cfg.repos,
             prLabel = cfg.agentPrLabel,
@@ -233,6 +240,19 @@ private fun run() {
     )
     server.start(wait = true)
 }
+
+/**
+ * Builds the GitHub auth provider: App mode (production — a validated App id, installation id, and
+ * exactly one private-key source) mints/caches short-lived installation tokens for the pinned
+ * installation; otherwise a [StaticProvider] over the resolved PAT (or empty/anonymous). One provider
+ * backs both the REST client and the git layer.
+ */
+private fun buildTokenProvider(cfg: Config): TokenProvider =
+    if (cfg.appMode()) {
+        newAppProvider(cfg.githubAppId, cfg.githubAppInstallationId, cfg.githubAppPrivateKeyPem)
+    } else {
+        StaticProvider(cfg.githubToken)
+    }
 
 /** Returns a Notifier, or null (with a warning) if not configured. */
 private fun buildNotifier(cfg: Config): Notifier? =
