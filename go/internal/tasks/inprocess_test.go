@@ -112,6 +112,29 @@ func TestInProcessCloseDrains(t *testing.T) {
 	}
 }
 
+// Enqueue and Close racing on many goroutines must not trip the WaitGroup (wg.Add must
+// never run concurrently with wg.Wait). Run under -race to catch a regression: the select
+// that takes a pool slot can fire at the same instant Close runs, so the under-lock
+// closed-recheck before wg.Add is what keeps Add ordered against Close's Wait.
+func TestInProcessConcurrentEnqueueAndClose(t *testing.T) {
+	p := NewInProcess(func(context.Context, ingest.Envelope) error { return nil }, nil, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Errors are expected once Close has begun (work refused); we only care that this
+			// never races the WaitGroup.
+			_ = p.Enqueue(context.Background(), ingest.New(ingest.KindLint, "s", nil, time.Unix(0, 0)))
+		}()
+	}
+	// Close concurrently with the in-flight Enqueues.
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wg.Wait()
+}
+
 // After Close, Enqueue refuses new work rather than launching a goroutine the drain has
 // already stopped waiting for (which would also race wg.Add against Close's wg.Wait).
 func TestInProcessEnqueueAfterCloseIsRejected(t *testing.T) {
