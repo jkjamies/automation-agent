@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"automation-agent/internal/ingest"
 )
@@ -174,7 +175,7 @@ func TestCoverageKickoffRequiresSignature(t *testing.T) {
 func TestInternalEndpointsDisabledWithoutToken(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest)
-	for _, path := range []string{"/internal/cron/daily", "/internal/sweep"} {
+	for _, path := range []string{"/internal/cron/daily", "/internal/sweep", "/internal/dispatch"} {
 		if rec := do(t, s, http.MethodPost, path, "", nil); rec.Code != http.StatusNotFound {
 			t.Errorf("%s without token = %d, want 404", path, rec.Code)
 		}
@@ -227,5 +228,82 @@ func TestInternalSweepNotConfigured(t *testing.T) {
 	rec := do(t, s, http.MethodPost, "/internal/sweep", "", map[string]string{"Authorization": "Bearer secret"})
 	if rec.Code != http.StatusNotImplemented {
 		t.Errorf("status = %d, want 501", rec.Code)
+	}
+}
+
+// dispatchRecorder captures the envelope passed to a WithDispatch executor and lets a test
+// force an error (to assert retry classification).
+type dispatchRecorder struct {
+	env    ingest.Envelope
+	called bool
+	err    error
+}
+
+func (d *dispatchRecorder) dispatch(_ context.Context, e ingest.Envelope) error {
+	d.called = true
+	d.env = e
+	return d.err
+}
+
+// An authorized /internal/dispatch with a valid envelope body executes it in-request (200).
+func TestInternalDispatchExecutes(t *testing.T) {
+	d := &dispatchRecorder{}
+	s := New((&capture{}).ingest, WithInternalToken("secret"), WithDispatch(d.dispatch))
+	body, _ := ingest.Encode(ingest.New(ingest.KindCI, "webhook:/github", []byte(`{"x":1}`), time.Unix(0, 0)))
+	rec := do(t, s, http.MethodPost, "/internal/dispatch", string(body), map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !d.called || d.env.Kind != ingest.KindCI {
+		t.Errorf("dispatch not invoked with the decoded envelope: called=%v kind=%q", d.called, d.env.Kind)
+	}
+}
+
+// /internal/dispatch requires a Bearer credential like the other internal endpoints.
+func TestInternalDispatchRequiresBearer(t *testing.T) {
+	d := &dispatchRecorder{}
+	s := New((&capture{}).ingest, WithInternalToken("secret"), WithDispatch(d.dispatch))
+	rec := do(t, s, http.MethodPost, "/internal/dispatch", "{}", map[string]string{"Authorization": "Bearer wrong"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if d.called {
+		t.Error("dispatch ran despite a bad token")
+	}
+}
+
+// With no dispatch executor configured the endpoint reports not-implemented.
+func TestInternalDispatchNotConfigured(t *testing.T) {
+	s := New((&capture{}).ingest, WithInternalToken("secret"))
+	rec := do(t, s, http.MethodPost, "/internal/dispatch", "{}", map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501", rec.Code)
+	}
+}
+
+// A poison body (malformed / unknown kind) is acked with 200 so Cloud Tasks drops it
+// instead of retrying forever; the dispatch executor is never called (spec §6).
+func TestInternalDispatchPoisonBodyIsAcked(t *testing.T) {
+	for _, body := range []string{"not json", `{"kind":"jira","source":"x"}`} {
+		d := &dispatchRecorder{}
+		s := New((&capture{}).ingest, WithInternalToken("secret"), WithDispatch(d.dispatch))
+		rec := do(t, s, http.MethodPost, "/internal/dispatch", body, map[string]string{"Authorization": "Bearer secret"})
+		if rec.Code != http.StatusOK {
+			t.Errorf("body %q: status = %d, want 200 (acked, not retried)", body, rec.Code)
+		}
+		if d.called {
+			t.Errorf("body %q: dispatch ran on a poison payload", body)
+		}
+	}
+}
+
+// A transient dispatch error returns 500 so Cloud Tasks retries with backoff (spec §6).
+func TestInternalDispatchTransientErrorIs500(t *testing.T) {
+	d := &dispatchRecorder{err: errors.New("llm timeout")}
+	s := New((&capture{}).ingest, WithInternalToken("secret"), WithDispatch(d.dispatch))
+	body, _ := ingest.Encode(ingest.New(ingest.KindLint, "s", []byte("{}"), time.Unix(0, 0)))
+	rec := do(t, s, http.MethodPost, "/internal/dispatch", string(body), map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
 	}
 }

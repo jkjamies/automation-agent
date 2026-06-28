@@ -38,6 +38,83 @@ func TestLoadDefaults(t *testing.T) {
 	if c.GitTransport != "https" {
 		t.Errorf("GitTransport = %q, want https", c.GitTransport)
 	}
+	if c.TasksBackend != TasksInProcess {
+		t.Errorf("TasksBackend = %q, want inprocess", c.TasksBackend)
+	}
+}
+
+func TestInvalidTasksBackend(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"TASKS_BACKEND": "kafka"})); err == nil {
+		t.Fatal("expected error for invalid TASKS_BACKEND")
+	}
+}
+
+// A complete, valid cloudtasks configuration (used as the base for negative cases).
+func fullCloudTasksEnv() map[string]string {
+	return map[string]string{
+		"TASKS_BACKEND": "cloudtasks", "TASKS_PROJECT": "proj", "TASKS_LOCATION": "us-central1",
+		"TASKS_QUEUE": "agent-q", "DISPATCH_URL": "https://svc.run.app/internal/dispatch",
+		"INTERNAL_TOKEN": "sekret", "GITHUB_WEBHOOK_SECRET": "hmac",
+	}
+}
+
+// cloudtasks mode requires the queue coordinates, the worker URL, the Bearer token, and a
+// verified webhook surface — each omission is a startup error.
+func TestCloudTasksRequiresSettings(t *testing.T) {
+	// Missing everything but the backend selector.
+	if _, err := loadFrom(mapLookup(map[string]string{"TASKS_BACKEND": "cloudtasks"})); err == nil {
+		t.Fatal("expected error: cloudtasks with no settings")
+	}
+	// Drop one required key at a time from an otherwise-valid config.
+	for _, key := range []string{"TASKS_LOCATION", "TASKS_QUEUE", "DISPATCH_URL", "INTERNAL_TOKEN", "GITHUB_WEBHOOK_SECRET"} {
+		env := fullCloudTasksEnv()
+		delete(env, key)
+		if _, err := loadFrom(mapLookup(env)); err == nil {
+			t.Errorf("expected error: cloudtasks without %s", key)
+		}
+	}
+}
+
+// DISPATCH_URL must be an absolute https URL — the task carries the Bearer token to it, so a
+// plaintext http:// target (which would leak the token) is rejected.
+func TestCloudTasksRejectsInsecureDispatchURL(t *testing.T) {
+	for _, bad := range []string{"http://svc.run.app/internal/dispatch", "/internal/dispatch", "not a url"} {
+		env := fullCloudTasksEnv()
+		env["DISPATCH_URL"] = bad
+		if _, err := loadFrom(mapLookup(env)); err == nil {
+			t.Errorf("expected error for DISPATCH_URL=%q", bad)
+		}
+	}
+}
+
+func TestCloudTasksFullConfig(t *testing.T) {
+	c, err := loadFrom(mapLookup(fullCloudTasksEnv()))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.TasksBackend != TasksCloudTasks {
+		t.Errorf("TasksBackend = %q, want cloudtasks", c.TasksBackend)
+	}
+	if c.TasksProject != "proj" || c.TasksLocation != "us-central1" || c.TasksQueue != "agent-q" {
+		t.Errorf("queue coords = %q/%q/%q", c.TasksProject, c.TasksLocation, c.TasksQueue)
+	}
+	if c.DispatchURL != "https://svc.run.app/internal/dispatch" {
+		t.Errorf("DispatchURL = %q", c.DispatchURL)
+	}
+}
+
+// TASKS_PROJECT falls back to GOOGLE_CLOUD_PROJECT (the ambient Cloud Run var).
+func TestTasksProjectFallsBackToGoogleCloudProject(t *testing.T) {
+	env := fullCloudTasksEnv()
+	delete(env, "TASKS_PROJECT")
+	env["GOOGLE_CLOUD_PROJECT"] = "ambient"
+	c, err := loadFrom(mapLookup(env))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.TasksProject != "ambient" {
+		t.Errorf("TasksProject = %q, want ambient (from GOOGLE_CLOUD_PROJECT)", c.TasksProject)
+	}
 }
 
 func TestGitTransportSSH(t *testing.T) {

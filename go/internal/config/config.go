@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -48,6 +49,22 @@ const (
 	// SessionFirestore is the cloud backend (serverless, scales to zero): a custom
 	// Firestore session.Service + ParkStore, both built under internal/agent/setup.
 	SessionFirestore SessionBackend = "firestore"
+)
+
+// TasksBackend selects the webhook execution transport: how an enqueued envelope reaches
+// the dispatcher. See specs/20260626-workflow-execution-transport.md.
+type TasksBackend string
+
+const (
+	// TasksInProcess runs each dispatch in a background goroutine pool (the pre-transport
+	// behavior). The default — selecting it changes nothing. Local dev only: it does not
+	// survive an instance being reclaimed mid-run, and on Cloud Run the compute is throttled
+	// once the response is sent.
+	TasksInProcess TasksBackend = "inprocess"
+	// TasksCloudTasks enqueues each envelope as a Cloud Tasks HTTP-target task pointed at
+	// /internal/dispatch, which executes it in-request (CPU stays allocated) with durable
+	// retry + queue rate limiting. The production backend.
+	TasksCloudTasks TasksBackend = "cloudtasks"
 )
 
 // Config holds all runtime settings.
@@ -108,6 +125,23 @@ type Config struct {
 	// AgentPRLabel is the single human-facing label applied to every agent PR on creation
 	// (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
 	AgentPRLabel string
+
+	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
+	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
+	// task carries InternalToken as its Bearer credential (no new auth var). See
+	// specs/20260626-workflow-execution-transport.md.
+	TasksBackend TasksBackend
+	// TasksProject is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
+	// GOOGLE_CLOUD_PROJECT. Required for cloudtasks.
+	TasksProject string
+	// TasksLocation is the queue's region (TASKS_LOCATION, e.g. "us-central1"). Required for
+	// cloudtasks.
+	TasksLocation string
+	// TasksQueue is the Cloud Tasks queue name (TASKS_QUEUE). Required for cloudtasks.
+	TasksQueue string
+	// DispatchURL is the full URL of the /internal/dispatch worker the queue POSTs to
+	// (DISPATCH_URL, e.g. https://agent-xyz.run.app/internal/dispatch). Required for cloudtasks.
+	DispatchURL string
 }
 
 // GitHubApp holds the GitHub App installation-token credentials, resolved at load
@@ -220,6 +254,11 @@ func loadFrom(get lookup) (Config, error) {
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
 		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
 		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),
+		TasksBackend:        TasksBackend(getOr(get, "TASKS_BACKEND", string(TasksInProcess))),
+		TasksProject:        getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
+		TasksLocation:       getOr(get, "TASKS_LOCATION", ""),
+		TasksQueue:          getOr(get, "TASKS_QUEUE", ""),
+		DispatchURL:         getOr(get, "DISPATCH_URL", ""),
 	}
 
 	var err error
@@ -272,6 +311,46 @@ func (c Config) Validate() error {
 	case "https", "ssh":
 	default:
 		return fmt.Errorf("invalid GIT_TRANSPORT %q (want https|ssh)", c.GitTransport)
+	}
+	switch c.TasksBackend {
+	case TasksInProcess:
+	case TasksCloudTasks:
+		// Cloud Tasks needs the queue coordinates and worker URL, plus the Bearer token the
+		// task carries: without INTERNAL_TOKEN, /internal/dispatch is disabled (404) and every
+		// task would fail permanently. Fail fast rather than silently never dispatching.
+		var missing []string
+		if c.TasksProject == "" {
+			missing = append(missing, "TASKS_PROJECT (or GOOGLE_CLOUD_PROJECT)")
+		}
+		if c.TasksLocation == "" {
+			missing = append(missing, "TASKS_LOCATION")
+		}
+		if c.TasksQueue == "" {
+			missing = append(missing, "TASKS_QUEUE")
+		}
+		// DISPATCH_URL must be an absolute https URL: the Cloud Tasks task carries
+		// INTERNAL_TOKEN as a Bearer header to it, so a plaintext http:// target would leak
+		// the token in transit (same posture as gitrepo refusing a token over http://).
+		switch u, err := url.Parse(c.DispatchURL); {
+		case c.DispatchURL == "":
+			missing = append(missing, "DISPATCH_URL")
+		case err != nil || !u.IsAbs() || u.Scheme != "https" || u.Host == "":
+			missing = append(missing, "DISPATCH_URL (must be an absolute https:// URL)")
+		}
+		if c.InternalToken == "" {
+			missing = append(missing, "INTERNAL_TOKEN (the Bearer the task carries to /internal/dispatch)")
+		}
+		// In Cloud Tasks mode the deployment is production-facing, so an unverified webhook
+		// surface is a real exposure rather than a dev convenience — require the HMAC secret
+		// (it stays an opt-in warning only for the local inprocess default).
+		if c.GitHubWebhookSecret == "" {
+			missing = append(missing, "GITHUB_WEBHOOK_SECRET (webhook signatures must be verified in production)")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("TASKS_BACKEND=cloudtasks requires %s", strings.Join(missing, ", "))
+		}
+	default:
+		return fmt.Errorf("invalid TASKS_BACKEND %q (want inprocess|cloudtasks)", c.TasksBackend)
 	}
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)
