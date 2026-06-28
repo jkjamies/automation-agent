@@ -138,10 +138,9 @@ describe('config', () => {
 });
 
 // --- GitHub App mode ---------------------------------------------------------
-// Mirrors python/tests/test_config_app.py and go/internal/config/config_app_test.go: the
-// env-var contract, App-vs-PAT mode selection, positive-id and RSA-PEM validation, the
-// flattened-`\n` unescape (including the trailing-newline regression), and the empty-REPOS
-// rejection. No network — throwaway keys generated in-process.
+// Covers the GitHub App env-var contract: App-vs-PAT mode selection, positive-id and RSA-PEM
+// validation, the flattened-`\n` unescape (including the trailing-newline regression), and the
+// empty-REPOS rejection. No network — throwaway keys generated in-process.
 
 function rsaPem(pkcs1 = false): string {
   const { privateKey } = generateKeyPairSync('rsa', {

@@ -56,9 +56,9 @@ interface WireEnvelope {
 
 /**
  * Serialize an envelope to its JSON wire form for the Cloud Tasks transport (the in-process
- * transport passes the object directly and never calls this). The bytes match the Go
- * reference exactly: compact separators (JSON.stringify is already space-free), an RFC 3339
- * instant with a trailing "Z" and Go-style trimmed fractional seconds, and a standard-base64
+ * transport passes the object directly and never calls this). The bytes follow the cross-port
+ * wire contract exactly (spec §7): compact separators (JSON.stringify is already space-free), an
+ * RFC 3339 instant with a trailing "Z" and trimmed fractional-second zeros, and a standard-base64
  * payload.
  *
  * Rejects an unknown kind at the enqueue boundary so both transports fail the same way:
@@ -88,9 +88,9 @@ export function encode(e: Envelope): Buffer {
  * caller should ack the delivery rather than retry it — a redelivery cannot fix a poison
  * payload. `source` and `received_at` are informational (only `kind` and `payload` drive
  * dispatch), so an absent (or JSON `null`) value defaults to the zero value — but a present
- * value of the wrong type is a malformed body, not a silent default, mirroring Go's
- * `json.Unmarshal` into the typed `wireEnvelope` struct (a non-string `source` or a
- * non-string/unparseable `received_at` is a type error there, i.e. poison).
+ * value of the wrong type is a malformed body, not a silent default: the wire schema is typed,
+ * so a non-string `source` or a non-string/unparseable `received_at` is a type error, i.e.
+ * poison.
  *
  * @throws Error if the body is not valid JSON, is not a JSON object, the kind is unknown, the
  *   payload is not valid standard base64 or not a string, or `source`/`received_at` is present
@@ -113,7 +113,7 @@ export function decode(b: Buffer | string): Envelope {
     throw new Error(`ingest: unknown kind ${JSON.stringify(kind)}`);
   }
 
-  // The wire payload is always a base64 string (Go's typed wireEnvelope). A non-string is a
+  // The wire payload is always a base64 string (the typed wire schema). A non-string is a
   // malformed body, not a server error, so it joins the poison path; an absent key defaults
   // to "" (empty payload). Decode strictly so trailing junk is rejected, not silently dropped.
   const payloadRaw = w.payload ?? '';
@@ -128,10 +128,10 @@ export function decode(b: Buffer | string): Envelope {
 }
 
 /**
- * Format a Date as Go's RFC3339Nano: an instant with a trailing "Z" whose fractional second
- * has trailing zeros trimmed (a whole second has no fractional part at all). `Date.toISOString`
- * always emits exactly three fractional digits, so ".000" -> "" and e.g. ".500" -> ".5",
- * matching the Go reference byte-for-byte (the wire form is a cross-port external contract).
+ * Format a Date as RFC 3339 with nanosecond precision: an instant with a trailing "Z" whose
+ * fractional second has trailing zeros trimmed (a whole second has no fractional part at all).
+ * `Date.toISOString` always emits exactly three fractional digits, so ".000" -> "" and e.g.
+ * ".500" -> ".5", producing the exact bytes the cross-port wire contract requires (spec §7).
  */
 function toRFC3339(d: Date): string {
   return d.toISOString().replace(/\.(\d*?)0+Z$/, (_m, frac: string) => (frac ? `.${frac}Z` : 'Z'));
@@ -141,7 +141,7 @@ function toRFC3339(d: Date): string {
  * Decode a standard-base64 string strictly. Node's `Buffer.from(s, 'base64')` is lenient — it
  * ignores characters outside the alphabet and tolerates missing padding, silently dropping
  * trailing junk — so re-encode and compare to reject anything that is not canonical standard
- * base64, matching Go's `base64.StdEncoding`.
+ * base64 (the wire contract is canonical standard base64).
  *
  * @throws Error if `s` is not canonical standard base64.
  */
@@ -154,9 +154,9 @@ function strictBase64Decode(s: string): Buffer {
 }
 
 /**
- * Return `w[key]` as a string, mirroring Go's `json.Unmarshal` into a typed string field: an
- * absent key or JSON `null` yields the zero value "", while a present non-string is a
- * malformed body (poison), not a silent default.
+ * Return `w[key]` as a string from the typed wire schema: an absent key or JSON `null` yields
+ * the zero value "", while a present non-string is a malformed body (poison), not a silent
+ * default.
  */
 function wireString(w: Record<string, unknown>, key: string): string {
   const value = w[key];
@@ -170,9 +170,24 @@ function wireString(w: Record<string, unknown>, key: string): string {
 }
 
 /**
- * Parse `received_at`: an absent key or JSON `null` is the epoch zero value (Go's time.Time
- * zero / its UnmarshalJSON treating null as a no-op); a present non-string, or a present but
- * unparseable RFC 3339 string (including ""), is poison.
+ * A strict RFC 3339 date-time: `YYYY-MM-DDThh:mm:ss`, an optional fractional second, and a
+ * `Z` or numeric `±hh:mm` offset (the `T`/`Z` may be lowercase per RFC 3339 §5.6). This gates
+ * {@link wireReceivedAt} because `Date.parse` accepts far more than RFC 3339 — date-only
+ * (`1970-01-01`), RFC 2822 (`Thu, 01 Jan 1970 ...`), and space-separated forms — which would let
+ * a malformed `received_at` slip through here instead of being rejected as poison, breaking the
+ * cross-port wire contract (spec §7).
+ */
+const RFC3339_RE = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Parse `received_at`: an absent key or JSON `null` is the epoch zero value (the zero-value
+ * default, never poison); a present non-string, or a present but unparseable RFC 3339 string
+ * (including ""), is poison.
+ *
+ * Validates against {@link RFC3339_RE} before `Date.parse` so only genuine RFC 3339 strings are
+ * accepted — not `Date.parse`'s grab-bag of date-only / RFC 2822 / locale formats. The
+ * `Date.parse` NaN check stays as the calendar-range backstop (e.g. `2026-13-45T..` matches the
+ * shape but is not a real date).
  */
 function wireReceivedAt(w: Record<string, unknown>): Date {
   const value = w.received_at;
@@ -182,7 +197,7 @@ function wireReceivedAt(w: Record<string, unknown>): Date {
   if (typeof value !== 'string') {
     throw new Error(`ingest: decode received_at: want an RFC 3339 string, got ${typeof value}`);
   }
-  const ms = Date.parse(value);
+  const ms = RFC3339_RE.test(value) ? Date.parse(value) : NaN;
   if (Number.isNaN(ms)) {
     throw new Error(`ingest: decode received_at: ${JSON.stringify(value)} is not a valid RFC 3339 timestamp`);
   }

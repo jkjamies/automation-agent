@@ -277,8 +277,8 @@ async function run(): Promise<void> {
       summaryEnabled: summaryDaily !== null,
     });
   });
-  // HTTP server timeouts (the http.Server analogue of Go's ReadHeaderTimeout / ReadTimeout
-  // / IdleTimeout) to blunt Slowloris and stalled connections.
+  // HTTP server timeouts (headers / request / keep-alive) to blunt Slowloris and stalled
+  // connections.
   httpServer.headersTimeout = 10_000;
   httpServer.requestTimeout = 30_000;
   httpServer.keepAliveTimeout = 120_000;

@@ -38,16 +38,16 @@ describe('wire codec', () => {
   });
 
   it('emits the byte-identical wire shape', () => {
-    // Byte-identical to the Go reference: compact separators (no spaces), a UTC instant spelled
-    // with a trailing "Z" and Go-style trimmed fractional seconds, and a standard-base64 payload
-    // ("hi" -> "aGk=").
+    // The cross-port wire contract (spec §7): compact separators (no spaces), a UTC instant
+    // spelled with a trailing "Z" and trimmed fractional-second zeros, and a standard-base64
+    // payload ("hi" -> "aGk=").
     const b = encode(newEnvelope(Kind.Lint, 'webhook:/lint', Buffer.from('hi'), new Date(0)));
     expect(b.toString('utf-8')).toBe(
       '{"kind":"lint","source":"webhook:/lint","received_at":"1970-01-01T00:00:00Z","payload":"aGk="}',
     );
   });
 
-  it('trims trailing fractional-second zeros like Go RFC3339Nano', () => {
+  it('trims trailing fractional-second zeros (RFC 3339 nanosecond form)', () => {
     // A sub-second instant keeps only the significant fractional digits (".500" -> ".5").
     const b = encode(newEnvelope(Kind.CI, 's', Buffer.alloc(0), new Date(500)));
     expect(b.toString('utf-8')).toContain('"received_at":"1970-01-01T00:00:00.5Z"');
@@ -69,7 +69,7 @@ describe('wire codec', () => {
     // Undecodable payload.
     expect(() => decode('{"kind":"ci","source":"x","payload":"@@@not-base64"}')).toThrow();
     // Strict base64: a valid alphabet with trailing junk is rejected (lenient decoding would
-    // silently drop it), matching Go's base64.StdEncoding.
+    // silently drop it); the wire contract is canonical standard base64.
     expect(() => decode('{"kind":"ci","source":"x","payload":"aGk=junk"}')).toThrow(/base64/);
     // Missing padding is also rejected (standard base64 requires it).
     expect(() => decode('{"kind":"ci","source":"x","payload":"aGk"}')).toThrow(/base64/);
@@ -82,11 +82,31 @@ describe('wire codec', () => {
     // A present-but-unparseable received_at string (including "") is poison.
     expect(() => decode('{"kind":"ci","source":"x","received_at":"not-a-date","payload":"aGk="}')).toThrow();
     expect(() => decode('{"kind":"ci","source":"x","received_at":"","payload":"aGk="}')).toThrow();
+    // Non-RFC-3339 forms Date.parse would otherwise accept (date-only, RFC 2822, space-separated,
+    // locale) are poison too — only strict RFC 3339 passes the wire contract.
+    for (const ts of [
+      '1970-01-01',
+      'Thu, 01 Jan 1970 00:00:00 GMT',
+      '1970-01-01 00:00:00',
+      'May 1 2020',
+      '2026-13-45T00:00:00Z', // RFC 3339 shape but not a real calendar date
+    ]) {
+      expect(() => decode(`{"kind":"ci","source":"x","received_at":${JSON.stringify(ts)},"payload":"aGk="}`)).toThrow(
+        /received_at/,
+      );
+    }
+  });
+
+  it('accepts RFC 3339 timestamps with fractional seconds and numeric offsets', () => {
+    for (const ts of ['2026-06-28T12:34:56Z', '2026-06-28T12:34:56.789Z', '2026-06-28T12:34:56+02:00']) {
+      const out = decode(`{"kind":"ci","source":"x","received_at":${JSON.stringify(ts)},"payload":"aGk="}`);
+      expect(out.receivedAt.getTime()).toBe(Date.parse(ts));
+    }
   });
 
   it('defaults absent or null metadata to the zero value', () => {
-    // Absent or JSON null source/received_at default to the zero value (Go: the typed struct's
-    // zero / its UnmarshalJSON treating null as a no-op), never poison.
+    // Absent or JSON null source/received_at default to the zero value (the typed wire schema's
+    // zero value), never poison.
     const epoch = new Date(0).getTime();
     let out = decode('{"kind":"ci","payload":"aGk="}');
     expect(out.source).toBe('');

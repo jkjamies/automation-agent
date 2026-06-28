@@ -26,9 +26,9 @@ export class InProcess implements Transport {
   private readonly dispatchFn: DispatchFunc;
   private readonly log: Logger;
   private readonly maxConcurrent: number;
-  // Available concurrency permits; waiters are resolved FIFO as permits free (the asyncio
-  // Semaphore / Go sem-channel analogue). A burst blocks the handler (backpressure) instead
-  // of piling up detached promises.
+  // Available concurrency permits; waiters are resolved FIFO as permits free (a counting
+  // semaphore). A burst blocks the handler (backpressure) instead of piling up detached
+  // promises.
   private permits: number;
   private readonly waiters: Array<() => void> = [];
   // In-flight dispatch promises, kept so close() can drain outstanding work rather than drop it.
@@ -69,7 +69,7 @@ export class InProcess implements Transport {
     await this.acquire();
     // Recheck after the (possibly long) backpressure wait: close() may have begun while we were
     // blocked on a permit. Without this, a dispatch could slip past the drain's snapshot and be
-    // abandoned on exit. (Mirrors Go's second select on the closed channel.)
+    // abandoned on exit (a recheck-after-acquire guard).
     if (this.closed) {
       this.release();
       throw new Error('tasks: in-process transport is closed');
@@ -111,8 +111,8 @@ export class InProcess implements Transport {
     }
     this.log.info('draining in-flight dispatch(es)', { count: this.pending.size });
     // Wait on a snapshot, racing a timeout. On timeout we only stop waiting and do NOT abort
-    // the still-running dispatches (JS cannot cancel a running promise anyway), matching Go's
-    // Close, which lets in-flight goroutines run to completion past the drain deadline.
+    // the still-running dispatches (a running promise cannot be cancelled anyway); they run to
+    // completion past the drain deadline, and process exit is what ultimately ends them.
     const drained = Promise.allSettled([...this.pending]).then(() => 'drained' as const);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<'timeout'>((resolve) => {

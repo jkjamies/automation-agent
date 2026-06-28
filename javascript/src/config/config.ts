@@ -158,7 +158,6 @@ const SECRET_KEYS = [
  * Attach a custom inspect hook so console.log / util.inspect of the config masks every
  * credential — an unset secret stays visibly empty, a set one collapses to '***'. The hook
  * is non-enumerable, so it never affects property access, spreads, or JSON serialization.
- * (Mirrors Go's String(), Python's __repr__, and Kotlin's toString.)
  */
 function withRedactedInspect(cfg: Config): Config {
   Object.defineProperty(cfg, inspect.custom, {
@@ -547,8 +546,8 @@ export function parseDuration(s: string, name = 'CI_TIMEOUT'): number {
   if (text === '') {
     throw new Error(`${name}: empty duration`);
   }
-  // Repeated units (e.g. "90m90m") are summed, matching Go's time.ParseDuration leniency
-  // (the reference) — intentional parity, not a bug.
+  // Repeated units (e.g. "90m90m") are summed per the duration-string contract — intentional,
+  // not a bug.
   const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
   const matches = [...text.matchAll(re)];
   const consumed = matches.map((m) => m[1]! + m[2]!).join('');

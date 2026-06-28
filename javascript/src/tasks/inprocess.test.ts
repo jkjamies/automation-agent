@@ -97,7 +97,7 @@ describe('InProcess', () => {
   it('rejects an enqueue that was parked when close() began (recheck after acquire)', async () => {
     // An enqueue parked on a permit when close() begins must back out (release its slot and
     // throw) once it acquires, rather than spawn a dispatch the drain has already snapshotted
-    // past — the recheck-after-acquire guard (mirrors Go's second select on the closed channel).
+    // past — the recheck-after-acquire guard.
     const release = deferred();
     const started = deferred();
     const p = new InProcess(async () => {
@@ -140,8 +140,7 @@ describe('InProcess', () => {
 
   it('does not cancel a still-running dispatch when the drain times out', async () => {
     // On drain timeout, close() only stops waiting — it must NOT abort the still-running
-    // dispatch (JS cannot cancel a promise; this matches Go's Close letting in-flight goroutines
-    // run to completion).
+    // dispatch (a running promise cannot be cancelled; it runs to completion).
     vi.useFakeTimers();
     const release = deferred();
     let finished = false;
