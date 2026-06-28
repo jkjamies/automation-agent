@@ -21,10 +21,12 @@ const drainTimeout = 15 * time.Second
 // is precisely why production uses the Cloud Tasks backend instead. The Name/Delay hints
 // are Cloud Tasks features and are ignored here (an immediate, undeduplicated dispatch).
 type InProcess struct {
-	dispatch DispatchFunc
-	log      *slog.Logger
-	sem      chan struct{}
-	wg       sync.WaitGroup
+	dispatch  DispatchFunc
+	log       *slog.Logger
+	sem       chan struct{}
+	wg        sync.WaitGroup
+	closed    chan struct{} // closed by Close to stop accepting new work
+	closeOnce sync.Once
 }
 
 // NewInProcess builds the in-process backend. maxConcurrent < 1 falls back to
@@ -36,7 +38,7 @@ func NewInProcess(dispatch DispatchFunc, log *slog.Logger, maxConcurrent int) *I
 	if maxConcurrent < 1 {
 		maxConcurrent = DefaultMaxConcurrent
 	}
-	return &InProcess{dispatch: dispatch, log: log, sem: make(chan struct{}, maxConcurrent)}
+	return &InProcess{dispatch: dispatch, log: log, sem: make(chan struct{}, maxConcurrent), closed: make(chan struct{})}
 }
 
 // Enqueue dispatches e on the bounded pool. It blocks while the pool is full (backpressure
@@ -44,6 +46,16 @@ func NewInProcess(dispatch DispatchFunc, log *slog.Logger, maxConcurrent int) *I
 // returned, because the webhook response has already gone out.
 func (p *InProcess) Enqueue(ctx context.Context, e ingest.Envelope, _ ...Option) error {
 	select {
+	case <-p.closed:
+		// Shutdown has begun: refuse new work rather than launch a goroutine that Close has
+		// already stopped waiting for (it would be abandoned on exit, and a wg.Add racing the
+		// concurrent wg.Wait in Close is itself unsafe).
+		return context.Canceled
+	default:
+	}
+	select {
+	case <-p.closed:
+		return context.Canceled
 	case p.sem <- struct{}{}: // bound concurrency
 	case <-ctx.Done():
 		return ctx.Err()
@@ -64,6 +76,9 @@ func (p *InProcess) Enqueue(ctx context.Context, e ingest.Envelope, _ ...Option)
 // Close waits (bounded by drainTimeout) for in-flight dispatches to finish so a clean
 // SIGTERM completes work in flight rather than abandoning it.
 func (p *InProcess) Close() error {
+	// Stop accepting new work before waiting, so Enqueue cannot launch a goroutine the drain
+	// would miss (and cannot race wg.Add against the wg.Wait below).
+	p.closeOnce.Do(func() { close(p.closed) })
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()

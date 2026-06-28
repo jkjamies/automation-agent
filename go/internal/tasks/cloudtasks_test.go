@@ -35,6 +35,7 @@ func newTestCloudTasks(f *fakeSubmitter, token string) *CloudTasks {
 		queuePath:   "projects/p/locations/l/queues/q",
 		dispatchURL: "https://svc.run.app/internal/dispatch",
 		token:       token,
+		deadline:    30 * time.Minute,
 		now:         func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 	}
 }
@@ -88,6 +89,28 @@ func TestCloudTasksBuildsTask(t *testing.T) {
 	}
 	if f.req.Task.ScheduleTime != nil {
 		t.Errorf("unexpected schedule time (no delay requested)")
+	}
+	// The dispatch deadline is set explicitly so a long workflow is not cancelled at the
+	// HTTP-target default of 10m (and retried, duplicating side effects).
+	if f.req.Task.DispatchDeadline == nil {
+		t.Fatal("dispatch deadline not set")
+	}
+	if got := f.req.Task.DispatchDeadline.AsDuration(); got != 30*time.Minute {
+		t.Errorf("dispatch deadline = %v, want 30m", got)
+	}
+}
+
+// With no deadline configured (zero) the task omits DispatchDeadline so the queue default
+// applies — production always supplies a config-validated value.
+func TestCloudTasksOmitsDeadlineWhenUnset(t *testing.T) {
+	f := &fakeSubmitter{}
+	ct := newTestCloudTasks(f, "")
+	ct.deadline = 0
+	if err := ct.Enqueue(context.Background(), ingest.New(ingest.KindCI, "s", nil, time.Unix(0, 0))); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if f.req.Task.DispatchDeadline != nil {
+		t.Errorf("dispatch deadline set despite zero config: %v", f.req.Task.DispatchDeadline.AsDuration())
 	}
 }
 

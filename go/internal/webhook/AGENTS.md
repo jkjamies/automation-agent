@@ -74,7 +74,11 @@ sequenceDiagram
 - `POST /internal/dispatch` — the **Cloud Tasks worker** (`DispatchFunc`, wired via
   `WithDispatch`). It decodes the queued `ingest.Envelope` and runs `dispatcher.Dispatch`
   **synchronously, in-request**, so on Cloud Run CPU stays allocated for the whole compute
-  (a post-202 goroutine would be throttled). Retry classification follows Cloud Tasks'
+  (a post-202 goroutine would be throttled). Because that compute runs for minutes — far
+  longer than the server `WriteTimeout` sized for the fast webhook handlers — the handler
+  **clears this connection's write deadline** so a slow-but-successful dispatch still delivers
+  its 2xx (a lost response would make Cloud Tasks retry completed work). Retry classification
+  follows Cloud Tasks'
   retry-on-non-2xx contract: a transient dispatch error → `500` (the queue retries with
   backoff); a poison body (undecodable / unknown `Kind`) → `200` + log (acked so the queue
   drops it instead of looping). Returns `501` when no dispatcher is wired. See

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func mapLookup(m map[string]string) lookup {
 	return func(k string) (string, bool) {
@@ -75,15 +78,47 @@ func TestCloudTasksRequiresSettings(t *testing.T) {
 	}
 }
 
-// DISPATCH_URL must be an absolute https URL — the task carries the Bearer token to it, so a
-// plaintext http:// target (which would leak the token) is rejected.
+// DISPATCH_URL must be an absolute https URL that targets the /internal/dispatch worker. A
+// plaintext http:// target (which would leak the Bearer token) and a base URL or wrong path
+// (which would 404 every task at runtime) are both rejected.
 func TestCloudTasksRejectsInsecureDispatchURL(t *testing.T) {
-	for _, bad := range []string{"http://svc.run.app/internal/dispatch", "/internal/dispatch", "not a url"} {
+	for _, bad := range []string{
+		"http://svc.run.app/internal/dispatch", // plaintext leaks the token
+		"/internal/dispatch",                   // not absolute
+		"not a url",                            // unparseable
+		"https://svc.run.app",                  // base URL, missing the worker path
+		"https://svc.run.app/internal/sweep",   // wrong path
+	} {
 		env := fullCloudTasksEnv()
 		env["DISPATCH_URL"] = bad
 		if _, err := loadFrom(mapLookup(env)); err == nil {
 			t.Errorf("expected error for DISPATCH_URL=%q", bad)
 		}
+	}
+	// A gateway path prefix in front of /internal/dispatch is tolerated (suffix match).
+	env := fullCloudTasksEnv()
+	env["DISPATCH_URL"] = "https://gw.example.com/agent/internal/dispatch"
+	if _, err := loadFrom(mapLookup(env)); err != nil {
+		t.Errorf("gateway-prefixed dispatch URL should be accepted: %v", err)
+	}
+}
+
+// TASKS_DISPATCH_DEADLINE must fall within Cloud Tasks' 15s..30m HTTP-target range; outside
+// it (or unparseable) is rejected, and the default is the 30m maximum.
+func TestCloudTasksDispatchDeadline(t *testing.T) {
+	for _, bad := range []string{"5s", "31m", "garbage"} {
+		env := fullCloudTasksEnv()
+		env["TASKS_DISPATCH_DEADLINE"] = bad
+		if _, err := loadFrom(mapLookup(env)); err == nil {
+			t.Errorf("expected error for TASKS_DISPATCH_DEADLINE=%q", bad)
+		}
+	}
+	c, err := loadFrom(mapLookup(fullCloudTasksEnv()))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.TasksDispatchDeadline != 30*time.Minute {
+		t.Errorf("default TasksDispatchDeadline = %v, want 30m", c.TasksDispatchDeadline)
 	}
 }
 

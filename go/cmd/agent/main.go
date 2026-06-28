@@ -206,7 +206,7 @@ func run(logger *slog.Logger) error {
 // local dev (the default). See specs/20260626-workflow-execution-transport.md.
 func buildTransport(ctx context.Context, logger *slog.Logger, cfg config.Config, dispatch tasks.DispatchFunc) (tasks.Transport, error) {
 	if cfg.TasksBackend == config.TasksCloudTasks {
-		t, err := tasks.NewCloudTasks(ctx, cfg.TasksProject, cfg.TasksLocation, cfg.TasksQueue, cfg.DispatchURL, cfg.InternalToken)
+		t, err := tasks.NewCloudTasks(ctx, cfg.TasksProject, cfg.TasksLocation, cfg.TasksQueue, cfg.DispatchURL, cfg.InternalToken, cfg.TasksDispatchDeadline)
 		if err != nil {
 			return nil, err
 		}

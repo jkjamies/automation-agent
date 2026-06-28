@@ -8,6 +8,7 @@ import (
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	gax "github.com/googleapis/gax-go/v2"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"automation-agent/internal/ingest"
@@ -38,15 +39,17 @@ type CloudTasks struct {
 	queuePath   string
 	dispatchURL string
 	token       string
+	deadline    time.Duration // explicit per-task dispatch deadline (HTTP-target default is only 10m)
 	now         func() time.Time
 }
 
 // NewCloudTasks opens a Cloud Tasks client and targets the queue
 // projects/<project>/locations/<location>/queues/<queue>. dispatchURL is the full URL of
 // the /internal/dispatch worker; token is the static INTERNAL_TOKEN the task carries as a
-// Bearer header (the same auth /internal/dispatch already enforces). Close releases the
-// client.
-func NewCloudTasks(ctx context.Context, project, location, queue, dispatchURL, token string) (*CloudTasks, error) {
+// Bearer header (the same auth /internal/dispatch already enforces). deadline is the explicit
+// per-task dispatch deadline (config validated to Cloud Tasks' 15s..30m range). Close releases
+// the client.
+func NewCloudTasks(ctx context.Context, project, location, queue, dispatchURL, token string, deadline time.Duration) (*CloudTasks, error) {
 	client, err := cloudtasks.NewClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: cloud tasks client: %w", err)
@@ -57,6 +60,7 @@ func NewCloudTasks(ctx context.Context, project, location, queue, dispatchURL, t
 		queuePath:   fmt.Sprintf("projects/%s/locations/%s/queues/%s", project, location, queue),
 		dispatchURL: dispatchURL,
 		token:       token,
+		deadline:    deadline,
 		now:         time.Now,
 	}, nil
 }
@@ -85,6 +89,12 @@ func (c *CloudTasks) Enqueue(ctx context.Context, e ingest.Envelope, opts ...Opt
 			Headers:    headers,
 			Body:       body,
 		}},
+	}
+	// Set the dispatch deadline explicitly: the HTTP-target default is only 10m, so a longer
+	// workflow would be cancelled mid-run and retried (duplicating side effects). Skipped when
+	// unset (zero) so the queue default applies — production always supplies it via config.
+	if c.deadline > 0 {
+		task.DispatchDeadline = durationpb.New(c.deadline)
 	}
 	if o.Name != "" {
 		task.Name = c.queuePath + "/tasks/" + o.Name

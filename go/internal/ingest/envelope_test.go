@@ -94,3 +94,11 @@ func TestDecodeRejectsBadInput(t *testing.T) {
 		t.Error("bad base64 payload should be rejected")
 	}
 }
+
+// Encode rejects an unknown kind at the enqueue boundary so the cloudtasks backend fails fast
+// instead of enqueuing work that Decode (and POST /internal/dispatch) would later silently drop.
+func TestEncodeRejectsUnknownKind(t *testing.T) {
+	if _, err := Encode(New(Kind("jira"), "x", nil, time.Unix(0, 0))); err == nil {
+		t.Error("Encode should reject an unknown kind")
+	}
+}

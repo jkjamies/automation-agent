@@ -69,7 +69,12 @@ workflow it triggers is **multi-minute LLM compute**. On Cloud Run with the defa
 request-based billing, **CPU is throttled to near-zero once the response is sent**, so
 running that compute in a post-202 background goroutine starves it and the instance can be
 reclaimed mid-run. The fix: the webhook **enqueues** and the compute runs **inside a
-request**, where CPU stays allocated up to the 60-minute request timeout.
+request**, where CPU stays allocated for the whole run. Two timeouts bound that run and are
+set explicitly so a slow-but-healthy workflow is not cancelled and retried: the worker
+clears the server `WriteTimeout` for `/internal/dispatch` (sized for the fast webhook
+handlers, far too short for multi-minute compute), and the Cloud Tasks task carries an
+explicit dispatch deadline (`TASKS_DISPATCH_DEADLINE`, default and ceiling **30m** — Cloud
+Tasks' HTTP-target maximum; the unset default is only 10m).
 
 `TASKS_BACKEND` selects how (a config switch, like `SESSION_BACKEND`):
 
@@ -79,10 +84,11 @@ request**, where CPU stays allocated up to the 60-minute request timeout.
 | `cloudtasks` | production | Each envelope is enqueued as a Cloud Tasks HTTP-target task → `POST /internal/dispatch`, which runs the workflow **synchronously, in-request**. The queue gives **durable retry with backoff** (a task survives a mid-run reclaim and is redelivered) and **rate limiting** (the queue's `max-concurrent-dispatches` replaces the in-process semaphore). |
 
 Selecting `cloudtasks` is a production posture, so config validation **fails fast** unless
-the queue coordinates, an **absolute `https://` `DISPATCH_URL`** (the task carries the
-Bearer token to it — `http://` would leak it), `INTERNAL_TOKEN`, **and**
-`GITHUB_WEBHOOK_SECRET` are all set (the webhook surface must be verified in prod, not just
-warned about).
+the queue coordinates, an **absolute `https://` `DISPATCH_URL` ending in `/internal/dispatch`**
+(the task carries the Bearer token to it — `http://` would leak it; a base URL or wrong path
+would 404 every task at runtime), a `TASKS_DISPATCH_DEADLINE` within Cloud Tasks' 15s..30m
+range, `INTERNAL_TOKEN`, **and** `GITHUB_WEBHOOK_SECRET` are all set (the webhook surface
+must be verified in prod, not just warned about).
 
 `/internal/dispatch` reuses the **same `INTERNAL_TOKEN` Bearer** as cron/sweep — the Cloud
 Tasks task carries it as a header, so no new auth var and no OIDC. Retry classification
@@ -125,7 +131,8 @@ vars that matter specifically for a **cloud** deploy:
 | `INTERNAL_TOKEN` | **set** — from Secret Manager (else cron/sweep/dispatch are 404) |
 | `TASKS_BACKEND` | `cloudtasks` (in-request workflow execution; `inprocess` only locally) |
 | `TASKS_PROJECT` / `TASKS_LOCATION` / `TASKS_QUEUE` | the Cloud Tasks queue coordinates (project blank = `GOOGLE_CLOUD_PROJECT`) |
-| `DISPATCH_URL` | full URL of `/internal/dispatch` the queue POSTs to (e.g. `https://<service>/internal/dispatch`) |
+| `DISPATCH_URL` | full URL of `/internal/dispatch` the queue POSTs to (e.g. `https://<service>/internal/dispatch`); validated to end in `/internal/dispatch` |
+| `TASKS_DISPATCH_DEADLINE` | `30m` (default & max) — explicit Cloud Tasks per-task dispatch deadline; range `15s`..`30m` (unset queue default is only 10m) |
 | `CI_TIMEOUT` | `90m` (default) — per-run CI wait before the timer/sweep frees a parked run |
 | `GITHUB_APP_ID` / `GITHUB_APP_INSTALLATION_ID` | **set** — the production auth path (GitHub App installation tokens). One pinned installation per deployment (single org) |
 | `GITHUB_APP_PRIVATE_KEY` | **set** — the App private-key PEM, from Secret Manager (a flattened `\n` is auto-restored) |
@@ -215,10 +222,11 @@ Cloud Scheduler is the only trigger — the service runs no in-process cron, so 
 double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
 
 6. **Cloud Tasks** — create one queue (`gcloud tasks queues create <name> --location=<region>`)
-   and set `TASKS_BACKEND=cloudtasks`, `TASKS_LOCATION`, `TASKS_QUEUE`, and `DISPATCH_URL`
-   (the service's `/internal/dispatch` URL). The queue POSTs each task with
-   `Authorization: Bearer <INTERNAL_TOKEN>`, so the same secret that guards cron/sweep guards
-   the worker. Tune the queue's `--max-concurrent-dispatches` (replaces the in-process
+   and set `TASKS_BACKEND=cloudtasks`, `TASKS_LOCATION`, `TASKS_QUEUE`, `DISPATCH_URL`
+   (the service's `/internal/dispatch` URL), and `TASKS_DISPATCH_DEADLINE` (default `30m`, the
+   Cloud Tasks maximum — leave it unless a workflow must run shorter). The queue POSTs each
+   task with `Authorization: Bearer <INTERNAL_TOKEN>`, so the same secret that guards cron/sweep
+   guards the worker. Tune the queue's `--max-concurrent-dispatches` (replaces the in-process
    concurrency cap) and set `--max-attempts` + a dead-letter as the poison backstop. Without
    this step the service still runs with `TASKS_BACKEND=inprocess`, but long workflows are
    throttled after the 202 on scale-to-zero — see [Execution

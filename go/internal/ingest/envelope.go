@@ -59,6 +59,13 @@ type wireEnvelope struct {
 // Encode serializes an envelope to its JSON wire form for the Cloud Tasks transport (the
 // in-process transport passes the struct directly and never calls this). See wireEnvelope.
 func Encode(e Envelope) ([]byte, error) {
+	// Reject an unknown kind at the enqueue boundary so both transports fail the same way:
+	// Decode (and POST /internal/dispatch) already drop an unknown kind as a poison task, so
+	// without this the cloudtasks backend would enqueue successfully and silently discard the
+	// work later, while inprocess would still hand it to the dispatcher.
+	if !e.Kind.Valid() {
+		return nil, fmt.Errorf("ingest: unknown kind %q", e.Kind)
+	}
 	b, err := json.Marshal(wireEnvelope{
 		Kind:       e.Kind,
 		Source:     e.Source,

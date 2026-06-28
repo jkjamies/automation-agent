@@ -111,3 +111,23 @@ func TestInProcessCloseDrains(t *testing.T) {
 		t.Error("in-flight dispatch did not finish before Close returned")
 	}
 }
+
+// After Close, Enqueue refuses new work rather than launching a goroutine the drain has
+// already stopped waiting for (which would also race wg.Add against Close's wg.Wait).
+func TestInProcessEnqueueAfterCloseIsRejected(t *testing.T) {
+	var ran bool
+	p := NewInProcess(func(context.Context, ingest.Envelope) error { ran = true; return nil }, nil, 1)
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Enqueue(context.Background(), ingest.New(ingest.KindCI, "s", nil, time.Unix(0, 0))); err == nil {
+		t.Error("Enqueue after Close should return an error")
+	}
+	// Give any (incorrectly) launched goroutine a chance to run before asserting it did not.
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if ran {
+		t.Error("dispatch ran for work enqueued after Close")
+	}
+}

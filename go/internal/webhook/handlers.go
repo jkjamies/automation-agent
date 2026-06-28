@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"automation-agent/internal/ingest"
 )
@@ -101,6 +102,14 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	if s.dispatchFn == nil {
 		http.Error(w, "dispatch not configured", http.StatusNotImplemented)
 		return
+	}
+	// The workflow runs synchronously in-request and can take many minutes (LLM compute) —
+	// far longer than the server's WriteTimeout, which is sized for the fast webhook handlers.
+	// Clear this connection's write deadline so a slow-but-successful dispatch still delivers
+	// its 2xx; otherwise the lost response makes Cloud Tasks retry already-completed work. The
+	// Cloud Tasks dispatch deadline and Cloud Run's request timeout remain the real bounds.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		s.log.Warn("could not clear dispatch write deadline; a long workflow may lose its response", "err", err)
 	}
 	body, ok := s.readBody(w, r)
 	if !ok {

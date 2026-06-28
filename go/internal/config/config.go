@@ -142,6 +142,12 @@ type Config struct {
 	// DispatchURL is the full URL of the /internal/dispatch worker the queue POSTs to
 	// (DISPATCH_URL, e.g. https://agent-xyz.run.app/internal/dispatch). Required for cloudtasks.
 	DispatchURL string
+	// TasksDispatchDeadline is how long Cloud Tasks waits for an /internal/dispatch attempt
+	// before cancelling it and retrying (TASKS_DISPATCH_DEADLINE). It must be set explicitly
+	// on the task: the HTTP-target default is only 10m, so a longer workflow would be
+	// cancelled mid-run and retried, duplicating side effects. Cloud Tasks caps this at 30m,
+	// which is therefore the default and the ceiling. Used only in cloudtasks mode.
+	TasksDispatchDeadline time.Duration
 }
 
 // GitHubApp holds the GitHub App installation-token credentials, resolved at load
@@ -268,6 +274,9 @@ func loadFrom(get lookup) (Config, error) {
 	if c.CITimeout, err = time.ParseDuration(getOr(get, "CI_TIMEOUT", "90m")); err != nil {
 		return Config{}, fmt.Errorf("CI_TIMEOUT: %w", err)
 	}
+	if c.TasksDispatchDeadline, err = time.ParseDuration(getOr(get, "TASKS_DISPATCH_DEADLINE", "30m")); err != nil {
+		return Config{}, fmt.Errorf("TASKS_DISPATCH_DEADLINE: %w", err)
+	}
 
 	// Code models default to the base models when unset.
 	if c.OllamaCodeModel == "" {
@@ -330,15 +339,23 @@ func (c Config) Validate() error {
 		}
 		// DISPATCH_URL must be an absolute https URL: the Cloud Tasks task carries
 		// INTERNAL_TOKEN as a Bearer header to it, so a plaintext http:// target would leak
-		// the token in transit (same posture as gitrepo refusing a token over http://).
+		// the token in transit (same posture as gitrepo refusing a token over http://). It must
+		// also resolve to the /internal/dispatch worker route — a base URL or a stray path
+		// would pass the scheme check and then 404 every task at runtime. A suffix match (not
+		// equality) tolerates a gateway path prefix while still requiring the dispatch path.
 		switch u, err := url.Parse(c.DispatchURL); {
 		case c.DispatchURL == "":
 			missing = append(missing, "DISPATCH_URL")
-		case err != nil || !u.IsAbs() || u.Scheme != "https" || u.Host == "":
-			missing = append(missing, "DISPATCH_URL (must be an absolute https:// URL)")
+		case err != nil || !u.IsAbs() || u.Scheme != "https" || u.Host == "" || !strings.HasSuffix(u.Path, "/internal/dispatch"):
+			missing = append(missing, "DISPATCH_URL (must be an absolute https:// URL ending in /internal/dispatch)")
 		}
 		if c.InternalToken == "" {
 			missing = append(missing, "INTERNAL_TOKEN (the Bearer the task carries to /internal/dispatch)")
+		}
+		// Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m; a value outside that
+		// range is silently rejected at CreateTask, so reject it here instead.
+		if c.TasksDispatchDeadline < 15*time.Second || c.TasksDispatchDeadline > 30*time.Minute {
+			missing = append(missing, "TASKS_DISPATCH_DEADLINE (must be between 15s and 30m)")
 		}
 		// In Cloud Tasks mode the deployment is production-facing, so an unverified webhook
 		// surface is a real exposure rather than a dev convenience — require the HMAC secret

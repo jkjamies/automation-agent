@@ -107,7 +107,8 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `TASKS_PROJECT` | `GOOGLE_CLOUD_PROJECT` | GCP project owning the queue; `cloudtasks` only |
 | `TASKS_LOCATION` | — | queue region (e.g. `us-central1`); **required** for `cloudtasks` |
 | `TASKS_QUEUE` | — | Cloud Tasks queue name; **required** for `cloudtasks` |
-| `DISPATCH_URL` | — | full URL of `/internal/dispatch` the queue POSTs to; **required** for `cloudtasks` |
+| `DISPATCH_URL` | — | full URL of `/internal/dispatch` the queue POSTs to (must end in `/internal/dispatch`); **required** for `cloudtasks` |
+| `TASKS_DISPATCH_DEADLINE` | `30m` | explicit per-task dispatch deadline; range `15s`..`30m` (Cloud Tasks max), `cloudtasks` only |
 | **GitHub** | | |
 | `GITHUB_TOKEN` | `GH_TOKEN`, then `gh auth token` | PR create/label/compare (repo scope); blank reuses your local `gh` login. Also the `https` git transport. |
 | `GIT_TRANSPORT` | `https` | `https` (token) \| `ssh` (clone/push over ssh-agent/keys). **SSH only covers git transport — PR ops still need a token / `gh` login.** |

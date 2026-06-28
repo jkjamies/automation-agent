@@ -33,7 +33,9 @@ flowchart TD
   `/internal/dispatch`, carrying the JSON-encoded envelope as the body and the static
   `INTERNAL_TOKEN` as a Bearer header (the same auth that endpoint already enforces). The
   real client is isolated behind the one-method `submitter` interface so task-building is
-  unit-tested without a live gRPC connection.
+  unit-tested without a live gRPC connection. Each task sets an **explicit dispatch deadline**
+  (`TASKS_DISPATCH_DEADLINE`, default/max `30m`) — the HTTP-target default is only 10m, so a
+  longer workflow would be cancelled mid-run and retried, duplicating side effects.
 
 ## Hints (Options)
 
