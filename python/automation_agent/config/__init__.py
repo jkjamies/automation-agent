@@ -5,6 +5,7 @@ from automation_agent.config.config import (
     NotifyProvider,
     Provider,
     SessionBackend,
+    TasksBackend,
     load,
     load_from,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "NotifyProvider",
     "Provider",
     "SessionBackend",
+    "TasksBackend",
     "load",
     "load_from",
 ]

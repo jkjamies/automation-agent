@@ -21,11 +21,15 @@ const drainTimeout = 15 * time.Second
 // is precisely why production uses the Cloud Tasks backend instead. The Name/Delay hints
 // are Cloud Tasks features and are ignored here (an immediate, undeduplicated dispatch).
 type InProcess struct {
-	dispatch  DispatchFunc
-	log       *slog.Logger
-	sem       chan struct{}
-	wg        sync.WaitGroup
-	closed    chan struct{} // closed by Close to stop accepting new work
+	dispatch DispatchFunc
+	log      *slog.Logger
+	sem      chan struct{}
+	wg       sync.WaitGroup
+	closed   chan struct{} // closed by Close to stop accepting new work
+	// mu serializes wg.Add against Close's wg.Wait. Close closes p.closed under mu before
+	// waiting, and Enqueue does its closed-recheck + wg.Add under mu, so an Add either
+	// happens-before the Wait (and is counted) or is skipped — it can never race the Wait.
+	mu        sync.Mutex
 	closeOnce sync.Once
 }
 
@@ -60,7 +64,21 @@ func (p *InProcess) Enqueue(ctx context.Context, e ingest.Envelope, _ ...Option)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	// Register on the WaitGroup under the lock, and only if Close has not begun. Taking a slot
+	// above can happen at the same instant Close runs (the select picks randomly when both
+	// p.closed and the slot are ready), so without this guard wg.Add could race wg.Wait. Close
+	// closes p.closed under the same lock before waiting, so here we either Add before that
+	// (counted by Wait) or observe closed and back out, releasing the slot.
+	p.mu.Lock()
+	select {
+	case <-p.closed:
+		p.mu.Unlock()
+		<-p.sem // release the slot we just took
+		return context.Canceled
+	default:
+	}
 	p.wg.Add(1)
+	p.mu.Unlock()
 	go func() {
 		defer p.wg.Done()
 		defer func() { <-p.sem }()
@@ -77,8 +95,13 @@ func (p *InProcess) Enqueue(ctx context.Context, e ingest.Envelope, _ ...Option)
 // SIGTERM completes work in flight rather than abandoning it.
 func (p *InProcess) Close() error {
 	// Stop accepting new work before waiting, so Enqueue cannot launch a goroutine the drain
-	// would miss (and cannot race wg.Add against the wg.Wait below).
-	p.closeOnce.Do(func() { close(p.closed) })
+	// would miss. Closing under mu orders this against Enqueue's under-lock wg.Add, so the
+	// wg.Wait below can never race a concurrent wg.Add.
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		close(p.closed)
+		p.mu.Unlock()
+	})
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()

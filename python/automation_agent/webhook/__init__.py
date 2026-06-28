@@ -2,6 +2,7 @@
 
 from automation_agent.webhook.server import (
     MAX_BODY_BYTES,
+    DispatchFunc,
     IngestFunc,
     Server,
     verify_signature,
@@ -9,6 +10,7 @@ from automation_agent.webhook.server import (
 
 __all__ = [
     "MAX_BODY_BYTES",
+    "DispatchFunc",
     "IngestFunc",
     "Server",
     "verify_signature",

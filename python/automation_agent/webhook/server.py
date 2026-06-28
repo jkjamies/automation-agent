@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request, Response
 
-from automation_agent.ingest import Envelope, Kind, new
+from automation_agent.ingest import Envelope, Kind, decode, new
 
 # maxBodyBytes caps how much of a webhook body we read.
 MAX_BODY_BYTES = 5 << 20  # 5 MiB
@@ -31,6 +32,11 @@ IngestFunc = Callable[[Envelope], Awaitable[None]]
 # SweepFunc resolves parked runs whose CI never reported (the durable timeout catch-all).
 # Driven by Cloud Scheduler via POST /internal/sweep.
 SweepFunc = Callable[[], Awaitable[None]]
+
+# DispatchFunc runs an envelope's workflow synchronously, in-request. It backs
+# POST /internal/dispatch, which the Cloud Tasks transport delivers to so the compute runs
+# on allocated CPU (unlike a post-202 background task). It is the root dispatcher's dispatch.
+DispatchFunc = Callable[[Envelope], Awaitable[None]]
 
 
 def verify_signature(secret: str, header: str, body: bytes) -> bool:
@@ -53,15 +59,24 @@ class Server:
         secret: str = "",
         internal_token: str = "",
         sweep: SweepFunc | None = None,
+        dispatch: DispatchFunc | None = None,
         now: Callable[[], datetime] | None = None,
+        log: logging.Logger | None = None,
     ) -> None:
         self.ingest = ingest
         self.secret = secret
-        # internal_token guards the /internal/* endpoints (Cloud Scheduler cron + sweep).
-        # Empty disables them (404), so they are never open by default.
+        # internal_token guards the /internal/* endpoints (Cloud Scheduler cron + sweep, and
+        # the Cloud Tasks dispatch worker). Empty disables them (404), so they are never open
+        # by default.
         self.internal_token = internal_token
         self.sweep_fn = sweep
+        # dispatch_fn runs a queued envelope in-request (the Cloud Tasks worker endpoint).
+        # When unset, POST /internal/dispatch returns 501.
+        self.dispatch_fn = dispatch
         self.now = now if now is not None else (lambda: datetime.now(UTC))
+        # Logger for non-fatal handler diagnostics (e.g. a poison /internal/dispatch body
+        # that is acked rather than retried).
+        self.log = log if log is not None else logging.getLogger("automation_agent")
         self._app = self._build_app()
 
     @property
@@ -126,6 +141,39 @@ class Server:
                 await self.sweep_fn()
             except Exception:
                 return Response(content="sweep failed", status_code=500)
+            return Response(status_code=200)
+
+        # Cloud Tasks worker: executes a queued envelope in-request (same Bearer auth).
+        # Running in-request (not in a post-202 background task) keeps CPU allocated on Cloud
+        # Run for the whole compute. Retry classification follows Cloud Tasks'
+        # retry-on-non-2xx contract (spec §6): a transient failure (the dispatch raises —
+        # LLM/network/Firestore) returns 500 so the queue retries with backoff; a permanent
+        # failure (a malformed body or unknown kind, which a retry cannot fix) is acked with
+        # 200 and logged so the queue drops the poison task instead of looping.
+        @app.post("/internal/dispatch")
+        async def dispatch(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            denied = self._internal_authenticated(request)
+            if denied is not None:
+                return denied
+            if self.dispatch_fn is None:
+                return Response(content="dispatch not configured", status_code=501)
+            body = await self._take_body(request)
+            if isinstance(body, Response):
+                return body
+            try:
+                env = decode(body)
+            except ValueError as exc:
+                # Permanent: ack so Cloud Tasks does not redeliver a poison payload.
+                self.log.warning("dropping undecodable dispatch task: %s", exc)
+                return Response(status_code=200)
+            try:
+                await self.dispatch_fn(env)
+            except Exception as exc:  # noqa: BLE001
+                # Transient: let Cloud Tasks retry with backoff.
+                self.log.error(
+                    "dispatch failed: kind=%s source=%s err=%s", env.kind, env.source, exc
+                )
+                return Response(content="dispatch failed", status_code=500)
             return Response(status_code=200)
 
         return app

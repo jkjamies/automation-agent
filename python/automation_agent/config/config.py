@@ -45,6 +45,21 @@ class SessionBackend(StrEnum):
     FIRESTORE = "firestore"
 
 
+class TasksBackend(StrEnum):
+    """Selects the webhook execution transport: how an enqueued envelope reaches the
+    dispatcher. See ``specs/20260626-workflow-execution-transport.md``."""
+
+    # Runs each dispatch in a background asyncio task pool (the pre-transport behavior). The
+    # default — selecting it changes nothing. Local dev only: it does not survive an instance
+    # being reclaimed mid-run, and on Cloud Run the compute is throttled once the response is
+    # sent.
+    INPROCESS = "inprocess"
+    # Enqueues each envelope as a Cloud Tasks HTTP-target task pointed at /internal/dispatch,
+    # which executes it in-request (CPU stays allocated) with durable retry + queue rate
+    # limiting. The production backend.
+    CLOUDTASKS = "cloudtasks"
+
+
 # Fields whose value is a credential and must never appear in repr/logs.
 _SECRET_FIELDS = frozenset(
     {
@@ -124,6 +139,29 @@ class Config:
     # (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
     agent_pr_label: str = "automation-agent"
 
+    # Execution transport (webhook -> dispatcher). tasks_backend selects in-process (default)
+    # or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
+    # task carries internal_token as its Bearer credential (no new auth var). See
+    # specs/20260626-workflow-execution-transport.md.
+    tasks_backend: TasksBackend = TasksBackend.INPROCESS
+    # tasks_project is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
+    # GOOGLE_CLOUD_PROJECT. Required for cloudtasks.
+    tasks_project: str = ""
+    # tasks_location is the queue's region (TASKS_LOCATION, e.g. "us-central1"). Required for
+    # cloudtasks.
+    tasks_location: str = ""
+    # tasks_queue is the Cloud Tasks queue name (TASKS_QUEUE). Required for cloudtasks.
+    tasks_queue: str = ""
+    # dispatch_url is the full URL of the /internal/dispatch worker the queue POSTs to
+    # (DISPATCH_URL, e.g. https://agent-xyz.run.app/internal/dispatch). Required for cloudtasks.
+    dispatch_url: str = ""
+    # tasks_dispatch_deadline is how long Cloud Tasks waits for an /internal/dispatch attempt
+    # before cancelling it and retrying (TASKS_DISPATCH_DEADLINE). It must be set explicitly on
+    # the task: the HTTP-target default is only 10m, so a longer workflow would be cancelled
+    # mid-run and retried, duplicating side effects. Cloud Tasks caps this at 30m, which is
+    # therefore the default and the ceiling. Used only in cloudtasks mode.
+    tasks_dispatch_deadline: timedelta = timedelta(minutes=30)
+
     def app_mode(self) -> bool:
         """Whether GitHub App authentication is configured (production path). False means
         the static PAT fallback (``github_token``) is used."""
@@ -170,6 +208,12 @@ class Config:
             raise ValueError(
                 f"invalid GIT_TRANSPORT {self.git_transport!r} (want https|ssh)"
             )
+        if self.tasks_backend == TasksBackend.CLOUDTASKS:
+            self._validate_cloudtasks()
+        elif self.tasks_backend != TasksBackend.INPROCESS:
+            raise ValueError(
+                f"invalid TASKS_BACKEND {self.tasks_backend!r} (want inprocess|cloudtasks)"
+            )
         if self.max_iterations < 1:
             raise ValueError(f"MAX_ITERATIONS must be >= 1, got {self.max_iterations}")
         try:
@@ -186,6 +230,58 @@ class Config:
                 "REPOS must be set in GitHub App mode (empty REPOS = all repos is "
                 "rejected to avoid acting on every installed repo)"
             )
+
+    def _validate_cloudtasks(self) -> None:
+        """Check the cloudtasks-backend requirements: the queue coordinates and worker URL,
+        plus the Bearer token the task carries. Without INTERNAL_TOKEN, /internal/dispatch is
+        disabled (404) and every task would fail permanently — so fail fast at startup rather
+        than silently never dispatching.
+
+        Raises:
+            ValueError: listing every missing/invalid cloudtasks setting.
+        """
+        from urllib.parse import urlparse
+
+        missing: list[str] = []
+        if not self.tasks_project:
+            missing.append("TASKS_PROJECT (or GOOGLE_CLOUD_PROJECT)")
+        if not self.tasks_location:
+            missing.append("TASKS_LOCATION")
+        if not self.tasks_queue:
+            missing.append("TASKS_QUEUE")
+        # DISPATCH_URL must be an absolute https URL: the Cloud Tasks task carries
+        # INTERNAL_TOKEN as a Bearer header to it, so a plaintext http:// target would leak
+        # the token in transit (same posture as gitrepo refusing a token over http://). It
+        # must also resolve to the /internal/dispatch worker route — a base URL or a stray
+        # path would pass the scheme check and then 404 every task at runtime. A suffix match
+        # (not equality) tolerates a gateway path prefix while still requiring the path.
+        if not self.dispatch_url:
+            missing.append("DISPATCH_URL")
+        else:
+            parsed = urlparse(self.dispatch_url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.netloc
+                or not parsed.path.endswith("/internal/dispatch")
+            ):
+                missing.append(
+                    "DISPATCH_URL (must be an absolute https:// URL ending in /internal/dispatch)"
+                )
+        if not self.internal_token:
+            missing.append("INTERNAL_TOKEN (the Bearer the task carries to /internal/dispatch)")
+        # Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m; a value outside
+        # that range is silently rejected at create time, so reject it here instead.
+        if not (timedelta(seconds=15) <= self.tasks_dispatch_deadline <= timedelta(minutes=30)):
+            missing.append("TASKS_DISPATCH_DEADLINE (must be between 15s and 30m)")
+        # In Cloud Tasks mode the deployment is production-facing, so an unverified webhook
+        # surface is a real exposure rather than a dev convenience — require the HMAC secret
+        # (it stays an opt-in warning only for the local inprocess default).
+        if not self.github_webhook_secret:
+            missing.append(
+                "GITHUB_WEBHOOK_SECRET (webhook signatures must be verified in production)"
+            )
+        if missing:
+            raise ValueError("TASKS_BACKEND=cloudtasks requires " + ", ".join(missing))
 
 
 def load() -> Config:
@@ -268,6 +364,14 @@ def load_from(get: Lookup) -> Config:
         github_webhook_secret=_get_or(get, "GITHUB_WEBHOOK_SECRET", ""),
         internal_token=_get_or(get, "INTERNAL_TOKEN", ""),
         agent_pr_label=_get_or(get, "AGENT_PR_LABEL", "automation-agent"),
+        tasks_backend=TasksBackend(_get_or(get, "TASKS_BACKEND", TasksBackend.INPROCESS.value)),
+        tasks_project=_get_or(get, "TASKS_PROJECT", _get_or(get, "GOOGLE_CLOUD_PROJECT", "")),
+        tasks_location=_get_or(get, "TASKS_LOCATION", ""),
+        tasks_queue=_get_or(get, "TASKS_QUEUE", ""),
+        dispatch_url=_get_or(get, "DISPATCH_URL", ""),
+        tasks_dispatch_deadline=_parse_duration(
+            _get_or(get, "TASKS_DISPATCH_DEADLINE", "30m"), "TASKS_DISPATCH_DEADLINE"
+        ),
     )
 
     # Code models default to the base models when unset.
@@ -417,10 +521,11 @@ _DURATION_UNITS: dict[str, float] = {
 }
 
 
-def _parse_duration(s: str) -> timedelta:
+def _parse_duration(s: str, name: str = "CI_TIMEOUT") -> timedelta:
     """Parse a duration string (e.g. ``90m``, ``1h30m``) into a timedelta.
 
-    Supports the subset of unit suffixes needed for CI_TIMEOUT.
+    Supports the subset of unit suffixes needed for CI_TIMEOUT / TASKS_DISPATCH_DEADLINE.
+    ``name`` is the env var the value came from, used to prefix the error message.
 
     Raises:
         ValueError: if the string is empty or malformed.
@@ -429,9 +534,9 @@ def _parse_duration(s: str) -> timedelta:
 
     text = s.strip()
     if text == "":
-        raise ValueError("CI_TIMEOUT: empty duration")
+        raise ValueError(f"{name}: empty duration")
     matches = re.findall(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)", text)
     if not matches or "".join(n + u for n, u in matches) != text:
-        raise ValueError(f"CI_TIMEOUT: invalid duration {s!r}")
+        raise ValueError(f"{name}: invalid duration {s!r}")
     seconds = sum(float(num) * _DURATION_UNITS[unit] for num, unit in matches)
     return timedelta(seconds=seconds)

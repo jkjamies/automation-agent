@@ -25,18 +25,38 @@ from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
 from automation_agent.auth import StaticProvider, TokenProvider, new_app_provider
-from automation_agent.config import Config, load
+from automation_agent.config import Config, TasksBackend, load
 from automation_agent.githubapi import Client
 from automation_agent.ingest import Envelope
 from automation_agent.notify import Notifier, new_notifier
+from automation_agent.tasks import DispatchFunc, InProcess, Transport, new_cloud_tasks
 from automation_agent.webhook import Server
 
 log = logging.getLogger("automation_agent")
 
-# MAX_CONCURRENT_DISPATCH bounds in-flight webhook dispatches (mirrors Go's
-# maxConcurrentDispatch): under a burst the ingest path applies backpressure rather than
-# spawning unbounded tasks.
-MAX_CONCURRENT_DISPATCH = 32
+
+def build_transport(cfg: Config, dispatch: DispatchFunc) -> Transport:
+    """Select the webhook execution transport: Cloud Tasks in production (durable,
+    in-request, rate-limited by the queue) or the in-process task pool for local dev (the
+    default). See ``specs/20260626-workflow-execution-transport.md``."""
+    if cfg.tasks_backend == TasksBackend.CLOUDTASKS:
+        log.info(
+            "execution transport: cloud tasks project=%s location=%s queue=%s dispatch_url=%s",
+            cfg.tasks_project,
+            cfg.tasks_location,
+            cfg.tasks_queue,
+            cfg.dispatch_url,
+        )
+        return new_cloud_tasks(
+            cfg.tasks_project,
+            cfg.tasks_location,
+            cfg.tasks_queue,
+            cfg.dispatch_url,
+            cfg.internal_token,
+            cfg.tasks_dispatch_deadline,
+        )
+    log.info("execution transport: in-process (local/default)")
+    return InProcess(dispatch, log)
 
 
 def build_token_provider(cfg: Config) -> TokenProvider:
@@ -184,49 +204,15 @@ async def run() -> None:
         )
     )
 
-    loop = asyncio.get_running_loop()
+    # Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
+    # in-process (default) on a bounded task pool drained on SIGTERM, or — in production — via
+    # Cloud Tasks, which delivers each envelope to /internal/dispatch so the compute runs
+    # in-request (CPU stays allocated) with durable retry. See
+    # specs/20260626-workflow-execution-transport.md.
+    transport = build_transport(cfg, dispatcher.dispatch)
 
-    # In-flight webhook-dispatch tasks. CPython holds only a weak reference to a bare
-    # task created by ``loop.create_task``, so a fire-and-forget task can be garbage-
-    # collected mid-flight ("Task was destroyed but it is pending!"). Keeping a strong
-    # reference here both prevents that and lets the shutdown path drain outstanding work
-    # instead of dropping it.
-    pending: set[asyncio.Task[None]] = set()
-
-    # Caps in-flight webhook dispatches (matches Go's sem-32 channel). Acquired in _ingest
-    # before the task is spawned, so a burst blocks the handler (backpressure) instead of
-    # piling up tasks; released when the dispatch finishes.
-    dispatch_sem = asyncio.Semaphore(MAX_CONCURRENT_DISPATCH)
-
-    async def _safe_dispatch(e: Envelope) -> None:
-        try:
-            await dispatcher.dispatch(e)
-        except Exception as exc:  # noqa: BLE001
-            log.error("dispatch failed: kind=%s err=%s", e.kind, exc)
-
-    async def _dispatch_and_release(e: Envelope) -> None:
-        # Webhook-path wrapper: frees the bound-concurrency slot _ingest acquired.
-        try:
-            await _safe_dispatch(e)
-        finally:
-            dispatch_sem.release()
-
-    # Webhooks enqueue asynchronously. Acquiring the bound-concurrency slot here (before
-    # spawning) means a burst applies backpressure to the handler instead of spawning
-    # unbounded tasks.
     async def _ingest(e: Envelope) -> None:
-        # When every slot is held, acquire() blocks here — the intended backpressure. Surface
-        # it so sustained saturation is observable rather than silent (delayed webhook ACKs).
-        if dispatch_sem.locked():
-            log.warning(
-                "dispatch concurrency saturated (%d in flight); webhook ingest is applying "
-                "backpressure until a slot frees",
-                MAX_CONCURRENT_DISPATCH,
-            )
-        await dispatch_sem.acquire()
-        task = loop.create_task(_dispatch_and_release(e))
-        pending.add(task)
-        task.add_done_callback(pending.discard)
+        await transport.enqueue(e)
 
     # The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
     # parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
@@ -254,6 +240,9 @@ async def run() -> None:
         secret=cfg.github_webhook_secret,
         internal_token=cfg.internal_token,
         sweep=_sweep,
+        # /internal/dispatch executes a queued envelope in-request (the Cloud Tasks worker).
+        dispatch=dispatcher.dispatch,
+        log=log,
     )
 
     server = uvicorn.Server(
@@ -272,14 +261,10 @@ async def run() -> None:
         await server.serve()
     finally:
         log.info("shutting down")
-        # Drain in-flight webhook dispatches so a clean SIGTERM finishes outstanding
-        # work instead of dropping it. Bounded so a stuck dispatch can't hang exit.
-        if pending:
-            log.info("draining %d in-flight dispatch(es)", len(pending))
-            try:
-                await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=30)
-            except TimeoutError:
-                log.warning("drain timed out; %d dispatch(es) abandoned", len(pending))
+        # Close the transport after the server stops accepting: the in-process backend drains
+        # in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done
+        # before the park-store close so any draining dispatch still has its store.
+        await transport.close()
         # Release a durable park store's backing connection (no-op for the memory backend).
         await park_store.close()
 
