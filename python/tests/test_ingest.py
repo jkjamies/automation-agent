@@ -68,3 +68,28 @@ def test_decode_rejects_bad_input() -> None:
     # A non-string payload is a malformed body, not a server error — still poison.
     with pytest.raises(ValueError):
         decode(b'{"kind":"ci","source":"x","payload":123}')
+    # The typed wire schema (Go's wireEnvelope) rejects a non-string source/received_at as a
+    # type error — poison, not a silent default.
+    with pytest.raises(ValueError):
+        decode(b'{"kind":"ci","source":123,"payload":"aGk="}')
+    with pytest.raises(ValueError):
+        decode(b'{"kind":"ci","source":"x","received_at":0,"payload":"aGk="}')
+    with pytest.raises(ValueError):
+        decode(b'{"kind":"ci","source":"x","received_at":false,"payload":"aGk="}')
+    # A present-but-unparseable received_at string (including "") is poison.
+    with pytest.raises(ValueError):
+        decode(b'{"kind":"ci","source":"x","received_at":"not-a-date","payload":"aGk="}')
+    with pytest.raises(ValueError):
+        decode(b'{"kind":"ci","source":"x","received_at":"","payload":"aGk="}')
+
+
+def test_decode_defaults_absent_metadata() -> None:
+    # Absent or JSON null source/received_at default to the zero value (Go: the typed struct's
+    # zero / its UnmarshalJSON treating null as a no-op), never poison.
+    epoch = datetime.fromtimestamp(0, tz=UTC)
+    out = decode(b'{"kind":"ci","payload":"aGk="}')
+    assert out.source == ""
+    assert out.received_at == epoch
+    out = decode(b'{"kind":"ci","source":null,"received_at":null,"payload":"aGk="}')
+    assert out.source == ""
+    assert out.received_at == epoch

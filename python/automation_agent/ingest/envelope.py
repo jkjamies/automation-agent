@@ -95,11 +95,15 @@ def decode(b: bytes) -> Envelope:
     A malformed body, bad base64, or unrecognized kind is a permanent error: the caller
     should ack the delivery rather than retry it — a redelivery cannot fix a poison payload.
     ``source`` and ``received_at`` are informational (only ``kind`` and ``payload`` drive
-    dispatch), so they default rather than fail when absent.
+    dispatch), so an absent (or JSON ``null``) value defaults to the zero value — but a
+    present value of the wrong type is a malformed body, not a silent default, mirroring Go's
+    ``json.Unmarshal`` into the typed ``wireEnvelope`` struct (a non-string ``source`` or a
+    non-string/unparseable ``received_at`` is a type error there, i.e. poison).
 
     Raises:
-        ValueError: if the body is not valid JSON, the kind is unknown, or the payload is
-            not valid standard base64.
+        ValueError: if the body is not valid JSON, the kind is unknown, the payload is not
+            valid standard base64, or ``source``/``received_at`` is present with the wrong
+            type (or ``received_at`` is not a parseable RFC 3339 string).
     """
     try:
         wire = json.loads(b)
@@ -124,14 +128,38 @@ def decode(b: bytes) -> Envelope:
         payload = base64.b64decode(payload_raw, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValueError(f"ingest: decode payload: {exc}") from exc
-    received_raw = wire.get("received_at", "")
-    if not received_raw:
+    source = _wire_string(wire, "source")
+    if "received_at" not in wire or wire["received_at"] is None:
+        # Absent or JSON null -> the zero value (Go: time.Time's zero / its UnmarshalJSON
+        # treating null as a no-op), never poison.
         received_at = datetime.fromtimestamp(0, tz=UTC)
     else:
-        # A present-but-malformed (or non-string) timestamp is poison, mirroring Go's
-        # json.Unmarshal rejecting a bad RFC 3339 value.
+        received_raw = wire["received_at"]
+        # A present non-string is a malformed body, not a server error (Go: a type error from
+        # json.Unmarshal into the time.Time field).
+        if not isinstance(received_raw, str):
+            raise ValueError(
+                "ingest: decode received_at: want an RFC 3339 string, "
+                f"got {type(received_raw).__name__}"
+            )
+        # A present-but-unparseable timestamp (including "") is poison, mirroring Go's
+        # time.Parse rejecting a bad RFC 3339 value.
         try:
             received_at = datetime.fromisoformat(received_raw)
-        except (ValueError, TypeError) as exc:
+        except ValueError as exc:
             raise ValueError(f"ingest: decode received_at: {exc}") from exc
-    return new(kind, wire.get("source", ""), payload, received_at)
+    return new(kind, source, payload, received_at)
+
+
+def _wire_string(wire: dict, key: str) -> str:
+    """Return ``wire[key]`` as a string, mirroring Go's ``json.Unmarshal`` into a typed
+    string field: an absent key or JSON ``null`` yields the zero value ``""``, while a
+    present non-string value is a malformed body (poison), not a silent default."""
+    if key not in wire:
+        return ""
+    value = wire[key]
+    if value is None:  # JSON null unmarshals to the zero value in Go, not an error
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"ingest: decode {key}: want a string, got {type(value).__name__}")
+    return value
