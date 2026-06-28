@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { collectImports, rel, repoRoot, tsFiles, under } from './helpers';
 
-const TOOLING = ['src/auth', 'src/githubapi', 'src/gitrepo', 'src/webhook', 'src/notify'];
+const TOOLING = ['src/auth', 'src/githubapi', 'src/gitrepo', 'src/webhook', 'src/notify', 'src/tasks'];
 
 // process.env may be read only here; every other module receives config via injection.
 const CONFIG_FILE = 'src/config/config.ts';

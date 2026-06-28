@@ -5,10 +5,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
-import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend } from './config';
+import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend, TasksBackend } from './config';
 
 function mapLookup(m: Record<string, string>) {
   return (key: string): string | undefined => m[key];
+}
+
+/** A complete, valid cloudtasks configuration (the base for negative cases). */
+function fullCloudtasksEnv(): Record<string, string> {
+  return {
+    TASKS_BACKEND: 'cloudtasks',
+    TASKS_PROJECT: 'proj',
+    TASKS_LOCATION: 'us-central1',
+    TASKS_QUEUE: 'agent-q',
+    DISPATCH_URL: 'https://svc.run.app/internal/dispatch',
+    INTERNAL_TOKEN: 'sekret',
+    GITHUB_WEBHOOK_SECRET: 'hmac',
+  };
 }
 
 describe('config', () => {
@@ -278,5 +291,69 @@ describe('config: github app', () => {
     // Redaction is display-only: the real values stay readable on the object itself.
     expect(c.githubToken).toBe('ghp_supersecretpat');
     expect(c.githubAppPrivateKeyPem).toContain('PRIVATE KEY');
+  });
+});
+
+describe('config: execution transport (TASKS_BACKEND)', () => {
+  it('defaults to the in-process backend with a 30m deadline', () => {
+    const c = loadFrom(mapLookup({}));
+    expect(c.tasksBackend).toBe(TasksBackend.InProcess);
+    expect(c.tasksDispatchDeadlineMs).toBe(30 * 60 * 1000);
+  });
+
+  it('rejects an unknown backend', () => {
+    expect(() => loadFrom(mapLookup({ TASKS_BACKEND: 'kafka' }))).toThrow();
+  });
+
+  it('requires the full cloudtasks configuration', () => {
+    // Missing everything but the backend selector.
+    expect(() => loadFrom(mapLookup({ TASKS_BACKEND: 'cloudtasks' }))).toThrow();
+    // Drop one required key at a time from an otherwise-valid config.
+    for (const key of ['TASKS_LOCATION', 'TASKS_QUEUE', 'DISPATCH_URL', 'INTERNAL_TOKEN', 'GITHUB_WEBHOOK_SECRET']) {
+      const env = fullCloudtasksEnv();
+      delete env[key];
+      expect(() => loadFrom(mapLookup(env)), `missing ${key}`).toThrow();
+    }
+  });
+
+  it('rejects an insecure or mis-pathed DISPATCH_URL', () => {
+    // DISPATCH_URL must be an absolute https URL ending in /internal/dispatch — the task carries
+    // the Bearer token to it, so a plaintext / wrong-path target is rejected.
+    for (const bad of [
+      'http://svc.run.app/internal/dispatch', // plaintext
+      '/internal/dispatch', // relative
+      'not a url', // garbage
+      'https://svc.run.app/', // right scheme, wrong path
+    ]) {
+      const env = fullCloudtasksEnv();
+      env.DISPATCH_URL = bad;
+      expect(() => loadFrom(mapLookup(env)), bad).toThrow();
+    }
+  });
+
+  it('rejects an out-of-range dispatch deadline', () => {
+    // Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m.
+    for (const bad of ['10s', '45m']) {
+      const env = fullCloudtasksEnv();
+      env.TASKS_DISPATCH_DEADLINE = bad;
+      expect(() => loadFrom(mapLookup(env)), bad).toThrow();
+    }
+  });
+
+  it('loads a full cloudtasks configuration', () => {
+    const c = loadFrom(mapLookup(fullCloudtasksEnv()));
+    expect(c.tasksBackend).toBe(TasksBackend.CloudTasks);
+    expect(c.tasksProject).toBe('proj');
+    expect(c.tasksLocation).toBe('us-central1');
+    expect(c.tasksQueue).toBe('agent-q');
+    expect(c.dispatchUrl).toBe('https://svc.run.app/internal/dispatch');
+  });
+
+  it('falls back to GOOGLE_CLOUD_PROJECT for the tasks project', () => {
+    const env = fullCloudtasksEnv();
+    delete env.TASKS_PROJECT;
+    env.GOOGLE_CLOUD_PROJECT = 'ambient';
+    const c = loadFrom(mapLookup(env));
+    expect(c.tasksProject).toBe('ambient');
   });
 });

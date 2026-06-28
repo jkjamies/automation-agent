@@ -18,11 +18,12 @@ import { newSessionService } from '../../src/agent/setup/session';
 import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
 import { StaticProvider, newAppProvider, type TokenProvider } from '../../src/auth/auth';
-import { type Config, appMode, load } from '../../src/config/config';
+import { type Config, TasksBackend, appMode, load } from '../../src/config/config';
 import { Client } from '../../src/githubapi/client';
 import { sshCommand } from '../../src/gitrepo/repo';
 import { type Envelope } from '../../src/ingest/envelope';
 import { type Notifier, newNotifier } from '../../src/notify/notify';
+import { type DispatchFunc, InProcess, type Transport, newCloudTasks } from '../../src/tasks/index';
 import { Server } from '../../src/webhook/server';
 
 const log = {
@@ -46,6 +47,32 @@ function buildTokenProvider(cfg: Config): TokenProvider {
     return newAppProvider(cfg.githubAppId, cfg.githubAppInstallationId, cfg.githubAppPrivateKeyPem);
   }
   return new StaticProvider(cfg.githubToken);
+}
+
+/**
+ * Select the webhook execution transport: Cloud Tasks in production (durable, in-request,
+ * rate-limited by the queue) or the in-process task pool for local dev (the default). See
+ * `specs/20260626-workflow-execution-transport.md`.
+ */
+function buildTransport(cfg: Config, dispatch: DispatchFunc): Transport {
+  if (cfg.tasksBackend === TasksBackend.CloudTasks) {
+    log.info('execution transport: cloud tasks', {
+      project: cfg.tasksProject,
+      location: cfg.tasksLocation,
+      queue: cfg.tasksQueue,
+      dispatchUrl: cfg.dispatchUrl,
+    });
+    return newCloudTasks(
+      cfg.tasksProject,
+      cfg.tasksLocation,
+      cfg.tasksQueue,
+      cfg.dispatchUrl,
+      cfg.internalToken,
+      cfg.tasksDispatchDeadlineMs,
+    );
+  }
+  log.info('execution transport: in-process (local/default)');
+  return new InProcess(dispatch, log, MAX_CONCURRENT_DISPATCH);
 }
 
 function buildNotifier(cfg: Config): Notifier | null {
@@ -86,10 +113,9 @@ function buildSummary(
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// maxConcurrentDispatch bounds in-flight webhook/cron dispatches; drainTimeoutMs caps how
-// long shutdown waits for in-flight dispatches to finish before exiting anyway.
+// maxConcurrentDispatch bounds in-flight in-process dispatches (backpressure under burst); the
+// drain timeout lives inside the in-process transport.
 const MAX_CONCURRENT_DISPATCH = 32;
-const DRAIN_TIMEOUT_MS = 15_000;
 
 /** Adapt a raw-payload kickoff/resume to a root Handler. */
 function payloadHandler(fn: (raw: Buffer | string) => Promise<void>) {
@@ -194,40 +220,13 @@ async function run(): Promise<void> {
     log,
   });
 
-  const safeDispatch = async (e: Envelope): Promise<void> => {
-    try {
-      await dispatcher.dispatch(e);
-    } catch (err) {
-      log.error(`dispatch failed: kind=${e.kind} err=${(err as Error).message}`);
-    }
-  };
-
-  // Bounded, drainable dispatch pool. Webhook dispatches acquire a permit before the 202
-  // (backpressure under burst); every dispatch is tracked so a SIGTERM drains in-flight
-  // work instead of dropping it. (With the default `memory` backend, parked runs are not
-  // durable, so a restart strands them; a sqlite/firestore backend survives restart.)
-  let permits = MAX_CONCURRENT_DISPATCH;
-  const permitWaiters: Array<() => void> = [];
-  const acquire = (): Promise<void> => {
-    if (permits > 0) {
-      permits -= 1;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => permitWaiters.push(resolve));
-  };
-  const release = (): void => {
-    const next = permitWaiters.shift();
-    if (next) {
-      next(); // hand the permit directly to the next waiter
-    } else {
-      permits += 1;
-    }
-  };
-  const inFlight = new Set<Promise<void>>();
-  const track = (p: Promise<void>): void => {
-    inFlight.add(p);
-    void p.finally(() => inFlight.delete(p));
-  };
+  // Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
+  // in-process (default) on a bounded task pool drained on SIGTERM, or — in production — via
+  // Cloud Tasks, which delivers each envelope to /internal/dispatch so the compute runs
+  // in-request (CPU stays allocated) with durable retry. (With the default `memory` session
+  // backend, parked runs are not durable, so a restart strands them; a sqlite/firestore
+  // backend survives restart.) See specs/20260626-workflow-execution-transport.md.
+  const transport = buildTransport(cfg, (e: Envelope) => dispatcher.dispatch(e));
 
   // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
   // parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
@@ -255,13 +254,18 @@ async function run(): Promise<void> {
       'GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; the /webhooks/github route accepts unauthenticated requests (dev only)',
     );
   }
-  // Webhooks enqueue asynchronously and return fast; a permit bounds concurrency.
   const srv = new Server(
     async (e) => {
-      await acquire();
-      track(safeDispatch(e).finally(release));
+      await transport.enqueue(e);
     },
-    { secret: cfg.githubWebhookSecret, internalToken: cfg.internalToken, sweep },
+    {
+      secret: cfg.githubWebhookSecret,
+      internalToken: cfg.internalToken,
+      sweep,
+      // /internal/dispatch executes a queued envelope in-request (the Cloud Tasks worker).
+      dispatch: (e) => dispatcher.dispatch(e),
+      log,
+    },
   );
 
   const httpServer = srv.app.listen(Number(cfg.port), '0.0.0.0', () => {
@@ -279,24 +283,6 @@ async function run(): Promise<void> {
   httpServer.requestTimeout = 30_000;
   httpServer.keepAliveTimeout = 120_000;
 
-  // drain waits for in-flight dispatches to finish, bounded by DRAIN_TIMEOUT_MS, so a
-  // clean SIGTERM completes work in flight rather than abandoning it.
-  const drain = async (): Promise<void> => {
-    if (inFlight.size === 0) {
-      return;
-    }
-    const done = Promise.allSettled([...inFlight]).then(() => 'done' as const);
-    const timeout = new Promise<'timeout'>((resolve) => {
-      const t = setTimeout(() => resolve('timeout'), DRAIN_TIMEOUT_MS);
-      t.unref?.();
-    });
-    if ((await Promise.race([done, timeout])) === 'timeout') {
-      log.warn('drain timed out; exiting with work still in flight');
-    } else {
-      log.info('drained in-flight work');
-    }
-  };
-
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) {
@@ -305,7 +291,10 @@ async function run(): Promise<void> {
     shuttingDown = true;
     log.info('shutting down');
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    await drain();
+    // Close the transport after the server stops accepting: the in-process backend drains
+    // in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done before
+    // the park-store close so any draining dispatch still has its store.
+    await transport.close();
     // Release a durable park store's backing connection (a no-op for the memory backend).
     await parkStore.close();
   };
