@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +30,7 @@ import (
 	"automation-agent/internal/githubapi"
 	"automation-agent/internal/ingest"
 	"automation-agent/internal/notify"
+	"automation-agent/internal/tasks"
 	"automation-agent/internal/webhook"
 )
 
@@ -129,28 +129,26 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("build dispatcher: %w", err)
 	}
 
-	// Webhooks enqueue asynchronously and return fast. Dispatches run on a bounded pool
-	// and are tracked so a SIGTERM drains in-flight work instead of dropping it. (With a
-	// durable SESSION_BACKEND parked runs survive a restart; the default memory backend
-	// does not.)
-	var dispatchWG sync.WaitGroup
-	dispatchSem := make(chan struct{}, maxConcurrentDispatch)
+	// Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
+	// in-process (default) on a bounded goroutine pool drained on SIGTERM, or — in
+	// production — via Cloud Tasks, which delivers each envelope to /internal/dispatch so
+	// the compute runs in-request (CPU stays allocated) with durable retry. See
+	// specs/20260626-workflow-execution-transport.md.
+	transport, err := buildTransport(sigCtx, logger, cfg, dispatcher.Dispatch)
+	if err != nil {
+		return fmt.Errorf("build task transport: %w", err)
+	}
+
 	if cfg.GitHubWebhookSecret == "" {
 		logger.Warn("GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; the /webhooks/github route accepts unauthenticated requests (dev only)")
 	}
-	srv := webhook.New(func(_ context.Context, e ingest.Envelope) error {
-		dispatchSem <- struct{}{} // bound concurrency (backpressure under burst)
-		dispatchWG.Add(1)
-		go func() {
-			defer dispatchWG.Done()
-			defer func() { <-dispatchSem }()
-			if err := dispatcher.Dispatch(context.Background(), e); err != nil {
-				logger.Error("webhook dispatch failed", "kind", e.Kind, "err", err)
-			}
-		}()
-		return nil
-	}, webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
+	srv := webhook.New(
+		func(ctx context.Context, e ingest.Envelope) error { return transport.Enqueue(ctx, e) },
+		webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
 		webhook.WithInternalToken(cfg.InternalToken),
+		// /internal/dispatch executes a queued envelope in-request (the Cloud Tasks worker).
+		webhook.WithDispatch(dispatcher.Dispatch),
+		webhook.WithLogger(logger),
 		webhook.WithSweep(func(ctx context.Context) error {
 			// Sweep every engine even if one fails, so a single engine's error does not
 			// strand the others' timed-out runs for this pass (mirrors ciResumeHandler).
@@ -194,31 +192,30 @@ func run(logger *slog.Logger) error {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown", "err", err)
 	}
-	drain(logger, &dispatchWG, drainTimeout)
+	// Close the transport after the server stops accepting: the in-process backend drains
+	// in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done before
+	// the deferred session/park-store closers so any draining dispatch still has its stores.
+	if err := transport.Close(); err != nil {
+		logger.Error("transport close", "err", err)
+	}
 	return nil
 }
 
-// maxConcurrentDispatch bounds in-flight webhook dispatches; drainTimeout caps how long
-// shutdown waits for in-flight dispatches to finish.
-const (
-	maxConcurrentDispatch = 32
-	drainTimeout          = 15 * time.Second
-)
-
-// drain waits for in-flight webhook dispatches (wg) to finish, bounded by timeout, so a
-// clean SIGTERM completes work in flight rather than abandoning it.
-func drain(logger *slog.Logger, wg *sync.WaitGroup, timeout time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		logger.Info("drained in-flight work")
-	case <-time.After(timeout):
-		logger.Warn("drain timed out; exiting with work still in flight")
+// buildTransport selects the webhook execution transport: Cloud Tasks in production
+// (durable, in-request, rate-limited by the queue) or the in-process goroutine pool for
+// local dev (the default). See specs/20260626-workflow-execution-transport.md.
+func buildTransport(ctx context.Context, logger *slog.Logger, cfg config.Config, dispatch tasks.DispatchFunc) (tasks.Transport, error) {
+	if cfg.TasksBackend == config.TasksCloudTasks {
+		t, err := tasks.NewCloudTasks(ctx, cfg.TasksProject, cfg.TasksLocation, cfg.TasksQueue, cfg.DispatchURL, cfg.InternalToken, cfg.TasksDispatchDeadline)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info("execution transport: cloud tasks",
+			"project", cfg.TasksProject, "location", cfg.TasksLocation, "queue", cfg.TasksQueue, "dispatch_url", cfg.DispatchURL)
+		return t, nil
 	}
+	logger.Info("execution transport: in-process (local/default)")
+	return tasks.NewInProcess(dispatch, logger, tasks.DefaultMaxConcurrent), nil
 }
 
 // buildTokenProvider selects the GitHub auth path: App installation tokens in

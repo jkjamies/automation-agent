@@ -19,12 +19,13 @@ flowchart TD
     Eng --> Disp["root.BuildRootDispatcher(Deps{<br/>SummaryDaily,<br/>LintKickoff=lintEngine.Kickoff,<br/>CoverageKickoff=covEngine.Kickoff,<br/>CIResume=resume to every engine})"]
     Disp -->|err| Fatal
 
-    Disp --> Web["webhook.New(ingest -> go Dispatch,<br/>WithGitHubSecret, WithInternalToken,<br/>WithSweep -> engines.SweepTimeouts)"]
+    Disp --> Trans["buildTransport(cfg) -> tasks.Transport<br/>(TASKS_BACKEND: inprocess | cloudtasks)"]
+    Trans --> Web["webhook.New(ingest -> transport.Enqueue,<br/>WithGitHubSecret, WithInternalToken,<br/>WithDispatch -> dispatcher.Dispatch,<br/>WithSweep -> engines.SweepTimeouts)"]
     Web --> HTTP["http.Server{Addr ':'+Port, ReadHeaderTimeout 10s}"]
 
     HTTP --> Listen["go httpServer.ListenAndServe()"]
     Listen --> Block["<-sigCtx.Done() (block until signal)"]
-    Block --> Shutdown["httpServer.Shutdown(10s ctx)<br/>drain in-flight dispatches"]
+    Block --> Shutdown["httpServer.Shutdown(10s ctx)<br/>transport.Close() (drain / close client)"]
 ```
 
 1. Load `config`.
@@ -33,11 +34,17 @@ flowchart TD
    here via `setup.NewSessionService`/`setup.NewParkStore`), the notifier, the summary
    agent, and the lint-fixer and coverage-fixer `fixflow` engines (sharing one
    `fixflow.Deps`, incl. `CITimeout`, `SessionService`, `ParkStore`).
-3. Build the root dispatcher (summary / lint kickoff / coverage kickoff / CI resume),
-   then start the webhook HTTP server (`WithInternalToken` + `WithSweep` enabling the
-   `/internal/*` daily-cron + sweep hooks). The daily digest is driven by Cloud Scheduler
-   calling `POST /internal/cron/daily`; the service runs no internal timer.
-4. Block until shutdown (SIGINT/SIGTERM), then shut the server and drain in-flight dispatches.
+3. Build the root dispatcher (summary / lint kickoff / coverage kickoff / CI resume) and
+   the execution transport (`buildTransport` → `tasks.Transport`, selected by
+   `TASKS_BACKEND`), then start the webhook HTTP server. The webhook `IngestFunc`
+   **enqueues** on the transport and returns fast; `WithDispatch` wires
+   `dispatcher.Dispatch` to `/internal/dispatch` (the Cloud Tasks worker that runs the
+   workflow in-request); `WithInternalToken` + `WithSweep` enable the `/internal/*`
+   daily-cron + sweep hooks. The daily digest is driven by Cloud Scheduler calling
+   `POST /internal/cron/daily`; the service runs no internal timer.
+4. Block until shutdown (SIGINT/SIGTERM), then shut the server and `transport.Close()`
+   (the in-process backend drains in-flight dispatches; the Cloud Tasks backend closes its
+   client) before the deferred session/park-store closers.
 
 The fix loop's durability follows `SESSION_BACKEND`: suspend/resume runs on an ADK
 long-running `await_ci` tool + the injected `setup.ParkStore`, with a per-run

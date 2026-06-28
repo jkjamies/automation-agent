@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -22,13 +23,21 @@ type IngestFunc func(ctx context.Context, e ingest.Envelope) error
 // Driven by Cloud Scheduler via POST /internal/sweep.
 type SweepFunc func(ctx context.Context) error
 
+// DispatchFunc runs an envelope's workflow synchronously, in-request. It backs
+// POST /internal/dispatch, which the Cloud Tasks transport delivers to so the compute
+// runs on allocated CPU (unlike a post-202 background goroutine). It is
+// root.Dispatcher.Dispatch.
+type DispatchFunc func(ctx context.Context, e ingest.Envelope) error
+
 // Server routes webhook requests to an IngestFunc.
 type Server struct {
 	ingest        IngestFunc
 	secret        string
 	internalToken string
 	sweep         SweepFunc
+	dispatchFn    DispatchFunc
 	now           func() time.Time
+	log           *slog.Logger
 	mux           *http.ServeMux
 }
 
@@ -53,14 +62,31 @@ func WithSweep(fn SweepFunc) Option {
 	return func(s *Server) { s.sweep = fn }
 }
 
+// WithDispatch wires the synchronous, in-request executor invoked by POST /internal/dispatch
+// (the Cloud Tasks transport's worker endpoint). When unset, that endpoint returns 501.
+func WithDispatch(fn DispatchFunc) Option {
+	return func(s *Server) { s.dispatchFn = fn }
+}
+
 // WithClock injects a clock for deterministic ReceivedAt timestamps in tests.
 func WithClock(now func() time.Time) Option {
 	return func(s *Server) { s.now = now }
 }
 
+// WithLogger sets the logger used for non-fatal handler diagnostics (e.g. a poison
+// /internal/dispatch body that is acked rather than retried). A nil logger is ignored so
+// the non-nil default (slog.Default) is preserved — handleDispatch always has a logger.
+func WithLogger(log *slog.Logger) Option {
+	return func(s *Server) {
+		if log != nil {
+			s.log = log
+		}
+	}
+}
+
 // New builds a Server.
 func New(ingest IngestFunc, opts ...Option) *Server {
-	s := &Server{ingest: ingest, now: time.Now, mux: http.NewServeMux()}
+	s := &Server{ingest: ingest, now: time.Now, log: slog.Default(), mux: http.NewServeMux()}
 	for _, o := range opts {
 		o(s)
 	}

@@ -101,7 +101,14 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `FIRESTORE_COLLECTION` | `automation_agent` | prefix for `_sessions`, `_app_state`, `_user_state`, `_parked_runs` |
 | **Ingress / auth** | | |
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC for `/webhooks/*`; **blank locally = verification skipped (dev only)** |
-| `INTERNAL_TOKEN` | — | Bearer for `/internal/*`; blank = those routes are 404 |
+| `INTERNAL_TOKEN` | — | Bearer for `/internal/*` (cron, sweep, dispatch); blank = those routes are 404 |
+| **Execution transport (webhook → dispatcher)** | | |
+| `TASKS_BACKEND` | `inprocess` | `inprocess` (background goroutine pool — local) \| `cloudtasks` (Cloud Tasks → `/internal/dispatch`, in-request — prod) |
+| `TASKS_PROJECT` | `GOOGLE_CLOUD_PROJECT` | GCP project owning the queue; `cloudtasks` only |
+| `TASKS_LOCATION` | — | queue region (e.g. `us-central1`); **required** for `cloudtasks` |
+| `TASKS_QUEUE` | — | Cloud Tasks queue name; **required** for `cloudtasks` |
+| `DISPATCH_URL` | — | full URL of `/internal/dispatch` the queue POSTs to (must end in `/internal/dispatch`); **required** for `cloudtasks` |
+| `TASKS_DISPATCH_DEADLINE` | `30m` | explicit per-task dispatch deadline; range `15s`..`30m` (Cloud Tasks max), `cloudtasks` only |
 | **GitHub** | | |
 | `GITHUB_TOKEN` | `GH_TOKEN`, then `gh auth token` | PR create/label/compare (repo scope); blank reuses your local `gh` login. Also the `https` git transport. |
 | `GIT_TRANSPORT` | `https` | `https` (token) \| `ssh` (clone/push over ssh-agent/keys). **SSH only covers git transport — PR ops still need a token / `gh` login.** |

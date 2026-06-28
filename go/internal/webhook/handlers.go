@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"automation-agent/internal/ingest"
 )
@@ -22,6 +23,8 @@ func (s *Server) routes() {
 	// Cloud Scheduler ingress (Bearer-token auth; disabled unless INTERNAL_TOKEN is set).
 	s.mux.HandleFunc("POST /internal/cron/daily", s.handleCronDaily)
 	s.mux.HandleFunc("POST /internal/sweep", s.handleSweep)
+	// Cloud Tasks worker: executes a queued envelope in-request (same Bearer auth).
+	s.mux.HandleFunc("POST /internal/dispatch", s.handleDispatch)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -80,6 +83,49 @@ func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.sweep(r.Context()); err != nil {
 		http.Error(w, "sweep failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDispatch executes one queued envelope synchronously, in-request — the Cloud Tasks
+// transport's worker endpoint. Running in-request (not in a post-202 goroutine) keeps CPU
+// allocated on Cloud Run for the whole compute. Retry classification follows Cloud Tasks'
+// retry-on-non-2xx contract (spec §6): a transient failure (the dispatch returns an error —
+// LLM/network/Firestore) returns 500 so the queue retries with backoff; a permanent failure
+// (a malformed body or unknown kind, which a retry cannot fix) is acked with 200 and logged
+// so the queue drops the poison task instead of looping.
+func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
+	if !s.internalAuthenticated(w, r) {
+		return
+	}
+	if s.dispatchFn == nil {
+		http.Error(w, "dispatch not configured", http.StatusNotImplemented)
+		return
+	}
+	// The workflow runs synchronously in-request and can take many minutes (LLM compute) —
+	// far longer than the server's WriteTimeout, which is sized for the fast webhook handlers.
+	// Clear this connection's write deadline so a slow-but-successful dispatch still delivers
+	// its 2xx; otherwise the lost response makes Cloud Tasks retry already-completed work. The
+	// Cloud Tasks dispatch deadline and Cloud Run's request timeout remain the real bounds.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		s.log.Warn("could not clear dispatch write deadline; a long workflow may lose its response", "err", err)
+	}
+	body, ok := s.readBody(w, r)
+	if !ok {
+		return
+	}
+	e, err := ingest.Decode(body)
+	if err != nil {
+		// Permanent: ack so Cloud Tasks does not redeliver a poison payload.
+		s.log.Warn("dropping undecodable dispatch task", "err", err)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err := s.dispatchFn(r.Context(), e); err != nil {
+		// Transient: let Cloud Tasks retry with backoff.
+		s.log.Error("dispatch failed", "kind", e.Kind, "source", e.Source, "err", err)
+		http.Error(w, "dispatch failed", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
