@@ -23,6 +23,11 @@ dependencies = [
     # Firestore client for the cloud park store + adk's native FirestoreSessionService
     # (SESSION_BACKEND=firestore). adk lazy-imports it; we depend on it directly.
     "google-cloud-firestore>=2.16.0",
+    # Cloud Tasks client for the production execution transport (TASKS_BACKEND=cloudtasks):
+    # webhook ingress enqueues an HTTP-target task that POSTs the envelope to
+    # /internal/dispatch, so the workflow runs in-request on allocated CPU. See
+    # specs/20260626-workflow-execution-transport.md.
+    "google-cloud-tasks>=2.16.0",
 ]
 
 [build-system]

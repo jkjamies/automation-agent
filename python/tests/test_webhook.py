@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from automation_agent.ingest import Envelope, Kind
+from automation_agent.ingest import Envelope, Kind, encode, new
 from automation_agent.webhook import Server, verify_signature
 
 
@@ -179,7 +180,7 @@ def test_internal_endpoints_disabled_without_token() -> None:
     # No internal_token -> the endpoints are off (404), never open by default.
     c = Capture()
     client = TestClient(Server(c.ingest).app)
-    for path in ("/internal/cron/daily", "/internal/sweep"):
+    for path in ("/internal/cron/daily", "/internal/sweep", "/internal/dispatch"):
         assert client.post(path).status_code == 404
     assert c.env is None
 
@@ -228,4 +229,76 @@ def test_internal_sweep_error_is_500() -> None:
 
     client = TestClient(Server(Capture().ingest, internal_token="s3cret", sweep=_boom).app)
     resp = client.post("/internal/sweep", headers=_bearer("s3cret"))
+    assert resp.status_code == 500
+
+
+# --- /internal/dispatch (Cloud Tasks worker) ---------------------------------
+
+
+class DispatchRecorder:
+    """Captures the envelope passed to a dispatch executor; optionally raises to assert retry
+    classification."""
+
+    def __init__(self, err: Exception | None = None) -> None:
+        self.env: Envelope | None = None
+        self.called = False
+        self.err = err
+
+    async def dispatch(self, e: Envelope) -> None:
+        self.called = True
+        self.env = e
+        if self.err is not None:
+            raise self.err
+
+
+def _encoded(kind: Kind = Kind.CI, payload: bytes = b'{"x":1}') -> bytes:
+    return encode(new(kind, "webhook:/github", payload, datetime.fromtimestamp(0, tz=UTC)))
+
+
+def test_internal_dispatch_executes() -> None:
+    # An authorized /internal/dispatch with a valid envelope body executes it in-request (200).
+    d = DispatchRecorder()
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret", dispatch=d.dispatch).app)
+    resp = client.post("/internal/dispatch", content=_encoded(), headers=_bearer("s3cret"))
+    assert resp.status_code == 200
+    assert d.called
+    assert d.env is not None and d.env.kind == Kind.CI
+
+
+def test_internal_dispatch_requires_bearer() -> None:
+    # /internal/dispatch requires a Bearer credential like the other internal endpoints.
+    d = DispatchRecorder()
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret", dispatch=d.dispatch).app)
+    resp = client.post("/internal/dispatch", content="{}", headers=_bearer("wrong"))
+    assert resp.status_code == 401
+    assert not d.called
+
+
+def test_internal_dispatch_not_configured_is_501() -> None:
+    # internal_token set but no dispatch executor wired -> 501 (auth still required first).
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret").app)
+    assert client.post("/internal/dispatch").status_code == 401  # auth first
+    assert client.post("/internal/dispatch", headers=_bearer("s3cret")).status_code == 501
+
+
+def test_internal_dispatch_poison_body_is_acked() -> None:
+    # A poison body (malformed / unknown kind) is acked with 200 so Cloud Tasks drops it
+    # instead of retrying forever; the dispatch executor is never called (spec §6).
+    for body in (b"not json", b'{"kind":"jira","source":"x"}'):
+        d = DispatchRecorder()
+        client = TestClient(
+            Server(Capture().ingest, internal_token="s3cret", dispatch=d.dispatch).app
+        )
+        resp = client.post("/internal/dispatch", content=body, headers=_bearer("s3cret"))
+        assert resp.status_code == 200, f"body {body!r}: want 200 (acked, not retried)"
+        assert not d.called, f"body {body!r}: dispatch ran on a poison payload"
+
+
+def test_internal_dispatch_transient_error_is_500() -> None:
+    # A transient dispatch error returns 500 so Cloud Tasks retries with backoff (spec §6).
+    d = DispatchRecorder(err=RuntimeError("llm timeout"))
+    client = TestClient(Server(Capture().ingest, internal_token="s3cret", dispatch=d.dispatch).app)
+    resp = client.post(
+        "/internal/dispatch", content=_encoded(Kind.LINT, b"{}"), headers=_bearer("s3cret")
+    )
     assert resp.status_code == 500

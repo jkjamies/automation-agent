@@ -23,7 +23,16 @@ flowchart TD
     R -->|ci| D4[resume lint/coverage fixer]
 ```
 
-- `envelope.py` — `Envelope`, `Kind`, and `new(...)`.
+- `envelope.py` — `Envelope`, `Kind`, `new(...)`, and the `encode`/`decode` wire codec.
 
 Adding a new ingress (e.g. Jira) means adding a `Kind` here and a handler that emits
 an `Envelope` — the root agent's routing is the only other place that changes.
+
+## Wire codec
+
+`encode`/`decode` are the envelope's JSON wire form, used when it crosses the Cloud Tasks
+boundary (`automation_agent/tasks` → `POST /internal/dispatch`). The form — `kind`/`source`
+strings, `received_at` RFC 3339, `payload` standard base64 string — is an external contract
+and must stay byte-identical across all four language ports. `decode` rejects an unknown
+`Kind` (and bad base64) as a permanent (poison) error so the worker acks rather than retries
+it. The in-process transport passes the object directly and never touches the codec.

@@ -8,12 +8,26 @@ from automation_agent.config import (
     NotifyProvider,
     Provider,
     SessionBackend,
+    TasksBackend,
     load_from,
 )
 
 
 def map_lookup(m: dict[str, str]):
     return m.get
+
+
+def full_cloudtasks_env() -> dict[str, str]:
+    """A complete, valid cloudtasks configuration (the base for negative cases)."""
+    return {
+        "TASKS_BACKEND": "cloudtasks",
+        "TASKS_PROJECT": "proj",
+        "TASKS_LOCATION": "us-central1",
+        "TASKS_QUEUE": "agent-q",
+        "DISPATCH_URL": "https://svc.run.app/internal/dispatch",
+        "INTERNAL_TOKEN": "sekret",
+        "GITHUB_WEBHOOK_SECRET": "hmac",
+    }
 
 
 def test_load_defaults() -> None:
@@ -130,3 +144,77 @@ def test_invalid_port_non_numeric() -> None:
 def test_invalid_port_out_of_range() -> None:
     with pytest.raises(ValueError):
         load_from(map_lookup({"PORT": "70000"}))
+
+
+# --- Execution transport (TASKS_BACKEND) -------------------------------------
+
+
+def test_tasks_backend_defaults_inprocess() -> None:
+    c = load_from(map_lookup({}))
+    assert c.tasks_backend == TasksBackend.INPROCESS
+    assert c.tasks_dispatch_deadline.total_seconds() == 30 * 60
+
+
+def test_invalid_tasks_backend() -> None:
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"TASKS_BACKEND": "kafka"}))
+
+
+def test_cloudtasks_requires_settings() -> None:
+    # Missing everything but the backend selector.
+    with pytest.raises(ValueError):
+        load_from(map_lookup({"TASKS_BACKEND": "cloudtasks"}))
+    # Drop one required key at a time from an otherwise-valid config.
+    for key in (
+        "TASKS_LOCATION",
+        "TASKS_QUEUE",
+        "DISPATCH_URL",
+        "INTERNAL_TOKEN",
+        "GITHUB_WEBHOOK_SECRET",
+    ):
+        env = full_cloudtasks_env()
+        del env[key]
+        with pytest.raises(ValueError):
+            load_from(map_lookup(env))
+
+
+def test_cloudtasks_rejects_insecure_dispatch_url() -> None:
+    # DISPATCH_URL must be an absolute https URL ending in /internal/dispatch — the task
+    # carries the Bearer token to it, so a plaintext / wrong-path target is rejected.
+    for bad in (
+        "http://svc.run.app/internal/dispatch",  # plaintext
+        "/internal/dispatch",  # relative
+        "not a url",  # garbage
+        "https://svc.run.app/",  # right scheme, wrong path
+    ):
+        env = full_cloudtasks_env()
+        env["DISPATCH_URL"] = bad
+        with pytest.raises(ValueError):
+            load_from(map_lookup(env))
+
+
+def test_cloudtasks_rejects_out_of_range_deadline() -> None:
+    # Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m.
+    for bad in ("10s", "45m"):
+        env = full_cloudtasks_env()
+        env["TASKS_DISPATCH_DEADLINE"] = bad
+        with pytest.raises(ValueError):
+            load_from(map_lookup(env))
+
+
+def test_cloudtasks_full_config() -> None:
+    c = load_from(map_lookup(full_cloudtasks_env()))
+    assert c.tasks_backend == TasksBackend.CLOUDTASKS
+    assert c.tasks_project == "proj"
+    assert c.tasks_location == "us-central1"
+    assert c.tasks_queue == "agent-q"
+    assert c.dispatch_url == "https://svc.run.app/internal/dispatch"
+
+
+def test_tasks_project_falls_back_to_google_cloud_project() -> None:
+    # TASKS_PROJECT falls back to GOOGLE_CLOUD_PROJECT (the ambient Cloud Run var).
+    env = full_cloudtasks_env()
+    del env["TASKS_PROJECT"]
+    env["GOOGLE_CLOUD_PROJECT"] = "ambient"
+    c = load_from(map_lookup(env))
+    assert c.tasks_project == "ambient"
