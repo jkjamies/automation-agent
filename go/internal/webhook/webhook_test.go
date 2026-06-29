@@ -76,12 +76,53 @@ func TestGitHubSignatureValid(t *testing.T) {
 	body := `{"action":"completed"}`
 	rec := do(t, s, http.MethodPost, "/webhooks/github", body, map[string]string{
 		"X-Hub-Signature-256": sign("topsecret", body),
+		"X-GitHub-Event":      "check_run",
 	})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
 	if c.env.Kind != ingest.KindCI {
 		t.Errorf("kind = %q, want ci", c.env.Kind)
+	}
+}
+
+// A pull_request delivery is the reviewer's native-event kickoff (X-GitHub-Event routes it
+// to KindReview, distinct from check_run → KindCI on the same /webhooks/github URL).
+func TestGitHubPullRequestRoutesToReview(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest)
+	body := `{"action":"opened"}`
+	rec := do(t, s, http.MethodPost, "/webhooks/github", body, map[string]string{
+		"X-GitHub-Event": "pull_request",
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if c.env.Kind != ingest.KindReview {
+		t.Errorf("kind = %q, want review", c.env.Kind)
+	}
+	if c.env.Source != "webhook:/github" || string(c.env.Payload) != body {
+		t.Errorf("envelope = %+v", c.env)
+	}
+}
+
+// An event we don't act on (e.g. ping, or one we don't route) is acknowledged with 200 and
+// not dispatched, so GitHub records a successful delivery.
+func TestGitHubUnroutedEventIsAckedNotDispatched(t *testing.T) {
+	for _, event := range []string{"ping", "issues", ""} {
+		c := &capture{}
+		s := New(c.ingest)
+		headers := map[string]string{}
+		if event != "" {
+			headers["X-GitHub-Event"] = event
+		}
+		rec := do(t, s, http.MethodPost, "/webhooks/github", `{}`, headers)
+		if rec.Code != http.StatusOK {
+			t.Errorf("event %q: status = %d, want 200", event, rec.Code)
+		}
+		if c.env.Kind != "" {
+			t.Errorf("event %q: dispatched %q, want no dispatch", event, c.env.Kind)
+		}
 	}
 }
 
@@ -99,7 +140,9 @@ func TestGitHubSignatureInvalid(t *testing.T) {
 func TestGitHubNoSecretSkipsVerification(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest) // no secret
-	rec := do(t, s, http.MethodPost, "/webhooks/github", `{}`, nil)
+	rec := do(t, s, http.MethodPost, "/webhooks/github", `{}`, map[string]string{
+		"X-GitHub-Event": "check_run",
+	})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}

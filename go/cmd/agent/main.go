@@ -22,6 +22,7 @@ import (
 	"automation-agent/internal/agent/covfixer"
 	"automation-agent/internal/agent/fixflow"
 	"automation-agent/internal/agent/lintfixer"
+	"automation-agent/internal/agent/reviewer"
 	"automation-agent/internal/agent/root"
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/agent/summary"
@@ -118,11 +119,16 @@ func run(logger *slog.Logger) error {
 	covEngine := covfixer.NewEngine(fixDeps)
 	engines := []*fixflow.Engine{lintEngine, covEngine}
 
+	// PR code-review agent (reacts to pull_request → KindReview). Always registered; the
+	// engine no-ops unless REVIEW_ENABLED is set, so REVIEW_ENABLED is the kill switch.
+	reviewEngine := reviewer.NewEngine(reviewer.Deps{Enabled: cfg.ReviewEnabled, Log: logger})
+
 	dispatcher, err := root.BuildRootDispatcher(root.Deps{
 		SummaryDaily:    summaryDaily,
 		LintKickoff:     payloadHandler(lintEngine.Kickoff),
 		CoverageKickoff: payloadHandler(covEngine.Kickoff),
 		CIResume:        ciResumeHandler(engines),
+		ReviewKickoff:   payloadHandler(reviewEngine.Kickoff),
 		Log:             logger,
 	})
 	if err != nil {

@@ -18,12 +18,13 @@ const (
 	KindLint      Kind = "lint"       // agnostic lint payload -> lint-fixer
 	KindCoverage  Kind = "coverage"   // agnostic coverage payload -> coverage-fixer
 	KindCI        Kind = "ci"         // GitHub check_run -> resume lint/coverage fixer
+	KindReview    Kind = "review"     // GitHub pull_request -> PR code-review agent
 )
 
 // Valid reports whether k is a recognized ingest kind.
 func (k Kind) Valid() bool {
 	switch k {
-	case KindCronDaily, KindLint, KindCoverage, KindCI:
+	case KindCronDaily, KindLint, KindCoverage, KindCI, KindReview:
 		return true
 	default:
 		return false

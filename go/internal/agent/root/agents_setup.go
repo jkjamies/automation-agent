@@ -20,12 +20,13 @@ type Deps struct {
 	LintKickoff     Handler     // KindLint
 	CoverageKickoff Handler     // KindCoverage
 	CIResume        Handler     // KindCI (dispatched to all fix engines)
+	ReviewKickoff   Handler     // KindReview (PR code-review agent)
 	Log             *slog.Logger
 }
 
 // BuildRootDispatcher builds the dispatcher and registers the available workflows:
 // KindCronDaily → summary; KindLint → lint-fixer; KindCoverage → coverage-fixer;
-// KindCI → resume (all fix engines).
+// KindCI → resume (all fix engines); KindReview → PR code-review agent.
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	disp := NewDispatcher(d.Log)
 
@@ -42,6 +43,9 @@ func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
 	}
 	if d.CIResume != nil {
 		disp.Register(ingest.KindCI, d.CIResume)
+	}
+	if d.ReviewKickoff != nil {
+		disp.Register(ingest.KindReview, d.ReviewKickoff)
 	}
 	return disp, nil
 }

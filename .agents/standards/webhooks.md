@@ -7,28 +7,33 @@ truth that the code must agree with. For the CI-author how-to (workflow YAML, si
 per-stack examples) see [`ci-integration.md`](ci-integration.md); for the why, see
 [`architecture-design.md`](architecture-design.md) §8.
 
-## Two entry doors
+## Entry doors
 
-Every fixer workflow (lint, coverage, …) is driven by two different events that arrive
-through two different doors:
+Work arrives through three door patterns:
 
-- **Kickoff — a *custom* webhook you control.** Your CI job `POST`s a trusted envelope
-  (`{repo, base, report}`) to a **per-workflow** route. You choose the URL and the payload
-  shape. HMAC-authenticated with `GITHUB_WEBHOOK_SECRET` when one is set.
-- **Resume — GitHub's *native* `check_run` event.** When the agent's verify check completes
-  on the PR it opened, GitHub delivers a `check_run` event. A GitHub App has a **single
-  webhook URL**, so *every* workflow's resume lands on the one `/webhooks/github` route. The
-  agent fans the event to each engine; an engine no-ops unless the incoming check name equals
-  its own `CheckName`.
+- **Custom-route kickoff — a webhook you control.** A CI job `POST`s a trusted envelope
+  (`{repo, base, report}`) to a **per-workflow** route (lint, coverage). You choose the URL
+  and the payload shape. HMAC-authenticated with `GITHUB_WEBHOOK_SECRET` when one is set.
+- **Native `check_run` resume.** When a fixer's verify check completes on the PR it opened,
+  GitHub delivers a `check_run` event. A GitHub App has a **single webhook URL**, so *every*
+  workflow's resume lands on the one `/webhooks/github` route. The agent fans the event to
+  each engine; an engine no-ops unless the incoming check name equals its own `CheckName`.
+- **Native-event kickoff (the reviewer).** The PR code-review agent's kickoff is itself a
+  **native GitHub event** (`pull_request`), not a custom route — the App delivers it to the
+  same `/webhooks/github` URL. The handler routes by the `X-GitHub-Event` header:
+  `pull_request` → `KindReview` (kick off a review), `check_run` → `KindCI` (resume a fixer).
+  Any other event is acknowledged (200) and ignored. So one URL carries both a kickoff and a
+  resume, told apart by the event header.
 
 ```mermaid
 flowchart LR
     CI[Your CI job] -->|POST /webhooks/lint  custom| K[Kickoff: new session]
-    GH[GitHub check_run] -->|POST /webhooks/github  native| R[Resume: match by CheckName]
+    GH1[GitHub check_run] -->|POST /webhooks/github  X-GitHub-Event: check_run| R[Resume: match by CheckName]
+    GH2[GitHub pull_request] -->|POST /webhooks/github  X-GitHub-Event: pull_request| RV[Review: KindReview]
 ```
 
-So kickoff routing is **per-workflow (by URL)**; resume routing is **shared (one URL, matched
-by check name)**.
+So kickoff routing is **per-workflow** — by URL for the fixers, by `X-GitHub-Event` for the
+reviewer; `check_run` resume routing is **shared** (one URL, matched by check name).
 
 ## Kickoff routes
 
@@ -36,6 +41,20 @@ by check name)**.
 |---|---|---|---|---|
 | Lint | `POST /webhooks/lint` | `KindLint` | `automation-agent/lint-fix` | `automation-agent` |
 | Coverage | `POST /webhooks/coverage` | `KindCoverage` | `automation-agent/test-coverage` | `automation-agent` |
+
+## Native-event routes (on `/webhooks/github`)
+
+These arrive on the single App webhook URL and are routed by the `X-GitHub-Event` header.
+
+| Workflow | `X-GitHub-Event` | ingest `Kind` | Notes |
+|---|---|---|---|
+| Reviewer | `pull_request` | `KindReview` | Native-event kickoff. Comment-only; opens no PR/branch. |
+| Fixer resume | `check_run` | `KindCI` | Resume routing matches by `CheckName` (see below). |
+
+The reviewer publishes its own advisory **`agent-review`** check — an *agent-published,
+human-consumed* check (distinct from the fixers' `agent-*-verify` checks, which the agent
+*reads* to resume). That check and its registry row land when the reviewer's publish path
+ships; it must still be globally unique and identical across all four ports.
 
 ## Resume check names (`check_run`)
 
