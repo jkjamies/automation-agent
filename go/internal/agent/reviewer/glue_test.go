@@ -39,6 +39,20 @@ func TestDedupe(t *testing.T) {
 		}
 	})
 
+	t.Run("same line across lenses collapses", func(t *testing.T) {
+		in := []Finding{
+			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMajor, Confidence: 0.5},
+			{File: "a.go", Line: 1, Dimension: DimPerformance, Message: "issue", Severity: SeverityCritical, Confidence: 0.5},
+		}
+		got := dedupe(in)
+		if len(got) != 1 {
+			t.Fatalf("got %d, want 1 (cross-lens dedup must ignore dimension)", len(got))
+		}
+		if got[0].Severity != SeverityCritical {
+			t.Errorf("kept severity %q, want critical", got[0].Severity)
+		}
+	})
+
 	t.Run("severity tie broken by confidence", func(t *testing.T) {
 		in := []Finding{
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMajor, Confidence: 0.6},

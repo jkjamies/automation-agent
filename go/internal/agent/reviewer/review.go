@@ -115,7 +115,11 @@ func (e *Engine) runGlue(ctx context.Context, diff string, prior []Finding) ([]F
 func formatDiff(files []githubapi.PRFile) string {
 	var b strings.Builder
 	for _, f := range files {
-		fmt.Fprintf(&b, "### %s (%s)\n", f.Path, f.Status)
+		if f.Status == "renamed" && f.PreviousPath != "" {
+			fmt.Fprintf(&b, "### %s (renamed from %s)\n", f.Path, f.PreviousPath)
+		} else {
+			fmt.Fprintf(&b, "### %s (%s)\n", f.Path, f.Status)
+		}
 		if strings.TrimSpace(f.Patch) == "" {
 			b.WriteString("(no textual diff available)\n\n")
 			continue

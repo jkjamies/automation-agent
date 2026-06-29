@@ -12,7 +12,7 @@ comment on style, performance, security, or tests — other reviewers cover thos
 
 Output **only** a JSON array of findings (no prose, no markdown fences). Each finding:
 
-```
+```json
 {
   "file": "path/to/file",      // a file path from the diff
   "line": 123,                  // best-guess line in the new file; 0 if unknown

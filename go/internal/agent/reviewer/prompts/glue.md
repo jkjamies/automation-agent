@@ -14,7 +14,7 @@ they are handled. Reason over the whole diff, not a single file.
 
 Output **only** a JSON array of findings (no prose, no markdown fences). Each finding:
 
-```
+```json
 {
   "file": "path/to/file",
   "line": 123,

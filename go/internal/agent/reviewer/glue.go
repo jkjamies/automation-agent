@@ -21,7 +21,7 @@ func dropLowConfidence(findings []Finding, min float64) []Finding {
 	return out
 }
 
-// dedupe collapses findings that share a fingerprint (same file+line+dimension+message),
+// dedupe collapses findings that share a fingerprint (same file+line+message, across lenses),
 // keeping the one with the worst severity (ties broken by higher confidence). The glue pass's
 // job of removing the same line flagged by multiple lenses (spec Decision 7/3) is done here
 // deterministically. Input order is otherwise preserved.

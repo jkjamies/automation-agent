@@ -9,7 +9,7 @@ only raise something if it is clearly useful.
 
 Output **only** a JSON array of findings (no prose, no markdown fences). Each finding:
 
-```
+```json
 {
   "file": "path/to/file",
   "line": 123,

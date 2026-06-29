@@ -105,9 +105,10 @@ type Finding struct {
 }
 
 // fingerprint identifies a finding across re-reviews for reconciliation (spec Decision 11) and
-// for cross-lens dedup: file + line + dimension + a normalized message.
+// for cross-lens dedup: file + line + a normalized message. Dimension is deliberately omitted so
+// the same line/message surfaced by two different lenses collapses to one finding.
 func (f Finding) fingerprint() string {
-	return fmt.Sprintf("%s:%d:%s:%s", f.File, f.Line, f.Dimension, normalizeMessage(f.Message))
+	return fmt.Sprintf("%s:%d:%s", f.File, f.Line, normalizeMessage(f.Message))
 }
 
 // normalizeMessage lowercases and collapses internal whitespace so trivially different
