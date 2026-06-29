@@ -7,6 +7,7 @@ package githubapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,28 +26,47 @@ const httpTimeout = 30 * time.Second
 // one client serves many repositories.
 type Client struct {
 	gh *github.Client
+	// authoredLogin is the GitHub login this client authors content as ("<slug>[bot]" in App
+	// mode, the user login in PAT mode), resolved by the caller. When known, UpsertMarkerComment
+	// edits only comments by this login — the authoritative ownership signal. Empty when identity
+	// could not be resolved, in which case appAuthored selects a safe fallback.
+	authoredLogin string
 	// appAuthored is true when the REST token comes from a GitHub App installation, so this
-	// client's own issue comments are authored by the app's "<slug>[bot]" user (type "Bot").
-	// UpsertMarkerComment uses it to edit only comments the app could have authored, never a
-	// foreign comment that merely echoes the marker (GitHub rejects editing another author's
-	// comment). PAT/anonymous mode posts as a human user, where this signal does not apply.
+	// client's own issue comments are authored by a bot user (type "Bot"). It is the fallback
+	// ownership signal when authoredLogin is unknown: an in-place edit is then restricted to
+	// bot-authored comments rather than any comment echoing the marker (GitHub rejects editing a
+	// comment the client did not author). PAT/anonymous mode posts as a human, where this signal
+	// does not apply.
 	appAuthored bool
+}
+
+// Option configures a Client at construction.
+type Option func(*Client)
+
+// WithAuthoredLogin sets the login this client authors content as, so UpsertMarkerComment can edit
+// only the comments it actually posted. An empty login leaves ownership to the author-type
+// fallback (see ownsComment).
+func WithAuthoredLogin(login string) Option {
+	return func(c *Client) { c.authoredLogin = login }
 }
 
 // New builds a Client whose every REST request is authenticated by a fresh token
 // from the provider (a static PAT, or an auto-refreshed App installation token).
 // A StaticProvider holding an empty token yields an unauthenticated client (fine
 // for public reads and tests).
-func New(provider auth.TokenProvider) *Client {
+func New(provider auth.TokenProvider, opts ...Option) *Client {
 	gh := github.NewClient(&http.Client{
 		Timeout:   httpTimeout,
 		Transport: auth.NewRoundTripper(nil, provider),
 	})
 	// An App installation token posts comments as the app's bot user; a PAT posts as a human.
-	// This distinguishes the two so the marker upsert can scope in-place edits to its own
-	// comments (see ownsComment).
+	// This distinguishes the two for the marker-upsert ownership fallback (see ownsComment).
 	_, appAuthored := provider.(*auth.AppProvider)
-	return &Client{gh: gh, appAuthored: appAuthored}
+	c := &Client{gh: gh, appAuthored: appAuthored}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Commit is a minimal commit projection for digests.
@@ -146,12 +166,20 @@ func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, nu
 			return fmt.Errorf("list comments %s/%s#%d: %w", owner, repo, number, err)
 		}
 		for _, ic := range comments {
-			if strings.Contains(ic.GetBody(), marker) && c.ownsComment(ic) {
-				if _, _, err := c.gh.Issues.EditComment(ctx, owner, repo, ic.GetID(), &github.IssueComment{Body: ptr(body)}); err != nil {
-					return fmt.Errorf("edit comment %s/%s#%d: %w", owner, repo, number, err)
-				}
-				return nil
+			if !strings.Contains(ic.GetBody(), marker) || !c.ownsComment(ic) {
+				continue
 			}
+			if _, _, err := c.gh.Issues.EditComment(ctx, owner, repo, ic.GetID(), &github.IssueComment{Body: ptr(body)}); err != nil {
+				// With a known login the match is authoritative, so any edit failure is a real
+				// error. On the weak author-type fallback (identity unresolved) the match can be a
+				// foreign bot that merely echoes the marker; a 403/404 there means "not ours", so
+				// skip it and fall through to create rather than fail the whole publish.
+				if c.authoredLogin == "" && isHTTPStatus(err, http.StatusForbidden, http.StatusNotFound) {
+					continue
+				}
+				return fmt.Errorf("edit comment %s/%s#%d: %w", owner, repo, number, err)
+			}
+			return nil
 		}
 		if resp == nil || resp.NextPage == 0 {
 			break
@@ -164,16 +192,36 @@ func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, nu
 	return nil
 }
 
-// ownsComment reports whether this client could have authored ic — the precondition for editing
-// it in place. In App mode only the app's bot user qualifies, so a foreign comment that merely
-// echoes the marker (e.g. a human quoting it) is skipped and a fresh comment is created rather
-// than attempting an edit GitHub would reject. In PAT/anonymous mode (local-dev) the marker alone
-// is trusted, since there is no distinct bot identity to match against.
+// ownsComment reports whether this client authored ic — the precondition for editing it in place
+// (GitHub rejects editing a comment the client did not author). When the client's own login is
+// known it is the authoritative check: only a byte-for-byte login match is owned, so a foreign
+// comment — even another bot's — that merely echoes the marker is skipped and a fresh comment is
+// created instead. When the login is unknown (identity could not be resolved), it falls back to
+// author type: App mode trusts only bot-authored comments; PAT/anonymous (local-dev) trusts the
+// marker alone, since there is no distinct identity to match against.
 func (c *Client) ownsComment(ic *github.IssueComment) bool {
-	if !c.appAuthored {
-		return true
+	if c.authoredLogin != "" {
+		return ic.GetUser().GetLogin() == c.authoredLogin
 	}
-	return ic.GetUser().GetType() == "Bot"
+	if c.appAuthored {
+		return ic.GetUser().GetType() == "Bot"
+	}
+	return true
+}
+
+// isHTTPStatus reports whether err is (or wraps) a GitHub API error with one of the given HTTP
+// status codes.
+func isHTTPStatus(err error, codes ...int) bool {
+	var ge *github.ErrorResponse
+	if !errors.As(err, &ge) || ge.Response == nil {
+		return false
+	}
+	for _, code := range codes {
+		if ge.Response.StatusCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckRunInput describes the advisory agent-review check run (spec Decision 15): always
