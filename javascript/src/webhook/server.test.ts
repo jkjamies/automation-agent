@@ -1,8 +1,9 @@
 // Tests for the webhook HTTP server using supertest against the express app.
 import { createHmac } from 'node:crypto';
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import * as envelopeModule from '../ingest/envelope';
 import { type Envelope, Kind, encode, newEnvelope } from '../ingest/envelope';
 import { MAX_BODY_BYTES, Server, verifySignature } from './server';
 
@@ -335,6 +336,33 @@ describe('webhook server', () => {
           .set('Content-Type', 'application/json')
           .send(ENV);
         expect(resp.status).toBe(500);
+      });
+
+      it('-> 500 on an unexpected (non-poison) decode error so a bug is not masked as poison', async () => {
+        // A poison body throws DecodeError (acked 200); an unexpected throw must instead surface as
+        // a retried 500 rather than being silently dropped. Force the non-DecodeError branch.
+        const spy = vi.spyOn(envelopeModule, 'decode').mockImplementation(() => {
+          throw new Error('unexpected boom');
+        });
+        try {
+          let called = false;
+          const c = new Capture();
+          const srv = new Server(c.ingest, {
+            internalToken: TOKEN,
+            dispatch: async () => {
+              called = true;
+            },
+          }).app;
+          const resp = await request(srv)
+            .post('/internal/dispatch')
+            .set('Authorization', bearer)
+            .set('Content-Type', 'application/json')
+            .send(ENV);
+          expect(resp.status).toBe(500);
+          expect(called).toBe(false); // never reached the dispatcher
+        } finally {
+          spy.mockRestore();
+        }
       });
     });
   });

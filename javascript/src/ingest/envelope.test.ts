@@ -1,6 +1,6 @@
 // Tests for the ingest envelope, Kind, and the wire codec.
 import { describe, expect, it } from 'vitest';
-import { decode, encode, Kind, kindValid, newEnvelope } from './envelope';
+import { DecodeError, decode, encode, Kind, kindValid, newEnvelope } from './envelope';
 
 describe('ingest', () => {
   it('recognizes valid kinds', () => {
@@ -56,6 +56,12 @@ describe('wire codec', () => {
   it('rejects an unknown kind at encode', () => {
     const bad = { kind: 'jira', source: 's', receivedAt: new Date(0), payload: Buffer.alloc(0) };
     expect(() => encode(bad as never)).toThrow(/unknown kind/);
+  });
+
+  it('signals poison with the typed DecodeError (so the worker can tell poison from a real bug)', () => {
+    expect(() => decode('{"kind":"jira"}')).toThrow(DecodeError);
+    expect(() => decode(Buffer.from('not json'))).toThrow(DecodeError);
+    expect(() => decode('{"kind":"ci","source":"x","payload":"aGk"}')).toThrow(DecodeError);
   });
 
   it('rejects malformed bodies as poison', () => {
