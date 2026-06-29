@@ -104,7 +104,7 @@ async def test_inprocess_enqueue_after_close_is_rejected() -> None:
 async def test_inprocess_enqueue_rejected_if_closed_during_backpressure() -> None:
     # An enqueue parked on the semaphore when close() begins must back out (release its slot
     # and raise) once it acquires, rather than spawn a task the drain has already snapshotted
-    # past — the recheck-after-acquire guard (mirrors Go's second select on the closed channel).
+    # past — the recheck-after-acquire guard (re-checks the closed flag after acquiring).
     # Drives the real close() concurrently rather than poking _closed directly.
     started = asyncio.Event()
     release = asyncio.Event()

@@ -38,7 +38,7 @@ class InProcess:
         if max_concurrent < 1:
             max_concurrent = DEFAULT_MAX_CONCURRENT
         self._max_concurrent = max_concurrent
-        # Caps in-flight dispatches (matches Go's sem-32 channel). Acquired in enqueue before
+        # Caps in-flight dispatches at the configured bound. Acquired in enqueue before
         # the task is spawned, so a burst blocks the handler (backpressure) instead of piling
         # up tasks; released when the dispatch finishes.
         self._sem = asyncio.Semaphore(max_concurrent)
@@ -73,7 +73,7 @@ class InProcess:
         await self._sem.acquire()
         # Recheck after the (possibly long) backpressure wait: close() may have begun while we
         # were blocked on the semaphore. Without this, a task could slip past the drain's
-        # snapshot and be abandoned on exit. (Mirrors Go's second select on the closed channel.)
+        # snapshot and be abandoned on exit. (This re-checks the closed flag after the wait.)
         if self._closed:
             self._sem.release()
             raise RuntimeError("tasks: in-process transport is closed")

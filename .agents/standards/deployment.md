@@ -241,7 +241,7 @@ double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
 | Session + park store | `memory` / `sqlite` | `firestore` (durable; a restart resumes in-flight runs) |
 | Secrets | `.env` | Secret Manager mounted as env |
 | Scheduler | Cloud Scheduler → `/internal/cron/daily` + `/internal/sweep` (Bearer) | same — Cloud Scheduler is the only trigger; no in-process cron |
-| Execution transport | `TASKS_BACKEND=inprocess` — background goroutine pool | `TASKS_BACKEND=cloudtasks` — Cloud Tasks → `/internal/dispatch`, in-request (CPU stays allocated, durable retry) |
+| Execution transport | `TASKS_BACKEND=inprocess` — in-process background worker pool | `TASKS_BACKEND=cloudtasks` — Cloud Tasks → `/internal/dispatch`, in-request (CPU stays allocated, durable retry) |
 | Timeout safety | in-process per-run timer | the timer **and** the durable `/internal/sweep` catch-all |
 | HA / scale-out | n/a | `firestore` is a shared store with atomic single-winner claims, so replicas can in principle share it; not exercised yet |
 
