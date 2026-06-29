@@ -121,7 +121,15 @@ func run(logger *slog.Logger) error {
 
 	// PR code-review agent (reacts to pull_request → KindReview). Always registered; the
 	// engine no-ops unless REVIEW_ENABLED is set, so REVIEW_ENABLED is the kill switch.
-	reviewEngine := reviewer.NewEngine(reviewer.Deps{Enabled: cfg.ReviewEnabled, Log: logger})
+	reviewEngine := reviewer.NewEngine(reviewer.Deps{
+		Enabled:      cfg.ReviewEnabled,
+		GH:           gh,
+		SkipDrafts:   cfg.ReviewSkipDrafts,
+		ExcludeGlobs: cfg.ReviewExcludeGlobs,
+		MaxFiles:     cfg.ReviewMaxFiles,
+		MaxDiffBytes: cfg.ReviewMaxDiffBytes,
+		Log:          logger,
+	})
 
 	dispatcher, err := root.BuildRootDispatcher(root.Deps{
 		SummaryDaily:    summaryDaily,

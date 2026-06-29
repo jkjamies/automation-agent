@@ -133,6 +133,80 @@ func TestGetFileContent(t *testing.T) {
 	}
 }
 
+func TestListPRFiles(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/pulls/7/files", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`[
+				{"filename":"b.go","previous_filename":"old.go","status":"renamed","additions":1,"deletions":1,"patch":"@@ -1 +1 @@"}
+			]`))
+			return
+		}
+		// First page advertises a next page so ListPRFiles must follow pagination.
+		w.Header().Set("Link", `<http://`+r.Host+`/repos/o/r/pulls/7/files?page=2>; rel="next"`)
+		_, _ = w.Write([]byte(`[
+			{"filename":"a.go","status":"added","additions":10,"deletions":0,"patch":"@@ -0,0 +1,10 @@"},
+			{"filename":"img.png","status":"added","additions":0,"deletions":0}
+		]`))
+	})
+	c := testClient(t, mux)
+
+	files, err := c.ListPRFiles(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatalf("ListPRFiles: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("got %d files, want 3 (pagination followed)", len(files))
+	}
+	if files[0].Path != "a.go" || files[0].Patch == "" {
+		t.Errorf("file[0] = %+v, want a.go with a patch", files[0])
+	}
+	// A binary file carries no patch — kept (counted), not dropped or an error.
+	if files[1].Path != "img.png" || files[1].Patch != "" {
+		t.Errorf("file[1] = %+v, want img.png with empty patch", files[1])
+	}
+	if files[2].Path != "b.go" || files[2].PreviousPath != "old.go" || files[2].Status != "renamed" {
+		t.Errorf("file[2] = %+v, want b.go renamed from old.go", files[2])
+	}
+}
+
+func TestParsePullRequestEvent(t *testing.T) {
+	body := `{
+		"action":"opened",
+		"pull_request":{
+			"number":7,
+			"draft":true,
+			"head":{"ref":"feature/x","sha":"headsha"},
+			"base":{"ref":"main"},
+			"user":{"login":"octocat"},
+			"labels":[{"name":"enhancement"},{"name":"skip-review"}]
+		},
+		"repository":{"full_name":"acme/web"}
+	}`
+	ev, err := ParsePullRequestEvent([]byte(body))
+	if err != nil {
+		t.Fatalf("ParsePullRequestEvent: %v", err)
+	}
+	if ev.Action != "opened" || ev.Number != 7 || ev.RepoFullName != "acme/web" {
+		t.Errorf("event = %+v", ev)
+	}
+	if ev.HeadRef != "feature/x" || ev.HeadSHA != "headsha" || ev.BaseRef != "main" {
+		t.Errorf("refs = %+v", ev)
+	}
+	if !ev.Draft || ev.AuthorLogin != "octocat" {
+		t.Errorf("draft/author = %v / %q", ev.Draft, ev.AuthorLogin)
+	}
+	if len(ev.Labels) != 2 || ev.Labels[0] != "enhancement" || ev.Labels[1] != "skip-review" {
+		t.Errorf("labels = %v", ev.Labels)
+	}
+}
+
+func TestParsePullRequestEventMalformed(t *testing.T) {
+	if _, err := ParsePullRequestEvent([]byte("{not json")); err == nil {
+		t.Fatal("expected an error for a malformed pull_request body")
+	}
+}
+
 func TestParseCheckRunEvent(t *testing.T) {
 	body := `{
 		"action":"completed",

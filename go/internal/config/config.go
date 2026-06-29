@@ -130,6 +130,19 @@ type Config struct {
 	// false (the default) means pull_request events are accepted and acknowledged but no
 	// review work runs. See specs/20260625-pr-code-review-agent.md.
 	ReviewEnabled bool
+	// ReviewSkipDrafts skips draft PRs unless the triggering action is ready_for_review
+	// (REVIEW_SKIP_DRAFTS, default true).
+	ReviewSkipDrafts bool
+	// ReviewExcludeGlobs drops generated/vendored/lockfile/minified/binary paths before
+	// sizing and review (REVIEW_EXCLUDE_GLOBS). Defaults to defaultReviewExcludeGlobs.
+	ReviewExcludeGlobs []string
+	// ReviewMaxFiles / ReviewMaxDiffBytes are the two-dimensional size-gate caps
+	// (REVIEW_MAX_FILES, REVIEW_MAX_DIFF_BYTES): a PR over either cap (measured on the
+	// filtered diff) is denied, not degraded. A non-positive value disables that dimension.
+	// Defaults are pilot-tunable (Decision 4 — derived from the code model's context budget,
+	// not a fixed number).
+	ReviewMaxFiles     int
+	ReviewMaxDiffBytes int
 
 	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
 	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
@@ -265,6 +278,7 @@ func loadFrom(get lookup) (Config, error) {
 		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
 		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
 		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),
+		ReviewExcludeGlobs:  splitList(getOr(get, "REVIEW_EXCLUDE_GLOBS", defaultReviewExcludeGlobs)),
 		TasksBackend:        TasksBackend(getOr(get, "TASKS_BACKEND", string(TasksInProcess))),
 		TasksProject:        getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
 		TasksLocation:       getOr(get, "TASKS_LOCATION", ""),
@@ -274,6 +288,15 @@ func loadFrom(get lookup) (Config, error) {
 
 	var err error
 	if c.ReviewEnabled, err = getBool(get, "REVIEW_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if c.ReviewSkipDrafts, err = getBool(get, "REVIEW_SKIP_DRAFTS", true); err != nil {
+		return Config{}, err
+	}
+	if c.ReviewMaxFiles, err = getInt(get, "REVIEW_MAX_FILES", defaultReviewMaxFiles); err != nil {
+		return Config{}, err
+	}
+	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewMaxDiffBytes); err != nil {
 		return Config{}, err
 	}
 	if c.MaxIterations, err = strconv.Atoi(getOr(get, "MAX_ITERATIONS", "3")); err != nil {
@@ -514,6 +537,40 @@ func getBool(get lookup, key string, def bool) (bool, error) {
 	}
 	return b, nil
 }
+
+// getInt parses an integer env var (REVIEW_MAX_FILES etc.). Unset or blank yields def; a
+// set-but-unparseable value is a startup error, matching getBool's strictness.
+func getInt(get lookup, key string, def int) (int, error) {
+	v := getOr(get, key, "")
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return n, nil
+}
+
+// Reviewer intake defaults (pilot-tunable).
+const (
+	// defaultReviewMaxFiles / defaultReviewMaxDiffBytes are the size-gate caps a PR must stay
+	// under to be reviewed (measured on the filtered diff). Beyond either, the PR is denied
+	// rather than degraded (spec Decision 4).
+	defaultReviewMaxFiles     = 50
+	defaultReviewMaxDiffBytes = 256 * 1024 // 256 KiB
+
+	// defaultReviewExcludeGlobs are the paths dropped before sizing/review: lockfiles,
+	// generated code, vendored trees, minified bundles, snapshots, and binaries. A pattern
+	// with no '/' matches the basename; one with '/' matches the full path ("**" crosses
+	// separators).
+	defaultReviewExcludeGlobs = "go.sum,go.work.sum,package-lock.json,yarn.lock,pnpm-lock.yaml," +
+		"npm-shrinkwrap.json,Cargo.lock,poetry.lock,Pipfile.lock,Gemfile.lock,composer.lock," +
+		"gradle.lockfile,*.min.js,*.min.css,*.map,*.snap,*.pb.go,*_pb2.py,*.gen.go,*_generated.go," +
+		"vendor/**,node_modules/**,third_party/**,dist/**,build/**,__snapshots__/**," +
+		"*.png,*.jpg,*.jpeg,*.gif,*.webp,*.ico,*.pdf,*.woff,*.woff2,*.ttf,*.eot," +
+		"*.zip,*.gz,*.tar,*.jar,*.bin,*.so,*.dylib,*.dll,*.exe"
+)
 
 func splitList(s string) []string {
 	if strings.TrimSpace(s) == "" {
