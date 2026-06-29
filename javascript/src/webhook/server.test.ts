@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { type Envelope, Kind } from '../ingest/envelope';
+import { type Envelope, Kind, encode, newEnvelope } from '../ingest/envelope';
 import { MAX_BODY_BYTES, Server, verifySignature } from './server';
 
 /** Records the last Envelope; optionally throws to force a 500. */
@@ -254,6 +254,88 @@ describe('webhook server', () => {
         .post('/internal/sweep')
         .set('Authorization', bearer);
       expect(resp.status).toBe(501);
+    });
+
+    describe('/internal/dispatch', () => {
+      // Sent as a UTF-8 string (not a Buffer) so supertest delivers the wire bytes verbatim
+      // rather than JSON-serializing the Buffer.
+      const ENV = encode(newEnvelope(Kind.CI, 'webhook:/github', Buffer.from('{"x":1}'), new Date(0))).toString('utf-8');
+
+      it('executes a valid envelope in-request -> 200', async () => {
+        const c = new Capture();
+        let got: Envelope | null = null;
+        const srv = new Server(c.ingest, {
+          internalToken: TOKEN,
+          dispatch: async (e) => {
+            got = e;
+          },
+        }).app;
+        const resp = await request(srv)
+          .post('/internal/dispatch')
+          .set('Authorization', bearer)
+          .set('Content-Type', 'application/json')
+          .send(ENV);
+
+        expect(resp.status).toBe(200);
+        expect(got!.kind).toBe(Kind.CI);
+        expect(got!.payload.toString()).toBe('{"x":1}');
+        // Ingress (the enqueue path) is untouched by the worker endpoint.
+        expect(c.env).toBeNull();
+      });
+
+      it('requires a Bearer credential like the other internal endpoints', async () => {
+        const c = new Capture();
+        const srv = new Server(c.ingest, { internalToken: TOKEN, dispatch: async () => {} }).app;
+        const resp = await request(srv)
+          .post('/internal/dispatch')
+          .set('Authorization', 'Bearer wrong')
+          .send(ENV);
+        expect(resp.status).toBe(401);
+      });
+
+      it('-> 501 when no dispatch handler is configured', async () => {
+        const c = new Capture();
+        const resp = await request(new Server(c.ingest, { internalToken: TOKEN }).app)
+          .post('/internal/dispatch')
+          .set('Authorization', bearer)
+          .send(ENV);
+        expect(resp.status).toBe(501);
+      });
+
+      it('acks a poison (undecodable) body with 200 so the queue drops it', async () => {
+        let called = false;
+        const c = new Capture();
+        const srv = new Server(c.ingest, {
+          internalToken: TOKEN,
+          dispatch: async () => {
+            called = true;
+          },
+        }).app;
+        const resp = await request(srv)
+          .post('/internal/dispatch')
+          .set('Authorization', bearer)
+          .set('Content-Type', 'application/json')
+          .send('{"kind":"jira"}'); // unknown kind -> poison
+
+        expect(resp.status).toBe(200);
+        expect(called).toBe(false); // never handed to the dispatcher
+      });
+
+      it('-> 500 on a transient dispatch error so Cloud Tasks retries', async () => {
+        const c = new Capture();
+        const srv = new Server(c.ingest, {
+          internalToken: TOKEN,
+          dispatch: async () => {
+            throw new Error('llm unavailable');
+          },
+        }).app;
+        const resp = await request(srv)
+          .post('/internal/dispatch')
+          .set('Authorization', bearer)
+          .set('Content-Type', 'application/json')
+          .send(ENV);
+        expect(resp.status).toBe(500);
+      });
     });
   });
 });

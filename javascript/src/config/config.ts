@@ -42,6 +42,20 @@ export const SessionBackend = {
 } as const;
 export type SessionBackend = (typeof SessionBackend)[keyof typeof SessionBackend];
 
+/**
+ * Selects the webhook execution transport: how an enqueued envelope reaches the dispatcher.
+ *
+ * - `inprocess` (default): a background promise pool that drains on SIGTERM — the pre-transport
+ *   behavior, for local dev. Not durable; a reclaim loses in-flight work.
+ * - `cloudtasks`: a Cloud Tasks queue POSTs each envelope to /internal/dispatch so the workflow
+ *   runs in-request (CPU stays allocated) with durable retry — the production path.
+ */
+export const TasksBackend = {
+  InProcess: 'inprocess',
+  CloudTasks: 'cloudtasks',
+} as const;
+export type TasksBackend = (typeof TasksBackend)[keyof typeof TasksBackend];
+
 /** All runtime settings. */
 export interface Config {
   // LLM
@@ -108,6 +122,26 @@ export interface Config {
   // agentPrLabel is the single human-facing label applied to every agent PR on creation
   // (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
   agentPrLabel: string;
+
+  // Execution transport (webhook → dispatcher). tasksBackend selects in-process (default) or
+  // Cloud Tasks; the Cloud Tasks settings locate the queue and the worker endpoint.
+  tasksBackend: TasksBackend;
+  // tasksProject is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
+  // GOOGLE_CLOUD_PROJECT. Required for cloudtasks.
+  tasksProject: string;
+  // tasksLocation is the queue's region (TASKS_LOCATION, e.g. 'us-central1'). Required for
+  // cloudtasks.
+  tasksLocation: string;
+  // tasksQueue is the Cloud Tasks queue name (TASKS_QUEUE). Required for cloudtasks.
+  tasksQueue: string;
+  // dispatchUrl is the full URL of the /internal/dispatch worker the queue POSTs to
+  // (DISPATCH_URL, e.g. https://agent-xyz.run.app/internal/dispatch). Required for cloudtasks.
+  dispatchUrl: string;
+  // tasksDispatchDeadlineMs is how long Cloud Tasks waits for an /internal/dispatch attempt
+  // before cancelling and retrying it (TASKS_DISPATCH_DEADLINE). The HTTP-target default is
+  // only 10m, so a long workflow would be cancelled mid-run and retried, duplicating side
+  // effects. Cloud Tasks caps this at 30m, which is therefore the default and the ceiling.
+  tasksDispatchDeadlineMs: number;
 }
 
 /** Config fields whose value is a credential and must never appear in a log. */
@@ -124,7 +158,6 @@ const SECRET_KEYS = [
  * Attach a custom inspect hook so console.log / util.inspect of the config masks every
  * credential — an unset secret stays visibly empty, a set one collapses to '***'. The hook
  * is non-enumerable, so it never affects property access, spreads, or JSON serialization.
- * (Mirrors Go's String(), Python's __repr__, and Kotlin's toString.)
  */
 function withRedactedInspect(cfg: Config): Config {
   Object.defineProperty(cfg, inspect.custom, {
@@ -215,6 +248,16 @@ export function loadFrom(get: Lookup): Config {
     firestoreCollection: getOr(get, 'FIRESTORE_COLLECTION', 'automation_agent'),
     internalToken: getOr(get, 'INTERNAL_TOKEN', ''),
     agentPrLabel: getOr(get, 'AGENT_PR_LABEL', 'automation-agent'),
+    tasksBackend: getOr(get, 'TASKS_BACKEND', TasksBackend.InProcess) as TasksBackend,
+    // TASKS_PROJECT falls back to GOOGLE_CLOUD_PROJECT (the ambient Cloud Run var).
+    tasksProject: getOr(get, 'TASKS_PROJECT', getOr(get, 'GOOGLE_CLOUD_PROJECT', '')),
+    tasksLocation: getOr(get, 'TASKS_LOCATION', ''),
+    tasksQueue: getOr(get, 'TASKS_QUEUE', ''),
+    dispatchUrl: getOr(get, 'DISPATCH_URL', ''),
+    tasksDispatchDeadlineMs: parseDuration(
+      getOr(get, 'TASKS_DISPATCH_DEADLINE', '30m'),
+      'TASKS_DISPATCH_DEADLINE',
+    ),
   };
 
   // Code models default to the base models when unset.
@@ -391,6 +434,74 @@ export function validate(c: Config): void {
       'REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)',
     );
   }
+  validateTasks(c);
+}
+
+/**
+ * Validate the execution-transport settings. The default (`inprocess`) needs nothing; the
+ * `cloudtasks` backend FAILS FAST unless every requirement is present, so a production
+ * deployment never silently fails to dispatch.
+ *
+ * @throws Error on an unknown backend or an incomplete/insecure cloudtasks configuration.
+ */
+function validateTasks(c: Config): void {
+  if (c.tasksBackend === TasksBackend.InProcess) {
+    return;
+  }
+  if (c.tasksBackend !== TasksBackend.CloudTasks) {
+    throw new Error(`invalid TASKS_BACKEND ${JSON.stringify(c.tasksBackend)} (want inprocess|cloudtasks)`);
+  }
+  // Cloud Tasks needs the queue coordinates and worker URL, plus the Bearer token the task
+  // carries: without INTERNAL_TOKEN, /internal/dispatch is disabled (404) and every task would
+  // fail permanently. Fail fast rather than silently never dispatching.
+  const missing: string[] = [];
+  if (c.tasksProject === '') {
+    missing.push('TASKS_PROJECT (or GOOGLE_CLOUD_PROJECT)');
+  }
+  if (c.tasksLocation === '') {
+    missing.push('TASKS_LOCATION');
+  }
+  if (c.tasksQueue === '') {
+    missing.push('TASKS_QUEUE');
+  }
+  // DISPATCH_URL must be an absolute https URL ending in /internal/dispatch: the Cloud Tasks
+  // task carries INTERNAL_TOKEN as a Bearer header to it, so a plaintext http:// target would
+  // leak the token in transit, and a base URL or stray path would pass the scheme check then
+  // 404 every task at runtime. A suffix match (not equality) tolerates a gateway path prefix.
+  if (!isSecureDispatchUrl(c.dispatchUrl)) {
+    missing.push('DISPATCH_URL (must be an absolute https:// URL ending in /internal/dispatch)');
+  }
+  if (c.internalToken === '') {
+    missing.push('INTERNAL_TOKEN (the Bearer the task carries to /internal/dispatch)');
+  }
+  // Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m; a value outside that range
+  // is silently rejected at CreateTask, so reject it here instead.
+  if (c.tasksDispatchDeadlineMs < 15_000 || c.tasksDispatchDeadlineMs > 30 * 60_000) {
+    missing.push('TASKS_DISPATCH_DEADLINE (must be between 15s and 30m)');
+  }
+  // In Cloud Tasks mode the deployment is production-facing, so an unverified webhook surface
+  // is a real exposure rather than a dev convenience — require the HMAC secret (it stays an
+  // opt-in warning only for the local inprocess default).
+  if (c.githubWebhookSecret === '') {
+    missing.push('GITHUB_WEBHOOK_SECRET (webhook signatures must be verified in production)');
+  }
+  if (missing.length > 0) {
+    throw new Error(`TASKS_BACKEND=cloudtasks requires ${missing.join(', ')}`);
+  }
+}
+
+/** Whether `raw` is an absolute https URL whose path ends in /internal/dispatch. */
+function isSecureDispatchUrl(raw: string): boolean {
+  if (raw === '') {
+    return false;
+  }
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  return u.protocol === 'https:' && u.host !== '' && u.pathname.endsWith('/internal/dispatch');
 }
 
 function getOr(get: Lookup, key: string, def: string): string {
@@ -430,18 +541,18 @@ const DURATION_UNITS_MS: Record<string, number> = {
  *
  * @throws Error if the string is empty or malformed.
  */
-export function parseDuration(s: string): number {
+export function parseDuration(s: string, name = 'CI_TIMEOUT'): number {
   const text = s.trim();
   if (text === '') {
-    throw new Error('CI_TIMEOUT: empty duration');
+    throw new Error(`${name}: empty duration`);
   }
-  // Repeated units (e.g. "90m90m") are summed, matching Go's time.ParseDuration leniency
-  // (the reference) — intentional parity, not a bug.
+  // Repeated units (e.g. "90m90m") are summed per the duration-string contract — intentional,
+  // not a bug.
   const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
   const matches = [...text.matchAll(re)];
   const consumed = matches.map((m) => m[1]! + m[2]!).join('');
   if (matches.length === 0 || consumed !== text) {
-    throw new Error(`CI_TIMEOUT: invalid duration ${JSON.stringify(s)}`);
+    throw new Error(`${name}: invalid duration ${JSON.stringify(s)}`);
   }
   return matches.reduce((acc, m) => acc + Number.parseFloat(m[1]!) * DURATION_UNITS_MS[m[2]!]!, 0);
 }

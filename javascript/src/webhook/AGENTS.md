@@ -1,8 +1,9 @@
 # src/webhook
 
-The HTTP ingress. Six routes — a liveness probe, three POST webhooks, and two
-Bearer-gated `/internal/*` ingress routes — reduce requests to an `ingest.Envelope` and
-hand them to an `IngestFunc` (which should enqueue and return fast):
+The HTTP ingress. Seven routes — a liveness probe, three POST webhooks, and three
+Bearer-gated `/internal/*` routes — reduce requests to an `ingest.Envelope` and hand them to
+an `IngestFunc` (which should enqueue and return fast), except the Cloud Tasks worker
+(`/internal/dispatch`), which runs the workflow **in-request** via an injected `DispatchFunc`:
 
 ## Flow
 
@@ -96,15 +97,24 @@ sequenceDiagram
 - `POST /internal/cron/daily` — Cloud Scheduler trigger for the daily digest -> `Kind.CronDaily`.
 - `POST /internal/sweep` — Cloud Scheduler trigger that reconciles every engine's timed-out
   parked runs (the durable timeout backstop).
+- `POST /internal/dispatch` — the **Cloud Tasks worker** (`DispatchFunc`): runs a queued
+  envelope's workflow synchronously **in-request** so Cloud Run keeps CPU allocated for the
+  whole compute (unlike a post-202 background task). Returns **501** when no dispatch handler
+  is wired. Body is the wire-encoded envelope (`ingest.decode`); a poison (undecodable) body
+  is **acked with 200** and logged so the queue drops it, while a transient dispatch error is
+  a **500** so the queue retries with backoff (the retry-on-non-2xx contract). See
+  `src/tasks` and `specs/20260626-workflow-execution-transport.md`.
 
 All three `/webhooks/*` routes share one HMAC over the body (`X-Hub-Signature-256`,
 HMAC-SHA256, hex digest), verified in constant time; verification is skipped only when no
 `GITHUB_WEBHOOK_SECRET` is set (local dev). Because a kickoff selects the caller-supplied
 target repo, lint/coverage are authenticated with the **same** shared secret as the GitHub
-resume webhook. The two `/internal/*` routes are instead Bearer-gated by `INTERNAL_TOKEN`:
+resume webhook. The three `/internal/*` routes are instead Bearer-gated by `INTERNAL_TOKEN`:
 they return **404** when no token is configured (routes disabled), **401** on a missing or
-mismatched Bearer token (compared in constant time), and `/internal/sweep` returns **501**
-when no sweep handler is wired.
+mismatched Bearer token (compared in constant time); `/internal/sweep` and
+`/internal/dispatch` each return **501** when their handler is unwired. The Cloud Tasks
+transport attaches that same `INTERNAL_TOKEN` as the task's Bearer header, so
+`/internal/dispatch` reuses the check verbatim.
 
 express returns a 404 for an unmatched method, rejecting the request before it reaches
 `ingest`. Each webhook body is read with a 5 MiB cap: oversize bodies are **rejected with

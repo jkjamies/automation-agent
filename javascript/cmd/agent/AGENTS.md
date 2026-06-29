@@ -13,21 +13,28 @@ flowchart TD
     Notif --> SumA["buildSummary daily (null if no repos/notifier)"]
     SumA --> Eng["newLintEngine(FixDeps)\nnewCoverageEngine(FixDeps)\nengines = [lint, cov]"]
     Eng --> Disp["buildRootDispatcher(Deps{summaryDaily,\nlintKickoff, coverageKickoff,\nciResume -> every engine})"]
-    Disp --> Web["new Server(ingest -> bounded+tracked safeDispatch,\nsecret, internalToken, sweep)"]
+    Disp --> Tx["buildTransport(cfg, dispatcher.dispatch):\nInProcess (default) | CloudTasks"]
+    Tx --> Web["new Server(ingest -> transport.enqueue,\nsecret, internalToken, sweep,\ndispatch -> /internal/dispatch, log)"]
     Web --> Listen["app.listen(port) + HTTP timeouts"]
     Listen --> Block["run until SIGINT/SIGTERM"]
-    Block --> Shutdown["server.close(); drain in-flight"]
+    Block --> Shutdown["server.close(); transport.close() (drain); parkStore.close()"]
 ```
 
 1. Load `config`.
 2. Build the LLMs (`src/agent/setup`), tooling, and the root + summary agents plus the
    lint-fixer and coverage-fixer `fixflow` engines.
-3. Start the webhook HTTP server (Express, with header/request/idle timeouts). Webhook
-   dispatches run on a bounded pool (a permit is acquired before the 202) and every
-   dispatch is tracked. The daily digest is driven by Cloud Scheduler calling
-   `POST /internal/cron/daily`; the service runs no internal timer.
-4. Run until interrupted, then close the server and drain in-flight dispatches (bounded by
-   a 15s deadline) before exiting.
+3. Start the webhook HTTP server (Express, with header/request/idle timeouts). Webhooks
+   `enqueue` onto the execution transport (`buildTransport`): the **in-process** backend (the
+   default, local dev) runs each dispatch on a bounded, drained pool; the **Cloud Tasks**
+   backend (production, `TASKS_BACKEND=cloudtasks`) hands each envelope to the queue, which
+   POSTs it to `/internal/dispatch` so the workflow runs **in-request** with durable retry —
+   on Cloud Run's request-based billing, CPU is throttled after the 202, so long LLM compute
+   must run inside a request. The same `dispatcher.dispatch` backs that worker endpoint. The
+   daily digest is driven by Cloud Scheduler calling `POST /internal/cron/daily`; the service
+   runs no internal timer.
+4. Run until interrupted, then close the server, `transport.close()` to drain in-flight
+   dispatches (the in-process backend; Cloud Tasks closes its client), and close the park
+   store before exiting.
 
 The fix loop suspends/resumes on ADK long-running tools backed by an injected `ParkStore`
 (`SESSION_BACKEND`: memory | sqlite | firestore), with a per-run `CI_TIMEOUT` bounding each

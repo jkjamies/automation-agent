@@ -9,7 +9,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import express, { type Express, type Request, type Response } from 'express';
 
-import { type Envelope, Kind, newEnvelope } from '../ingest/envelope';
+import { type Envelope, Kind, decode, newEnvelope } from '../ingest/envelope';
 
 /** maxBodyBytes caps how much of a webhook body we read. */
 export const MAX_BODY_BYTES = 5 << 20; // 5 MiB
@@ -26,6 +26,22 @@ export type IngestFunc = (e: Envelope) => Promise<void>;
 /** SweepFunc resolves every engine's timed-out parked runs (the /internal/sweep body). */
 export type SweepFunc = () => Promise<void>;
 
+/**
+ * DispatchFunc runs an envelope's workflow synchronously, in-request. It backs POST
+ * /internal/dispatch, which the Cloud Tasks transport delivers to so the compute runs on
+ * allocated CPU (unlike a post-202 background task). It is the root dispatcher's dispatch.
+ */
+export type DispatchFunc = (e: Envelope) => Promise<void>;
+
+/** Structured logger for non-fatal handler diagnostics (e.g. an acked poison dispatch body). */
+export interface Logger {
+  warn(msg: string, fields?: Record<string, unknown>): void;
+  error(msg: string, fields?: Record<string, unknown>): void;
+}
+
+/** A logger that drops everything — the fallback when none is injected. */
+const NOOP_LOGGER: Logger = { warn() {}, error() {} };
+
 /** Options for constructing a {@link Server}. */
 export interface ServerOptions {
   /**
@@ -40,6 +56,16 @@ export interface ServerOptions {
   internalToken?: string;
   /** The sweep handler behind POST /internal/sweep. Omitted → that route returns 501. */
   sweep?: SweepFunc;
+  /**
+   * The synchronous, in-request executor invoked by POST /internal/dispatch (the Cloud Tasks
+   * transport's worker endpoint). Omitted → that route returns 501.
+   */
+  dispatch?: DispatchFunc;
+  /**
+   * Logger for non-fatal handler diagnostics (e.g. a poison /internal/dispatch body that is
+   * acked rather than retried). Omitted → a no-op logger.
+   */
+  log?: Logger;
   /** Injects a clock for deterministic receivedAt timestamps in tests. */
   now?: () => Date;
 }
@@ -70,6 +96,8 @@ export class Server {
   private readonly secret: string;
   private readonly internalToken: string;
   private readonly sweepFn?: SweepFunc;
+  private readonly dispatchFn?: DispatchFunc;
+  private readonly log: Logger;
   private readonly now: () => Date;
   private readonly expressApp: Express;
 
@@ -78,6 +106,8 @@ export class Server {
     this.secret = opts.secret ?? '';
     this.internalToken = opts.internalToken ?? '';
     this.sweepFn = opts.sweep;
+    this.dispatchFn = opts.dispatch;
+    this.log = opts.log ?? NOOP_LOGGER;
     this.now = opts.now ?? (() => new Date());
     this.expressApp = this.buildApp();
   }
@@ -142,7 +172,56 @@ export class Server {
       void this.handleSweep(res);
     });
 
+    // Cloud Tasks worker: executes a queued envelope in-request (same Bearer auth). Running
+    // in-request (not in a post-202 background task) keeps CPU allocated on Cloud Run for the
+    // whole compute. Retry classification follows Cloud Tasks' retry-on-non-2xx contract
+    // (spec §6): a transient failure (the dispatch rejects — LLM/network/Firestore) returns 500
+    // so the queue retries with backoff; a permanent failure (a malformed body or unknown kind,
+    // which a retry cannot fix) is acked with 200 and logged so the queue drops the poison task
+    // instead of looping.
+    app.post('/internal/dispatch', (req: Request, res: Response) => {
+      if (!this.internalAuthenticated(req, res)) {
+        return;
+      }
+      if (!this.dispatchFn) {
+        res.status(501).type('text/plain').send('dispatch not configured');
+        return;
+      }
+      void this.handleBody(req, res, (body) => this.handleDispatch(res, body));
+    });
+
     return app;
+  }
+
+  /** Run a queued envelope in-request, mapping a poison body to an acked 200 and a transient
+   * dispatch error to 500. Reached only once a dispatch handler is configured. */
+  private async handleDispatch(res: Response, body: Buffer): Promise<void> {
+    if (!this.dispatchFn) {
+      res.status(501).type('text/plain').send('dispatch not configured');
+      return;
+    }
+    let env: Envelope;
+    try {
+      env = decode(body);
+    } catch (err) {
+      // Permanent: ack so Cloud Tasks does not redeliver a poison payload.
+      this.log.warn('dropping undecodable dispatch task', { err: (err as Error).message });
+      res.status(200).end();
+      return;
+    }
+    try {
+      await this.dispatchFn(env);
+    } catch (err) {
+      // Transient: let Cloud Tasks retry with backoff.
+      this.log.error('dispatch failed', {
+        kind: env.kind,
+        source: env.source,
+        err: (err as Error).message,
+      });
+      res.status(500).type('text/plain').send('dispatch failed');
+      return;
+    }
+    res.status(200).end();
   }
 
   /**
