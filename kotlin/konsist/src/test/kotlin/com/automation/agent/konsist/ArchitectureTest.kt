@@ -29,7 +29,7 @@ class ArchitectureTest : BehaviorSpec({
     }
 
     Given("the deterministic tooling packages") {
-        val tooling = listOf("auth", "githubapi", "gitrepo", "webhook", "notify")
+        val tooling = listOf("auth", "githubapi", "gitrepo", "webhook", "notify", "tasks")
         When("inspecting every tooling file's imports") {
             val violations = files
                 .filter { f -> tooling.any { pkg -> f.packagee?.name?.endsWith(".$pkg") == true } }

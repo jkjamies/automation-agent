@@ -2,6 +2,7 @@ package com.automation.agent.webhook
 
 import com.automation.agent.ingest.Envelope
 import com.automation.agent.ingest.Kind
+import com.automation.agent.ingest.encode
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -12,6 +13,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
+import java.time.Instant
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -221,6 +223,89 @@ class WebhookTest : BehaviorSpec({
                 val env = c.env.shouldNotBeNull()
                 env.kind shouldBe Kind.CRON_DAILY
                 env.source shouldBe "internal:/cron/daily"
+            }
+        }
+    }
+
+    Given("the internal dispatch worker") {
+        val valid = String(encode(Envelope.new(Kind.LINT, "webhook:/lint", "hi".toByteArray(), Instant.EPOCH)))
+
+        When("a valid task is delivered with a valid bearer") {
+            Then("it runs the dispatcher in-request and returns 200") {
+                val seen = java.util.concurrent.atomic.AtomicReference<Envelope>()
+                testApplication {
+                    application {
+                        webhookRoutes(Capture().ingest, internalToken = "sekret", dispatch = DispatchFunc { seen.set(it) })
+                    }
+                    client.post("/internal/dispatch") {
+                        header("Authorization", "Bearer sekret")
+                        setBody(valid)
+                    }.status shouldBe HttpStatusCode.OK
+                }
+                seen.get().shouldNotBeNull().kind shouldBe Kind.LINT
+            }
+        }
+
+        When("no dispatch handler is wired") {
+            Then("it returns 501") {
+                testApplication {
+                    application { webhookRoutes(Capture().ingest, internalToken = "sekret") }
+                    client.post("/internal/dispatch") {
+                        header("Authorization", "Bearer sekret")
+                        setBody(valid)
+                    }.status shouldBe HttpStatusCode.NotImplemented
+                }
+            }
+        }
+
+        When("the bearer is missing or wrong") {
+            Then("it returns 401 and never dispatches") {
+                var dispatched = false
+                testApplication {
+                    application {
+                        webhookRoutes(Capture().ingest, internalToken = "sekret", dispatch = DispatchFunc { dispatched = true })
+                    }
+                    client.post("/internal/dispatch") { setBody(valid) }.status shouldBe HttpStatusCode.Unauthorized
+                    client.post("/internal/dispatch") {
+                        header("Authorization", "Bearer wrong")
+                        setBody(valid)
+                    }.status shouldBe HttpStatusCode.Unauthorized
+                }
+                dispatched shouldBe false
+            }
+        }
+
+        When("the body is poison (undecodable)") {
+            Then("it is acked with 200 and dropped, never dispatched") {
+                var dispatched = false
+                testApplication {
+                    application {
+                        webhookRoutes(Capture().ingest, internalToken = "sekret", dispatch = DispatchFunc { dispatched = true })
+                    }
+                    client.post("/internal/dispatch") {
+                        header("Authorization", "Bearer sekret")
+                        setBody("not a valid envelope")
+                    }.status shouldBe HttpStatusCode.OK
+                }
+                dispatched shouldBe false
+            }
+        }
+
+        When("the dispatcher throws a transient error") {
+            Then("it returns 500 so the queue retries") {
+                testApplication {
+                    application {
+                        webhookRoutes(
+                            Capture().ingest,
+                            internalToken = "sekret",
+                            dispatch = DispatchFunc { throw RuntimeException("llm timeout") },
+                        )
+                    }
+                    client.post("/internal/dispatch") {
+                        header("Authorization", "Bearer sekret")
+                        setBody(valid)
+                    }.status shouldBe HttpStatusCode.InternalServerError
+                }
             }
         }
     }

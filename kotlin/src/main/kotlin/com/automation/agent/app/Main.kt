@@ -30,40 +30,25 @@ import com.automation.agent.githubapi.Client
 import com.automation.agent.githubapi.PrInput
 import com.automation.agent.notify.Notifier
 import com.automation.agent.notify.newNotifier
+import com.automation.agent.config.TasksBackend
+import com.automation.agent.tasks.DEFAULT_MAX_CONCURRENT
+import com.automation.agent.tasks.DispatchFunc
+import com.automation.agent.tasks.InProcess
+import com.automation.agent.tasks.Transport
+import com.automation.agent.tasks.newCloudTasks
 import com.automation.agent.webhook.SweepFunc
 import com.automation.agent.webhook.webhookServer
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.job
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.System.Logger.Level
 import java.time.Duration
 import kotlin.system.exitProcess
 
 private val log: System.Logger = System.getLogger("automation-agent")
 
-/**
- * Caps how many webhook/cron dispatches run concurrently. A permit is acquired in the ingest path
- * BEFORE a dispatch coroutine is launched (admission backpressure: a burst blocks the ingest caller
- * rather than piling up unbounded coroutines), and released when the dispatch finishes. Matches the
- * Go reference's 32-permit dispatchSem (and Python/JS MAX_CONCURRENT_DISPATCH=32).
- */
-private const val MAX_CONCURRENT_DISPATCH = 32
-
 /** On SIGTERM: stop accepting requests within this grace, then this hard timeout, then drain. */
 private const val SERVER_GRACE_MS = 5_000L
 private const val SERVER_TIMEOUT_MS = 15_000L
-
-/** How long to wait for in-flight dispatches to finish before abandoning them at shutdown. */
-private const val DRAIN_TIMEOUT_MS = 20_000L
 
 fun main() {
     try {
@@ -153,17 +138,6 @@ private fun run() {
             }
         }
 
-    // Background scope for async dispatch from cron fires and webhook deliveries. In-flight
-    // dispatches are bounded by a semaphore (see ingest below), not the dispatcher's parallelism —
-    // the dispatch work hops onto Dispatchers.IO anyway, so a parallelism cap is not backpressure.
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    // Bounds in-flight dispatches. The permit is acquired in the ingest path (both the webhook and
-    // the scheduler/cron deliveries flow through this single boundary) BEFORE the coroutine is
-    // launched, so a burst applies backpressure to the ingest caller instead of spawning unbounded
-    // coroutines; it is released when the dispatch finishes. Mirrors Go's dispatchSem.
-    val dispatchSem = Semaphore(MAX_CONCURRENT_DISPATCH)
-
     val dispatcher =
         buildRootDispatcher(
             RootDeps(
@@ -175,6 +149,12 @@ private fun run() {
             ),
         )
 
+    // The execution transport runs the dispatch: in-process (default) on a bounded coroutine pool
+    // drained on SIGTERM, or — in production — via Cloud Tasks, which delivers each envelope to
+    // /internal/dispatch so the compute runs in-request (CPU stays allocated) with durable retry.
+    // See specs/20260626-workflow-execution-transport.md.
+    val transport = buildTransport(cfg) { envelope -> dispatcher.dispatch(envelope) }
+
     if (cfg.githubWebhookSecret.isEmpty()) {
         log.log(
             Level.WARNING,
@@ -182,54 +162,31 @@ private fun run() {
                 "the /webhooks/github route accepts unauthenticated requests (dev only)",
         )
     }
-    // Webhooks enqueue asynchronously and return fast.
+    // Webhooks enqueue onto the transport and return fast; /internal/dispatch (the Cloud Tasks
+    // worker) runs the same dispatcher in-request.
     val server =
         webhookServer(
             port = cfg.port.toInt(),
-            ingest = { envelope ->
-                // When every permit is held, acquire() suspends the ingest caller here — the intended
-                // backpressure. Surface it (like Python) so sustained saturation is observable rather
-                // than a silently delayed webhook ACK.
-                if (dispatchSem.availablePermits == 0) {
-                    log.log(
-                        Level.WARNING,
-                        "dispatch concurrency saturated ($MAX_CONCURRENT_DISPATCH in flight); " +
-                            "webhook ingest is applying backpressure until a slot frees",
-                    )
-                }
-                // Acquire BEFORE launching so a burst blocks here instead of piling up coroutines;
-                // the launched coroutine releases the permit when the dispatch finishes.
-                dispatchSem.acquire()
-                scope.launch {
-                    try {
-                        dispatcher.dispatch(envelope)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        log.log(Level.WARNING, "webhook dispatch failed kind=${envelope.kind}", e)
-                    } finally {
-                        dispatchSem.release()
-                    }
-                }
-            },
+            ingest = { envelope -> transport.enqueue(envelope) },
             secret = cfg.githubWebhookSecret,
             internalToken = cfg.internalToken,
             sweep = sweep,
+            dispatch = { envelope -> dispatcher.dispatch(envelope) },
+            log = log,
         )
 
-    // Graceful shutdown: stop firing crons, stop accepting requests, then drain in-flight
-    // dispatches before exiting. Parked CI-wait runs still live only in memory and are abandoned on
-    // restart (the documented in-memory trade); this only drains work already running.
+    // Graceful shutdown: stop accepting requests, then drain in-flight dispatches before exiting.
+    // Parked CI-wait runs still live only in memory and are abandoned on restart (the documented
+    // in-memory trade); this only drains work already running.
     Runtime.getRuntime().addShutdownHook(
         Thread {
             log.log(Level.INFO, "shutting down: draining in-flight dispatches")
             server.stop(gracePeriodMillis = SERVER_GRACE_MS, timeoutMillis = SERVER_TIMEOUT_MS)
-            runBlocking {
-                withTimeoutOrNull(DRAIN_TIMEOUT_MS) { scope.coroutineContext.job.children.toList().joinAll() }
-            }
-            scope.cancel()
+            // Close the transport after the server stops accepting: the in-process backend drains
+            // in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done before
+            // the park store closes so any draining dispatch still has its stores.
+            runBlocking { transport.close() }
             // Release a durable park store's backing connection (a no-op for the memory backend).
-            // close() is a plain blocking call, so no coroutine bridge is needed here.
             runCatching { parkStore.close() }
         },
     )
@@ -253,6 +210,28 @@ private fun buildTokenProvider(cfg: Config): TokenProvider =
     } else {
         StaticProvider(cfg.githubToken)
     }
+
+/**
+ * Selects the webhook execution transport: Cloud Tasks in production (durable, in-request,
+ * rate-limited by the queue) or the in-process coroutine pool for local dev (the default). The
+ * in-process backend runs [dispatch] directly; the Cloud Tasks backend instead delivers each
+ * envelope to /internal/dispatch, which the webhook wires to the same dispatcher.
+ * See specs/20260626-workflow-execution-transport.md.
+ */
+private fun buildTransport(cfg: Config, dispatch: DispatchFunc): Transport {
+    if (cfg.tasksBackend == TasksBackend.CLOUDTASKS) {
+        log.log(
+            Level.INFO,
+            "execution transport: cloud tasks project=${cfg.tasksProject} location=${cfg.tasksLocation} " +
+                "queue=${cfg.tasksQueue} dispatchUrl=${cfg.dispatchUrl}",
+        )
+        return newCloudTasks(
+            cfg.tasksProject, cfg.tasksLocation, cfg.tasksQueue, cfg.dispatchUrl, cfg.internalToken, cfg.tasksDispatchDeadline,
+        )
+    }
+    log.log(Level.INFO, "execution transport: in-process (local/default)")
+    return InProcess(dispatch, log, DEFAULT_MAX_CONCURRENT)
+}
 
 /** Returns a Notifier, or null (with a warning) if not configured. */
 private fun buildNotifier(cfg: Config): Notifier? =
