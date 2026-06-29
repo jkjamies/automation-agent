@@ -23,6 +23,8 @@ type fakeGH struct {
 	existing    []githubapi.ReviewCommentRef // returned by ListReviewComments (canned PR comments)
 	minimized   []string                     // subject ids passed to MinimizeComment, in order
 	agentCheck  githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
+	headSHA     string                       // returned by PullRequestHeadSHA ("" = no staleness)
+	headSHAErr  error                        // forced error from PullRequestHeadSHA
 }
 
 type markerComment struct{ marker, body string }
@@ -53,6 +55,10 @@ func (f *fakeGH) ListReviewComments(context.Context, string, string, int) ([]git
 
 func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (githubapi.CheckResult, error) {
 	return f.agentCheck, nil
+}
+
+func (f *fakeGH) PullRequestHeadSHA(context.Context, string, string, int) (string, error) {
+	return f.headSHA, f.headSHAErr
 }
 
 func (f *fakeGH) MinimizeComment(_ context.Context, subjectID string) error {
@@ -259,4 +265,43 @@ func TestSplitFullName(t *testing.T) {
 			t.Errorf("splitFullName(%q) = %q,%q,%v; want %q,%q,%v", in, owner, repo, ok, want.owner, want.repo, want.ok)
 		}
 	}
+}
+
+// TestKickoffStaleness covers coalesce-to-latest at execution: a review whose event SHA has been
+// superseded by a newer push is skipped; a current SHA proceeds; a lookup error is best-effort.
+func TestKickoffStaleness(t *testing.T) {
+	body := func(sha string) []byte {
+		return []byte(`{"action":"synchronize","pull_request":{"number":3,"head":{"ref":"x","sha":"` + sha + `"},"base":{"ref":"main"}},"repository":{"full_name":"o/r"}}`)
+	}
+	realFile := []githubapi.PRFile{{Path: "main.go", Patch: "@@ -1 +1 @@\n+x"}}
+
+	t.Run("stale event SHA posts nothing", func(t *testing.T) {
+		gh := &fakeGH{files: realFile, headSHA: "newsha"}
+		if err := testEngine(gh).Kickoff(context.Background(), body("oldsha")); err != nil {
+			t.Fatalf("Kickoff: %v", err)
+		}
+		if gh.review != nil || len(gh.checks) != 0 || len(gh.upserts) != 0 {
+			t.Errorf("stale review must post nothing: review=%v checks=%d upserts=%d", gh.review, len(gh.checks), len(gh.upserts))
+		}
+	})
+
+	t.Run("current SHA proceeds to publish", func(t *testing.T) {
+		gh := &fakeGH{files: realFile, headSHA: "samesha"}
+		if err := testEngine(gh).Kickoff(context.Background(), body("samesha")); err != nil {
+			t.Fatalf("Kickoff: %v", err)
+		}
+		if len(gh.checks) != 1 || len(gh.upserts) != 1 {
+			t.Errorf("a current review must publish: checks=%d upserts=%d", len(gh.checks), len(gh.upserts))
+		}
+	})
+
+	t.Run("head-SHA lookup error proceeds (best-effort)", func(t *testing.T) {
+		gh := &fakeGH{files: realFile, headSHA: "newsha", headSHAErr: errors.New("boom")}
+		if err := testEngine(gh).Kickoff(context.Background(), body("oldsha")); err != nil {
+			t.Fatalf("Kickoff: %v", err)
+		}
+		if len(gh.checks) != 1 {
+			t.Errorf("a head-SHA lookup error must not suppress the review: checks=%d", len(gh.checks))
+		}
+	})
 }

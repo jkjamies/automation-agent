@@ -19,6 +19,24 @@ routes by the `X-GitHub-Event` header (`pull_request` → `KindReview`, `check_r
 This is a third door alongside the fixers' custom-route kickoff and native `check_run`
 resume — see `.agents/standards/webhooks.md`.
 
+## Coalesce-to-latest — debounce + staleness
+
+Rapid pushes to one PR are collapsed so only the latest SHA is reviewed (two parts, because
+Cloud Tasks gives no ordering and cannot cancel an in-flight task):
+
+- **Debounce at enqueue** (`enqueue.go`, `EnqueueOptions`): a `synchronize` review is enqueued
+  with `REVIEW_DEBOUNCE` delay under a per-PR Cloud Tasks dedup name, so a burst of pushes
+  collapses to one delayed task. `opened`/`reopened`/`ready_for_review` enqueue immediately. This
+  is a workflow concern, so it lives here, not in the transport. Only the Cloud Tasks backend
+  honors the hints.
+- **Staleness at execution** (`Kickoff` → `superseded`): before doing the review work, the engine
+  fetches the PR's current head SHA and skips if it no longer matches the event's SHA (a newer
+  push won). Best-effort — a lookup error proceeds rather than suppressing a real review.
+
+**Incremental re-review** (re-evaluating only the files changed since the last reviewed SHA) is
+intentionally **not** built: GitHub-as-store persists rendered comments, not structured findings,
+so the latest SHA is always reviewed in full and reconciled against the existing comments.
+
 ## Data layer — REST-first (GraphQL deferred to reconciliation)
 
 The reviewer reads the PR and posts its output via the **GitHub REST API**, over the shared
@@ -60,9 +78,10 @@ This replaced the publish stage's coarse whole-SHA skip **for inline comments on
 `alreadyPublished` head-SHA guard still protects the non-comment outputs — the summary comment, the
 `agent-review` check run, and the `publishDeny` path — from duplicating on a redelivered task (a
 genuine re-push carries a new SHA and reconciles normally). Still to come (later changes):
-**incremental re-review** (only re-run changed-since-SHA files), **debounce**, and **reply-to-reply**
-threading. The read-aggregate path may move to GraphQL if pilot volume justifies it; patches stay
-REST (GraphQL cannot return diff hunks; `createCheckRun` is also REST-only).
+**reply-to-reply** threading. (**Debounce** is built — see *Coalesce-to-latest* above; **incremental
+re-review** is intentionally deferred — see the note under that section.) The read-aggregate path may
+move to GraphQL if pilot volume justifies it; patches stay REST (GraphQL cannot return diff hunks;
+`createCheckRun` is also REST-only).
 
 ## Intake pipeline
 
@@ -121,8 +140,8 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
 5. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never**
    `failure`. Deny publishes the "too large, please split" summary + a neutral check.
 
-Still to come: incremental re-review (only re-run changed-since-SHA files), debounce,
-reply-to-reply threading, and standards-aware review.
+Still to come: reply-to-reply threading and standards-aware review. (Debounce is built;
+incremental re-review is intentionally deferred — see the *Coalesce-to-latest* section.)
 
 ### Structured output on the local model path
 

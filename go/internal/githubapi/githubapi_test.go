@@ -614,3 +614,18 @@ func TestGraphQLURL(t *testing.T) {
 		}
 	}
 }
+
+func TestPullRequestHeadSHA(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/pulls/3", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"number":3,"head":{"sha":"headsha123"}}`))
+	})
+	c := testClient(t, mux)
+	got, err := c.PullRequestHeadSHA(context.Background(), "o", "r", 3)
+	if err != nil {
+		t.Fatalf("PullRequestHeadSHA: %v", err)
+	}
+	if got != "headsha123" {
+		t.Errorf("head SHA = %q, want headsha123", got)
+	}
+}

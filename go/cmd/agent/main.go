@@ -177,7 +177,11 @@ func run(logger *slog.Logger) error {
 		logger.Warn("GITHUB_WEBHOOK_SECRET is unset — webhook signatures are NOT verified; the /webhooks/github route accepts unauthenticated requests (dev only)")
 	}
 	srv := webhook.New(
-		func(ctx context.Context, e ingest.Envelope) error { return transport.Enqueue(ctx, e) },
+		func(ctx context.Context, e ingest.Envelope) error {
+			// Review envelopes carry coalescing hints (debounce + per-PR dedup name) so rapid
+			// pushes collapse to one task on the latest SHA; other kinds enqueue immediately.
+			return transport.Enqueue(ctx, e, reviewer.EnqueueOptions(e, cfg.ReviewDebounce)...)
+		},
 		webhook.WithGitHubSecret(cfg.GitHubWebhookSecret),
 		webhook.WithInternalToken(cfg.InternalToken),
 		// /internal/dispatch executes a queued envelope in-request (the Cloud Tasks worker).

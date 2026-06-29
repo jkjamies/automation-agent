@@ -427,6 +427,17 @@ func (c *Client) FindOpenPRByBranch(ctx context.Context, owner, repo, branch str
 	return toPR(prs[0]), true, nil
 }
 
+// PullRequestHeadSHA returns the PR's current head commit SHA. The reviewer compares it to the
+// SHA carried by a review task to detect a task superseded by a newer push (coalesce-to-latest)
+// and skip a stale review.
+func (c *Client) PullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error) {
+	pr, _, err := c.gh.PullRequests.Get(ctx, owner, repo, number)
+	if err != nil {
+		return "", fmt.Errorf("get PR %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return pr.GetHead().GetSHA(), nil
+}
+
 // AgentCheck returns the named check's state for ref, or {Found:false} if absent.
 func (c *Client) AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (CheckResult, error) {
 	res, _, err := c.gh.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, &github.ListCheckRunsOptions{
