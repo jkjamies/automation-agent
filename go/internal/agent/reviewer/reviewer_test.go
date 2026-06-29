@@ -15,11 +15,13 @@ type fakeGH struct {
 	err   error
 	calls int
 
-	review     *githubapi.ReviewInput    // last CreateReview input (nil if none posted)
-	upserts    []markerComment           // UpsertMarkerComment calls, in order
-	checks     []githubapi.CheckRunInput // CreateCheckRun calls, in order
-	writeErr   error                     // forced error from the write methods
-	agentCheck githubapi.CheckResult     // returned by AgentCheck (zero value = not found)
+	review     *githubapi.ReviewInput       // last CreateReview input (nil if none posted)
+	upserts    []markerComment              // UpsertMarkerComment calls, in order
+	checks     []githubapi.CheckRunInput    // CreateCheckRun calls, in order
+	writeErr   error                        // forced error from the write methods
+	existing   []githubapi.ReviewCommentRef // returned by ListReviewComments (canned PR comments)
+	minimized  []string                     // subject ids passed to MinimizeComment, in order
+	agentCheck githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
 }
 
 type markerComment struct{ marker, body string }
@@ -44,8 +46,17 @@ func (f *fakeGH) CreateCheckRun(_ context.Context, _, _ string, in githubapi.Che
 	return f.writeErr
 }
 
+func (f *fakeGH) ListReviewComments(context.Context, string, string, int) ([]githubapi.ReviewCommentRef, error) {
+	return f.existing, f.writeErr
+}
+
 func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (githubapi.CheckResult, error) {
 	return f.agentCheck, nil
+}
+
+func (f *fakeGH) MinimizeComment(_ context.Context, subjectID string) error {
+	f.minimized = append(f.minimized, subjectID)
+	return f.writeErr
 }
 
 // testEngine builds an enabled engine with small caps and a default exclude set, overridable.

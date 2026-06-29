@@ -33,11 +33,10 @@ func summaryMarker(owner, repo string, number int) string {
 // marker-updated summary comment with the scorecard, and the advisory agent-review check. Out-of-
 // diff actionable findings and nitpicks go into the summary (never dropped, spec Decision 6).
 func (e *Engine) publish(ctx context.Context, card scorecard, findings []Finding, meta publishMeta) error {
-	// At-least-once safety: a redelivered task (e.g. the dispatch's 2xx was lost after a fully
-	// successful run) must not re-post. If the agent-review check already exists for this head SHA,
-	// the SHA was already published, so skip the create-only review/check. A mid-publish partial
-	// failure can still duplicate inline comments; fingerprint reconciliation (next change) closes
-	// that residual gap (spec Decisions 6/11).
+	// At-least-once safety: reconciliation makes the inline comments idempotent, but the check run
+	// and summary are create/upsert-only, so a redelivered task for a SHA already published would
+	// duplicate the check. If the agent-review check already exists for this head SHA, skip — a
+	// genuine re-push carries a new SHA and still reconciles below.
 	if e.alreadyPublished(ctx, meta) {
 		e.log.Info("review already published for head SHA; skipping re-post", "repo", meta.owner+"/"+meta.repo, "sha", meta.headSHA)
 		return nil
@@ -46,12 +45,32 @@ func (e *Engine) publish(ctx context.Context, card scorecard, findings []Finding
 	inline, outOfDiff, nitpicks := classify(findings, idx)
 	actionable := len(inline) + len(outOfDiff)
 
-	// An empty review (no inline comments) is noise, so only post one when there are inline
-	// findings; the summary comment and check below always go out.
-	if len(inline) > 0 {
+	// Reconcile against the comments already on the PR (GitHub-as-store): keep inline findings that
+	// still apply (don't re-post — so a re-review is idempotent), post only new ones, and minimize
+	// the comments whose finding is gone (fixed or no longer relevant). This makes re-publishing on
+	// a redelivered task or a re-push safe (spec Decisions 6/11).
+	existing, err := e.gh.ListReviewComments(ctx, meta.owner, meta.repo, meta.number)
+	if err != nil {
+		return fmt.Errorf("reviewer: list existing comments: %w", err)
+	}
+	rec := reconcile(inline, existing)
+
+	// Post only the new inline findings; an empty review is noise.
+	if len(rec.toPost) > 0 {
+		comments := make([]githubapi.ReviewComment, 0, len(rec.toPost))
+		for _, f := range rec.toPost {
+			comments = append(comments, githubapi.ReviewComment{Path: f.File, Line: f.Line, Side: "RIGHT", Body: inlineCommentBody(f)})
+		}
 		body := fmt.Sprintf("%s Agent review — see the summary comment for the full scorecard.", card.overall)
-		if err := e.gh.CreateReview(ctx, meta.owner, meta.repo, meta.number, githubapi.ReviewInput{Body: body, Comments: inline}); err != nil {
+		if err := e.gh.CreateReview(ctx, meta.owner, meta.repo, meta.number, githubapi.ReviewInput{Body: body, Comments: comments}); err != nil {
 			return fmt.Errorf("reviewer: post review: %w", err)
+		}
+	}
+
+	// Minimize the comments whose finding no longer applies.
+	for _, id := range rec.toMinimize {
+		if err := e.gh.MinimizeComment(ctx, id); err != nil {
+			return fmt.Errorf("reviewer: minimize outdated comment: %w", err)
 		}
 	}
 
@@ -105,17 +124,18 @@ func (e *Engine) alreadyPublished(ctx context.Context, meta publishMeta) bool {
 	return err == nil && res.Found
 }
 
-// classify splits confidence-gated findings into inline review comments (actionable findings on a
-// commentable diff line), out-of-diff actionable findings (listed in the summary, never snapped to
-// a wrong line — spec Decision 6), and nitpicks (collapsed in the summary).
-func classify(findings []Finding, idx diffIndex) (inline []githubapi.ReviewComment, outOfDiff, nitpicks []Finding) {
+// classify splits confidence-gated findings into inline findings (actionable, on a commentable diff
+// line — these become review comments after reconciliation), out-of-diff actionable findings (listed
+// in the summary, never snapped to a wrong line — spec Decision 6), and nitpicks (collapsed in the
+// summary).
+func classify(findings []Finding, idx diffIndex) (inline, outOfDiff, nitpicks []Finding) {
 	for _, f := range findings {
 		if f.Severity == SeverityNitpick {
 			nitpicks = append(nitpicks, f)
 			continue
 		}
 		if f.File != "" && f.Line > 0 && idx.inDiff(f.File, f.Line) {
-			inline = append(inline, githubapi.ReviewComment{Path: f.File, Line: f.Line, Side: "RIGHT", Body: inlineCommentBody(f)})
+			inline = append(inline, f)
 			continue
 		}
 		outOfDiff = append(outOfDiff, f)
@@ -162,6 +182,9 @@ func inlineCommentBody(f Finding) string {
 		}
 		b.WriteString(fence + "\n\n</details>\n")
 	}
+	// Hidden fingerprint marker so a later re-review re-identifies this comment and reconciles it
+	// (GitHub-as-store); it renders invisibly.
+	b.WriteString("\n" + fpMarker(f.fingerprint()) + "\n")
 	return b.String()
 }
 

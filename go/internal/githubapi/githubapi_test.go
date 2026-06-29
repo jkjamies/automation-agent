@@ -542,3 +542,75 @@ func TestUpsertMarkerCommentValidates(t *testing.T) {
 		t.Error("a body that omits the marker must be rejected")
 	}
 }
+
+func TestListReviewComments(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/pulls/7/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`[{"node_id":"N2","body":"second"}]`))
+			return
+		}
+		w.Header().Set("Link", `<http://`+r.Host+`/repos/o/r/pulls/7/comments?page=2>; rel="next"`)
+		_, _ = w.Write([]byte(`[{"node_id":"N1","body":"first <!-- ar-fp:a.go:1:x -->"}]`))
+	})
+	c := testClient(t, mux)
+
+	refs, err := c.ListReviewComments(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatalf("ListReviewComments: %v", err)
+	}
+	if len(refs) != 2 || refs[0].NodeID != "N1" || refs[1].NodeID != "N2" {
+		t.Fatalf("refs = %+v, want N1,N2 (pagination followed)", refs)
+	}
+	if refs[0].Body == "" {
+		t.Error("comment body not captured")
+	}
+}
+
+// MinimizeComment posts the OUTDATED minimize mutation to the GraphQL endpoint (derived from the
+// REST BaseURL) carrying the comment's node id.
+func TestMinimizeComment(t *testing.T) {
+	var gotBody string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /graphql", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = w.Write([]byte(`{"data":{"minimizeComment":{"minimizedComment":{"isMinimized":true}}}}`))
+	})
+	c := testClient(t, mux)
+
+	if err := c.MinimizeComment(context.Background(), "NODE1"); err != nil {
+		t.Fatalf("MinimizeComment: %v", err)
+	}
+	for _, want := range []string{"minimizeComment", "OUTDATED", "NODE1"} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("graphql request missing %q: %s", want, gotBody)
+		}
+	}
+}
+
+func TestMinimizeCommentGraphQLError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /graphql", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"errors":[{"message":"Could not resolve to a node"}]}`))
+	})
+	c := testClient(t, mux)
+	if err := c.MinimizeComment(context.Background(), "BAD"); err == nil {
+		t.Fatal("a GraphQL errors[] response must become a Go error")
+	}
+}
+
+func TestGraphQLURL(t *testing.T) {
+	cases := map[string]string{
+		"https://api.github.com/":         "https://api.github.com/graphql",
+		"https://ghe.example.com/api/v3/": "https://ghe.example.com/api/graphql",
+	}
+	for base, want := range cases {
+		c := New(auth.NewStaticProvider(""))
+		u, _ := url.Parse(base)
+		c.gh.BaseURL = u
+		if got := c.graphqlURL(); got != want {
+			t.Errorf("graphqlURL(%q) = %q, want %q", base, got, want)
+		}
+	}
+}
