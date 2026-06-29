@@ -143,6 +143,9 @@ type Config struct {
 	// not a fixed number).
 	ReviewMaxFiles     int
 	ReviewMaxDiffBytes int
+	// ReviewMinConfidence drops findings below this confidence before scoring
+	// (REVIEW_MIN_CONFIDENCE, the phase-1 verify gate). A non-positive value keeps everything.
+	ReviewMinConfidence float64
 
 	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
 	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
@@ -298,6 +301,15 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewMaxDiffBytes); err != nil {
 		return Config{}, err
+	}
+	if c.ReviewMinConfidence, err = getFloat(get, "REVIEW_MIN_CONFIDENCE", defaultReviewMinConfidence); err != nil {
+		return Config{}, err
+	}
+	// The confidence gate must be a real probability. The negated range check also rejects NaN
+	// and ±Inf (every comparison with NaN is false), so a junk value fails fast at startup rather
+	// than silently dropping every finding (>1) or none.
+	if !(c.ReviewMinConfidence >= 0 && c.ReviewMinConfidence <= 1) {
+		return Config{}, fmt.Errorf("REVIEW_MIN_CONFIDENCE: must be in [0,1], got %v", c.ReviewMinConfidence)
 	}
 	if c.MaxIterations, err = strconv.Atoi(getOr(get, "MAX_ITERATIONS", "3")); err != nil {
 		return Config{}, fmt.Errorf("MAX_ITERATIONS: %w", err)
@@ -552,6 +564,20 @@ func getInt(get lookup, key string, def int) (int, error) {
 	return n, nil
 }
 
+// getFloat parses a float env var (REVIEW_MIN_CONFIDENCE). Unset or blank yields def; a
+// set-but-unparseable value is a startup error, matching getInt's strictness.
+func getFloat(get lookup, key string, def float64) (float64, error) {
+	v := getOr(get, key, "")
+	if v == "" {
+		return def, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return f, nil
+}
+
 // Reviewer intake defaults (pilot-tunable).
 const (
 	// defaultReviewMaxFiles / defaultReviewMaxDiffBytes are the size-gate caps a PR must stay
@@ -559,6 +585,11 @@ const (
 	// rather than degraded (spec Decision 4).
 	defaultReviewMaxFiles     = 50
 	defaultReviewMaxDiffBytes = 256 * 1024 // 256 KiB
+
+	// defaultReviewMinConfidence is the phase-1 verify gate: findings below this confidence
+	// are dropped before scoring (spec Decision 13). A local model is biased toward
+	// fewer-but-real, so the default is moderate.
+	defaultReviewMinConfidence = 0.6
 
 	// defaultReviewExcludeGlobs are the paths dropped before sizing/review: lockfiles,
 	// generated code, vendored trees, minified bundles, snapshots, and binaries. A pattern

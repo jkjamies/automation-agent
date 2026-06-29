@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/adk/model"
+
 	"automation-agent/internal/githubapi"
 )
 
@@ -46,6 +48,13 @@ type Deps struct {
 	Enabled bool
 	// GH fetches the PR's changed files (REST). Required when Enabled.
 	GH gitHubClient
+	// BaseLLM / CodeLLM are the base- and code-reasoning tier models the category lenses run
+	// on (model-size-split). Required when Enabled.
+	BaseLLM model.LLM
+	CodeLLM model.LLM
+	// MinConfidence drops findings below this confidence before scoring (REVIEW_MIN_CONFIDENCE,
+	// the phase-1 verify gate). A non-positive value keeps everything.
+	MinConfidence float64
 	// SkipDrafts skips draft PRs unless the triggering action is ready_for_review
 	// (REVIEW_SKIP_DRAFTS, default true).
 	SkipDrafts bool
@@ -62,13 +71,16 @@ type Deps struct {
 
 // Engine runs the PR code-review workflow for one pull_request event.
 type Engine struct {
-	enabled      bool
-	gh           gitHubClient
-	skipDrafts   bool
-	filter       *fileFilter
-	maxFiles     int
-	maxDiffBytes int
-	log          *slog.Logger
+	enabled       bool
+	gh            gitHubClient
+	baseLLM       model.LLM
+	codeLLM       model.LLM
+	minConfidence float64
+	skipDrafts    bool
+	filter        *fileFilter
+	maxFiles      int
+	maxDiffBytes  int
+	log           *slog.Logger
 }
 
 // NewEngine builds the reviewer engine from its dependencies, compiling the exclude globs
@@ -79,13 +91,16 @@ func NewEngine(d Deps) *Engine {
 		log = slog.Default()
 	}
 	return &Engine{
-		enabled:      d.Enabled,
-		gh:           d.GH,
-		skipDrafts:   d.SkipDrafts,
-		filter:       newFileFilter(d.ExcludeGlobs),
-		maxFiles:     d.MaxFiles,
-		maxDiffBytes: d.MaxDiffBytes,
-		log:          log,
+		enabled:       d.Enabled,
+		gh:            d.GH,
+		baseLLM:       d.BaseLLM,
+		codeLLM:       d.CodeLLM,
+		minConfidence: clampThreshold(d.MinConfidence),
+		skipDrafts:    d.SkipDrafts,
+		filter:        newFileFilter(d.ExcludeGlobs),
+		maxFiles:      d.MaxFiles,
+		maxDiffBytes:  d.MaxDiffBytes,
+		log:           log,
 	}
 }
 
@@ -120,11 +135,11 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		e.log.Debug("reviewer disabled (REVIEW_ENABLED=false); ignoring pull_request event", "bytes", len(raw))
 		return nil
 	}
-	// An enabled engine needs a client to fetch the diff; without one, return a controlled
-	// error rather than letting decide dereference a nil client (a wiring mistake, not a
-	// per-event condition — the dispatch retry surfaces it in logs).
-	if e.gh == nil {
-		return fmt.Errorf("reviewer: enabled but no GitHub client configured")
+	// An enabled engine needs a client to fetch the diff and both tier models to review it;
+	// without them, return a controlled error rather than dereferencing a nil dependency (a
+	// wiring mistake, not a per-event condition — the dispatch retry surfaces it in logs).
+	if e.gh == nil || e.baseLLM == nil || e.codeLLM == nil {
+		return fmt.Errorf("reviewer: enabled but GitHub client or models not configured")
 	}
 	ev, err := githubapi.ParsePullRequestEvent(raw)
 	if err != nil {
@@ -143,8 +158,13 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		// in the publish change; intake only decides.
 		e.log.Info("review denied", "pr", pr, "files", len(d.files), "diff_bytes", d.diffBytes, "reason", d.reason)
 	case decisionReview:
-		// Category fan-out, scorecard, and publishing land in later changes.
-		e.log.Info("review planned", "pr", pr, "files", len(d.files), "diff_bytes", d.diffBytes)
+		// Fan out the category lenses + glue pass and score the findings. Publishing the
+		// scorecard and inline comments lands in a later change; for now log the outcome.
+		card, err := e.review(ctx, d.files)
+		if err != nil {
+			return err
+		}
+		e.log.Info("review scored", "pr", pr, "files", len(d.files), "overall", card.overall.String(), "findings", card.total)
 	}
 	return nil
 }

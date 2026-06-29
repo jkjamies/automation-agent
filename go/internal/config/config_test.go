@@ -88,6 +88,9 @@ func TestReviewIntakeDefaults(t *testing.T) {
 	if c.ReviewMaxDiffBytes != defaultReviewMaxDiffBytes {
 		t.Errorf("ReviewMaxDiffBytes = %d, want default %d", c.ReviewMaxDiffBytes, defaultReviewMaxDiffBytes)
 	}
+	if c.ReviewMinConfidence != defaultReviewMinConfidence {
+		t.Errorf("ReviewMinConfidence = %v, want default %v", c.ReviewMinConfidence, defaultReviewMinConfidence)
+	}
 	if len(c.ReviewExcludeGlobs) == 0 {
 		t.Fatal("ReviewExcludeGlobs should default to a non-empty set")
 	}
@@ -107,6 +110,7 @@ func TestReviewIntakeOverrides(t *testing.T) {
 		"REVIEW_SKIP_DRAFTS":    "false",
 		"REVIEW_MAX_FILES":      "10",
 		"REVIEW_MAX_DIFF_BYTES": "2048",
+		"REVIEW_MIN_CONFIDENCE": "0.8",
 		"REVIEW_EXCLUDE_GLOBS":  "*.foo, *.bar",
 	}))
 	if err != nil {
@@ -118,6 +122,9 @@ func TestReviewIntakeOverrides(t *testing.T) {
 	if c.ReviewMaxFiles != 10 || c.ReviewMaxDiffBytes != 2048 {
 		t.Errorf("caps = %d / %d, want 10 / 2048", c.ReviewMaxFiles, c.ReviewMaxDiffBytes)
 	}
+	if c.ReviewMinConfidence != 0.8 {
+		t.Errorf("ReviewMinConfidence = %v, want 0.8", c.ReviewMinConfidence)
+	}
 	if len(c.ReviewExcludeGlobs) != 2 || c.ReviewExcludeGlobs[0] != "*.foo" || c.ReviewExcludeGlobs[1] != "*.bar" {
 		t.Errorf("ReviewExcludeGlobs = %v, want [*.foo *.bar]", c.ReviewExcludeGlobs)
 	}
@@ -126,6 +133,28 @@ func TestReviewIntakeOverrides(t *testing.T) {
 func TestReviewMaxFilesUnparseable(t *testing.T) {
 	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MAX_FILES": "lots"})); err == nil {
 		t.Error("an unparseable REVIEW_MAX_FILES should be a startup error")
+	}
+}
+
+func TestReviewMinConfidenceUnparseable(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MIN_CONFIDENCE": "high"})); err == nil {
+		t.Error("an unparseable REVIEW_MIN_CONFIDENCE should be a startup error")
+	}
+}
+
+// REVIEW_MIN_CONFIDENCE must be a probability in [0,1]; non-finite or out-of-range values are
+// rejected at startup rather than silently dropping every finding (>1) or filtering on NaN.
+func TestReviewMinConfidenceOutOfRange(t *testing.T) {
+	for _, v := range []string{"1.5", "-0.1", "NaN", "+Inf", "Inf"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MIN_CONFIDENCE": v})); err == nil {
+			t.Errorf("REVIEW_MIN_CONFIDENCE=%q should be a startup error", v)
+		}
+	}
+	// Boundaries are valid.
+	for _, v := range []string{"0", "1", "0.6"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MIN_CONFIDENCE": v})); err != nil {
+			t.Errorf("REVIEW_MIN_CONFIDENCE=%q should be valid, got %v", v, err)
+		}
 	}
 }
 

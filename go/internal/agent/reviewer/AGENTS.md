@@ -61,19 +61,56 @@ a `decision` (skip / deny / review):
 6. **Size gate** — two-dimensional (`REVIEW_MAX_FILES` **and** `REVIEW_MAX_DIFF_BYTES`):
    over either cap denies (review-or-deny, no degrade tier — Decision 4).
 
-The category fan-out, scorecard, publishing the review, and posting the deny comment land in
-later changes.
+When the decision is **review**, the model-calling stage runs (see below). Publishing the
+scorecard/inline comments and posting the deny comment land in later changes.
+
+## Review stage (category fan-out → glue → scorecard)
+
+When intake returns `review`, `Engine.review` runs the model-calling stage:
+
+1. **Fan out** one agent per applicable category over the **whole filtered diff** (Decision 3),
+   in parallel (ADK `ParallelAgent` — concurrent on Vertex, GPU-serialized locally). The
+   consolidated set: Safety + Security + Code quality (code tier), Performance +
+   Accessibility (base tier; accessibility only when UI/markup files changed) + an `(other)`
+   catch-all whose findings are demoted to nitpick.
+2. **Glue/synthesis** (code tier, always) runs over the diff + the category findings and adds
+   the cross-cutting lenses: architectural alignment, testability, test coverage (Decision 3/12).
+3. **Verify gate + dedup** (Decision 13/5, deterministic, in code — not asked of the model):
+   drop findings below `REVIEW_MIN_CONFIDENCE`, then collapse cross-lens duplicates by
+   fingerprint (keep worst severity).
+4. **Scorecard** (Decision 5): a per-dimension severity histogram → level (🔴 any critical or
+   ≥2 major · 🟡 any major or ≥3 medium · 🟢 else); overall = critical-cap (any critical in
+   security / runtime safety → 🔴) combined with the worst dimension level. Count-based — no
+   synthetic 0–100 score. For now the scorecard is logged; publishing lands later.
+
+### Structured output on the local model path
+
+adk-go v1.4.0's `OutputSchema` does **not** enforce a shape (validation is an unimplemented
+TODO), and the Ollama adapter only forwards generic JSON mode via `ResponseMIMEType`. So
+category agents request `application/json` (valid JSON syntax), describe the exact findings
+schema in their prompt, and `parseFindings` recovers **defensively** — it extracts the first
+JSON array from the model text, tolerates fences/prose, and treats a malformed body as no
+findings (empty = success, Decisions 2/13). This is best-effort by design; the narrow
+single-lens prompts are themselves the false-positive control, and the model is a config knob.
 
 ## Files
 
 - `reviewer.go` — `Deps`, `Engine`, `NewEngine`, `Engine.Kickoff(ctx, raw)`, and the `decide`
   intake orchestration + skip helpers. Gated by `REVIEW_ENABLED` (default false, the kill
-  switch). Like the lint/coverage fixers it keeps its constructor and logic in one file; the
-  pure-wiring `agents_setup.go` (the build-agent split) arrives when the ADK category
-  sub-agents do.
+  switch).
 - `filter.go` — the exclude-glob `fileFilter` (basename and `**`-aware path globs) that drops
   generated/vendored/binary churn and totals the filtered patch bytes.
 - `sizegate.go` — `oversize`, the two-dimensional file-count/diff-byte cap.
+- `findings.go` — the `Finding` schema, severity/dimension normalization, `fingerprint`, and
+  the defensive `parseFindings`.
+- `categories.go` — the consolidated category set + `selectCategories` (UI-only gating).
+- `scorecard.go` — the count-based `scoreFindings`.
+- `glue.go` — the deterministic verify gate + cross-lens `dedupe` the glue pass owns.
+- `review.go` — `Engine.review`: the fan-out drive (`ParallelReview`), glue drive, and diff
+  formatting.
+- `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue LLM agents, the
+  prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
+- `prompts/*.md` — one markdown prompt per category and the glue pass.
 
 The `pull_request` webhook parse (`ParsePullRequestEvent`) and the file fetch (`ListPRFiles`)
 live in `githubapi` next to `ParseCheckRunEvent`, so the SDK stays in the tooling layer and
