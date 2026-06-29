@@ -5,6 +5,7 @@
 package githubapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -252,6 +253,90 @@ func (c *Client) CreateCheckRun(ctx context.Context, owner, repo string, in Chec
 		return fmt.Errorf("create check run %s/%s @%s: %w", owner, repo, in.HeadSHA, err)
 	}
 	return nil
+}
+
+// ReviewCommentRef identifies an existing inline review comment for reconciliation: its GraphQL
+// node id (the minimizeComment subject) and its body (which carries the hidden fingerprint marker).
+type ReviewCommentRef struct {
+	NodeID string
+	Body   string
+}
+
+// ListReviewComments returns the PR's inline review comments (paginated). Reconciliation parses the
+// fingerprint marker from each body to decide what to keep, add, or minimize.
+func (c *Client) ListReviewComments(ctx context.Context, owner, repo string, number int) ([]ReviewCommentRef, error) {
+	opts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	var out []ReviewCommentRef
+	for {
+		comments, resp, err := c.gh.PullRequests.ListComments(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("list review comments %s/%s#%d: %w", owner, repo, number, err)
+		}
+		for _, rc := range comments {
+			out = append(out, ReviewCommentRef{NodeID: rc.GetNodeID(), Body: rc.GetBody()})
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return out, nil
+}
+
+// MinimizeComment collapses a comment as OUTDATED via GraphQL (the REST API has no equivalent), so
+// a finding that no longer applies is hidden rather than deleted — the thread is preserved.
+// subjectID is the comment's GraphQL node id (ReviewCommentRef.NodeID).
+func (c *Client) MinimizeComment(ctx context.Context, subjectID string) error {
+	const mutation = `mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}`
+	return c.graphql(ctx, mutation, map[string]any{"id": subjectID})
+}
+
+// graphql POSTs a GraphQL operation to the GraphQL endpoint over the same authenticated HTTP client
+// as REST (the installation token authenticates both). The endpoint is derived from the REST
+// BaseURL so a test can point it at an httptest stub. A non-2xx status or a non-empty GraphQL
+// errors array becomes a Go error.
+func (c *Client) graphql(ctx context.Context, query string, variables map[string]any) error {
+	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return fmt.Errorf("graphql: marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlURL(), bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("graphql: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.gh.Client().Do(req)
+	if err != nil {
+		return fmt.Errorf("graphql: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("graphql: unexpected status %s", resp.Status)
+	}
+	var body struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("graphql: decode response: %w", err)
+	}
+	if len(body.Errors) > 0 {
+		return fmt.Errorf("graphql: %s", body.Errors[0].Message)
+	}
+	return nil
+}
+
+// graphqlURL derives the GraphQL endpoint from the REST BaseURL. api.github.com's REST base is
+// "https://api.github.com/" and its GraphQL endpoint is "https://api.github.com/graphql"; a test
+// stub's BaseURL yields that server's /graphql. GitHub Enterprise Server is the exception: it
+// serves REST at "<host>/api/v3" but GraphQL at "<host>/api/graphql", so map that path explicitly.
+func (c *Client) graphqlURL() string {
+	base := strings.TrimSuffix(c.gh.BaseURL.String(), "/")
+	if strings.HasSuffix(base, "/api/v3") {
+		return strings.TrimSuffix(base, "/v3") + "/graphql"
+	}
+	return base + "/graphql"
 }
 
 // Comparison summarizes what changed between two refs (base...head).

@@ -32,18 +32,37 @@ The reviewer reads the PR and posts its output via the **GitHub REST API**, over
 - **The `agent-review` check is REST-only** — GitHub's GraphQL API has no check-run
   mutation, so there is no GraphQL path for it by design.
 
-### Future: GraphQL (only where REST cannot reach it)
+### Reconciliation — GitHub-as-store (no local durable state)
 
-GraphQL is **not** a prerequisite and is **not** used in the ingress/core/publish path.
-It is added later, as a small module, only for the **reconciliation thread layer**:
-resolving/minimizing a review thread whose finding is gone (fixed). `resolveReviewThread`
-and `minimizeComment` are **GraphQL-only**; until that module lands, reconciliation degrades
-to delete-stale (`DELETE /pulls/comments/{id}`). GraphQL rides the **same** `TokenProvider`,
-so adding it is zero auth rework. If pilot volume ever justifies it, the read-aggregate path
-(threads/comments/metadata — **not** patches, which GraphQL cannot return) may also move to
-GraphQL. (Corrected 2026-06-29: the earlier "GraphQL-native data layer" plan rested on the
-mistaken belief that GraphQL exposes file patches and a `createCheckRun` mutation — it does
-neither.)
+Re-reviewing a PR is **idempotent and self-cleaning** without a local store: every inline comment
+carries a hidden fingerprint marker `<!-- ar-fp:<file:line:normalizedMessage> -->`, so GitHub itself
+holds the per-PR review state. On each publish (`reconcile.go` + `publish.go`):
+
+- **list** the PR's existing review comments (`ListReviewComments`, REST) and parse their markers;
+- **keep** a finding already represented by a comment (not re-posted → idempotent);
+- **add** a finding with no existing comment (posted with its marker);
+- **minimize** an existing fingerprinted comment whose finding is gone — collapsed as **OUTDATED**
+  via `MinimizeComment` (the **only GraphQL** in the codebase: a raw mutation to `<BaseURL>/graphql`
+  over the same `TokenProvider`, since the REST API has no minimize/resolve). Comments without our
+  marker (foreign, or pre-reconciliation) are ignored.
+
+Minimization is **best-effort**: it runs after the new inline comments are posted but a single
+`MinimizeComment` failure only logs and continues so the summary comment and check run still
+publish (a leftover stale comment is collapsed on the next genuine re-push). Reconciliation keys
+purely off the hidden `ar-fp:` marker and does **not** filter by comment author: at a single
+deployment every marked comment is one this agent posted, so closing-its-own-fixed-comments holds
+without identity resolution. Author/thread-identity awareness is **deferred to the future
+reply-to-reply feature** (which inherently needs to know which thread is the agent's and who
+replied); the cheap marker-scoping fix covers the only residual case (two deployments sharing one
+repo) if it ever becomes real.
+
+This replaced the publish stage's coarse whole-SHA skip **for inline comments only**. The
+`alreadyPublished` head-SHA guard still protects the non-comment outputs — the summary comment, the
+`agent-review` check run, and the `publishDeny` path — from duplicating on a redelivered task (a
+genuine re-push carries a new SHA and reconciles normally). Still to come (later changes):
+**incremental re-review** (only re-run changed-since-SHA files), **debounce**, and **reply-to-reply**
+threading. The read-aggregate path may move to GraphQL if pilot volume justifies it; patches stay
+REST (GraphQL cannot return diff hunks; `createCheckRun` is also REST-only).
 
 ## Intake pipeline
 
@@ -94,14 +113,16 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
 2. **Inline comments** carry an icon+category prefix (`🔒 Security` / `⚠️ Potential issue` /
    `🛠️ Refactor`), an optional ```suggestion block, and an optional collapsible **🤖 Prompt for
    AI agents** block (`fix_prompt`, Decision 10), posted as one advisory `COMMENT` review.
-3. **Summary comment** is marker-updated (`<!-- automation-agent:review:<owner>/<repo>#<n> -->`,
+3. **Reconcile** against the PR's existing fingerprinted comments (see *Reconciliation* above):
+   skip findings already posted (idempotent), post only new ones, and minimize comments now fixed.
+4. **Summary comment** is marker-updated (`<!-- automation-agent:review:<owner>/<repo>#<n> -->`,
    Decision 9) so a re-review edits it in place: header + scorecard table + the collapsible
    sections + review details (head SHA, file count, tiers).
-4. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never**
+5. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never**
    `failure`. Deny publishes the "too large, please split" summary + a neutral check.
 
-Still to come: fingerprint reconciliation / incremental re-review (resolve stale threads on a
-re-push — currently a re-push posts a fresh review) and standards-aware review.
+Still to come: incremental re-review (only re-run changed-since-SHA files), debounce,
+reply-to-reply threading, and standards-aware review.
 
 ### Structured output on the local model path
 
@@ -132,6 +153,8 @@ single-lens prompts are themselves the false-positive control, and the model is 
   accepts an inline comment on (added/context lines), used to route in-diff vs out-of-diff.
 - `publish.go` — `Engine.publish` / `Engine.publishDeny`: the CodeRabbit-style assembly + REST
   writes (advisory review, marker summary comment, advisory `agent-review` check).
+- `reconcile.go` — the fingerprint marker (`fpMarker`/`parseFPMarker`) and the pure `reconcile`:
+  given this run's inline findings + the PR's existing comments, what to post vs minimize.
 - `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue LLM agents, the
   prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
 - `prompts/*.md` — one markdown prompt per category and the glue pass.

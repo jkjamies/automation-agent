@@ -100,7 +100,11 @@ func TestPublishWriteErrorPropagates(t *testing.T) {
 	}
 }
 
-// A redelivered task for a head SHA already published posts nothing (at-least-once safety).
+// Re-review reconciles against GitHub: a finding already on the PR (its fingerprint marker is on an
+// existing comment) is not re-posted (idempotent), and an existing comment whose finding is gone is
+// minimized. Comments without our marker are left alone.
+// A redelivered task for a head SHA already published posts nothing: reconciliation makes the
+// comments idempotent, and the guard keeps the check run and summary from duplicating.
 func TestPublishIdempotentOnRepublishedSHA(t *testing.T) {
 	gh := &fakeGH{agentCheck: githubapi.CheckResult{Found: true}}
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
@@ -109,8 +113,74 @@ func TestPublishIdempotentOnRepublishedSHA(t *testing.T) {
 	if err := testEngine(gh).publish(context.Background(), scoreFindings(findings), findings, meta); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if gh.review != nil || len(gh.upserts) != 0 || len(gh.checks) != 0 {
-		t.Errorf("a republished SHA must post nothing: review=%v upserts=%d checks=%d", gh.review, len(gh.upserts), len(gh.checks))
+	if gh.review != nil || len(gh.upserts) != 0 || len(gh.checks) != 0 || len(gh.minimized) != 0 {
+		t.Errorf("a republished SHA must post nothing: review=%v upserts=%d checks=%d minimized=%d",
+			gh.review, len(gh.upserts), len(gh.checks), len(gh.minimized))
+	}
+}
+
+func TestPublishReconciles(t *testing.T) {
+	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
+	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli"}
+	gh := &fakeGH{existing: []githubapi.ReviewCommentRef{
+		{NodeID: "keep", Body: "old body " + fpMarker(finding.fingerprint())},
+		{NodeID: "stale", Body: "fixed finding " + fpMarker("a.go:9:obsolete")},
+		{NodeID: "foreign", Body: "a human comment with no marker"},
+	}}
+	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if gh.review != nil {
+		t.Errorf("a finding already on the PR must not be re-posted: %+v", gh.review)
+	}
+	if len(gh.minimized) != 1 || gh.minimized[0] != "stale" {
+		t.Errorf("minimized = %v, want [stale]", gh.minimized)
+	}
+}
+
+// Minimizing an outdated comment is best-effort: a failure there must not abort publish, so the
+// summary comment and check run still post (otherwise a retry short-circuits at alreadyPublished
+// and the PR is left without its summary/check).
+func TestPublishMinimizeFailureStillPublishes(t *testing.T) {
+	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
+	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
+	gh := &fakeGH{
+		minimizeErr: errors.New("graphql boom"),
+		existing:    []githubapi.ReviewCommentRef{{NodeID: "stale", Body: "fixed " + fpMarker("a.go:9:obsolete")}},
+	}
+	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+		t.Fatalf("publish must not fail when minimize fails: %v", err)
+	}
+	if len(gh.minimized) != 1 || gh.minimized[0] != "stale" {
+		t.Errorf("minimize must be attempted, got %v", gh.minimized)
+	}
+	if len(gh.upserts) != 1 {
+		t.Errorf("summary comment must still be upserted despite minimize failure, got %d", len(gh.upserts))
+	}
+	if len(gh.checks) != 1 {
+		t.Errorf("check run must still be created despite minimize failure, got %d", len(gh.checks))
+	}
+}
+
+// A finding with no existing comment is posted, carrying its fingerprint marker for next time.
+func TestPublishPostsNewFinding(t *testing.T) {
+	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
+	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
+	gh := &fakeGH{} // no existing comments
+	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if gh.review == nil || len(gh.review.Comments) != 1 {
+		t.Fatalf("a new finding must be posted, got %+v", gh.review)
+	}
+	if !strings.Contains(gh.review.Comments[0].Body, fpMarker(finding.fingerprint())) {
+		t.Error("posted comment must carry its fingerprint marker")
+	}
+	if len(gh.minimized) != 0 {
+		t.Errorf("nothing to minimize, got %v", gh.minimized)
 	}
 }
 

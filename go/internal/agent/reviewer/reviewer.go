@@ -45,8 +45,14 @@ type gitHubClient interface {
 	CreateReview(ctx context.Context, owner, repo string, number int, in githubapi.ReviewInput) error
 	UpsertMarkerComment(ctx context.Context, owner, repo string, number int, marker, body string) error
 	CreateCheckRun(ctx context.Context, owner, repo string, in githubapi.CheckRunInput) error
-	// AgentCheck reports whether the agent-review check already exists for a ref, so a redelivered
-	// task does not re-post a review it already published (publish idempotency).
+	// ListReviewComments returns the PR's existing inline comments, and MinimizeComment collapses
+	// one as outdated. Together they let a re-review reconcile against GitHub itself (no local
+	// store): keep findings that still apply, add new ones, and minimize comments now fixed.
+	ListReviewComments(ctx context.Context, owner, repo string, number int) ([]githubapi.ReviewCommentRef, error)
+	MinimizeComment(ctx context.Context, subjectID string) error
+	// AgentCheck reports whether the agent-review check already exists for the head SHA. Reconciliation
+	// makes the comments idempotent, but the check run and summary are not — so a redelivered task for
+	// an already-published SHA skips re-posting (a re-push has a new SHA and still reconciles).
 	AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (githubapi.CheckResult, error)
 }
 
