@@ -145,11 +145,12 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		e.log.Debug("reviewer disabled (REVIEW_ENABLED=false); ignoring pull_request event", "bytes", len(raw))
 		return nil
 	}
-	// An enabled engine needs a client to fetch the diff and both tier models to review it;
-	// without them, return a controlled error rather than dereferencing a nil dependency (a
-	// wiring mistake, not a per-event condition — the dispatch retry surfaces it in logs).
-	if e.gh == nil || e.baseLLM == nil || e.codeLLM == nil {
-		return fmt.Errorf("reviewer: enabled but GitHub client or models not configured")
+	// An enabled engine needs a client to fetch the diff and publish (both deny and review use
+	// it); without it, return a controlled error rather than dereferencing a nil dependency (a
+	// wiring mistake, not a per-event condition — the dispatch retry surfaces it in logs). The
+	// tier models are validated in the review branch below, since a deny publishes no model call.
+	if e.gh == nil {
+		return fmt.Errorf("reviewer: enabled but GitHub client not configured")
 	}
 	ev, err := githubapi.ParsePullRequestEvent(raw)
 	if err != nil {
@@ -174,6 +175,10 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		}
 		e.log.Info("review denied", "pr", pr, "files", len(d.files), "diff_bytes", d.diffBytes, "reason", d.reason)
 	case decisionReview:
+		// Review needs both tier models; the deny branch above does not, so validate them here.
+		if e.baseLLM == nil || e.codeLLM == nil {
+			return fmt.Errorf("reviewer: enabled but review models not configured")
+		}
 		// Fan out the category lenses + glue pass, score, then publish the review.
 		card, findings, err := e.review(ctx, d.files)
 		if err != nil {

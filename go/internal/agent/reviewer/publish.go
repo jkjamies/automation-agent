@@ -132,12 +132,19 @@ func inlineCommentBody(f Finding) string {
 	// sanitizing here.
 	fmt.Fprintf(&b, "**%s** · _%s_\n\n%s\n", findingPrefix(f), f.Dimension, sanitizeText(f.Message))
 	if f.Suggestion != "" {
-		b.WriteString("\n```suggestion\n")
+		// Suggestion is model-authored; size the outer fence past any backtick run in it so a
+		// suggestion containing a ```fence can't close the block early and inject markdown or
+		// @mentions (GitHub honors longer suggestion fences). Same approach as FixPrompt below.
+		fence := strings.Repeat("`", maxBacktickRun(f.Suggestion)+1)
+		if len(fence) < 3 {
+			fence = "```"
+		}
+		b.WriteString("\n" + fence + "suggestion\n")
 		b.WriteString(f.Suggestion)
 		if !strings.HasSuffix(f.Suggestion, "\n") {
 			b.WriteByte('\n')
 		}
-		b.WriteString("```\n")
+		b.WriteString(fence + "\n")
 	}
 	if f.FixPrompt != "" {
 		// FixPrompt is model-authored; render it inside a code fence so any @mentions or HTML are

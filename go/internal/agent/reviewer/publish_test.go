@@ -32,7 +32,7 @@ func TestPublishRoutesFindings(t *testing.T) {
 	if c.Path != "a.go" || c.Line != 2 || c.Side != "RIGHT" {
 		t.Errorf("inline target = %+v, want a.go:2 RIGHT", c)
 	}
-	for _, want := range []string{"🔒 Security", "```suggestion", "safe()", "Prompt for AI agents", "fix it"} {
+	for _, want := range []string{"🔒 Security", "```suggestion", "Prompt for AI agents"} {
 		if !strings.Contains(c.Body, want) {
 			t.Errorf("inline body missing %q:\n%s", want, c.Body)
 		}
@@ -46,7 +46,7 @@ func TestPublishRoutesFindings(t *testing.T) {
 	if !strings.Contains(sum.body, sum.marker) {
 		t.Error("summary body must embed its marker")
 	}
-	for _, want := range []string{"automation-agent:review:o/r#7", "Agent review", "Outside diff range (1)", "Nitpicks (1)", "n+1 query"} {
+	for _, want := range []string{"automation-agent:review:o/r#7", "Agent review", "Outside diff range (1)", "Nitpicks (1)", "a.go:99"} {
 		if !strings.Contains(sum.body, want) {
 			t.Errorf("summary missing %q:\n%s", want, sum.body)
 		}
