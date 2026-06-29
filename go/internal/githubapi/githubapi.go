@@ -7,8 +7,10 @@ package githubapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v78/github"
@@ -24,18 +26,47 @@ const httpTimeout = 30 * time.Second
 // one client serves many repositories.
 type Client struct {
 	gh *github.Client
+	// authoredLogin is the GitHub login this client authors content as ("<slug>[bot]" in App
+	// mode, the user login in PAT mode), resolved by the caller. When known, UpsertMarkerComment
+	// edits only comments by this login — the authoritative ownership signal. Empty when identity
+	// could not be resolved, in which case appAuthored selects a safe fallback.
+	authoredLogin string
+	// appAuthored is true when the REST token comes from a GitHub App installation, so this
+	// client's own issue comments are authored by a bot user (type "Bot"). It is the fallback
+	// ownership signal when authoredLogin is unknown: an in-place edit is then restricted to
+	// bot-authored comments rather than any comment echoing the marker (GitHub rejects editing a
+	// comment the client did not author). PAT/anonymous mode posts as a human, where this signal
+	// does not apply.
+	appAuthored bool
+}
+
+// Option configures a Client at construction.
+type Option func(*Client)
+
+// WithAuthoredLogin sets the login this client authors content as, so UpsertMarkerComment can edit
+// only the comments it actually posted. An empty login leaves ownership to the author-type
+// fallback (see ownsComment).
+func WithAuthoredLogin(login string) Option {
+	return func(c *Client) { c.authoredLogin = login }
 }
 
 // New builds a Client whose every REST request is authenticated by a fresh token
 // from the provider (a static PAT, or an auto-refreshed App installation token).
 // A StaticProvider holding an empty token yields an unauthenticated client (fine
 // for public reads and tests).
-func New(provider auth.TokenProvider) *Client {
+func New(provider auth.TokenProvider, opts ...Option) *Client {
 	gh := github.NewClient(&http.Client{
 		Timeout:   httpTimeout,
 		Transport: auth.NewRoundTripper(nil, provider),
 	})
-	return &Client{gh: gh}
+	// An App installation token posts comments as the app's bot user; a PAT posts as a human.
+	// This distinguishes the two for the marker-upsert ownership fallback (see ownsComment).
+	_, appAuthored := provider.(*auth.AppProvider)
+	c := &Client{gh: gh, appAuthored: appAuthored}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Commit is a minimal commit projection for digests.
@@ -77,6 +108,151 @@ type CheckResult struct {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// ReviewComment is one inline review comment on the head (RIGHT) side of a file. GitHub rejects
+// an inline comment whose line is outside the PR's diff hunks, so the caller posts only in-diff
+// findings here and lists the rest in the summary comment.
+type ReviewComment struct {
+	Path string
+	Line int
+	Side string // "RIGHT" (head side)
+	Body string
+}
+
+// ReviewInput is an advisory pull-request review: a body plus optional inline comments. The
+// reviewer never approves or requests changes (spec Decision 15), so the event is always COMMENT.
+type ReviewInput struct {
+	Body     string
+	Comments []ReviewComment
+}
+
+// CreateReview posts an advisory (COMMENT) pull-request review with optional inline comments.
+func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, in ReviewInput) error {
+	comments := make([]*github.DraftReviewComment, 0, len(in.Comments))
+	for _, rc := range in.Comments {
+		comments = append(comments, &github.DraftReviewComment{
+			Path: ptr(rc.Path), Body: ptr(rc.Body), Line: ptr(rc.Line), Side: ptr(rc.Side),
+		})
+	}
+	req := &github.PullRequestReviewRequest{Event: ptr("COMMENT"), Comments: comments}
+	if in.Body != "" {
+		req.Body = ptr(in.Body)
+	}
+	if _, _, err := c.gh.PullRequests.CreateReview(ctx, owner, repo, number, req); err != nil {
+		return fmt.Errorf("create review %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return nil
+}
+
+// UpsertMarkerComment edits the single issue comment this client authored whose body contains
+// marker, or creates one if none exists. The reviewer's summary comment carries a hidden marker
+// (spec Decision 9) so a re-review updates it in place instead of piling up duplicates. Only a
+// comment the client could have authored is edited (see ownsComment): GitHub rejects editing a
+// foreign comment, so a comment that merely echoes the marker must not hijack the upsert.
+func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, number int, marker, body string) error {
+	// An empty marker would match every comment (Contains("", …) is always true) and edit an
+	// unrelated one; a body without the marker could never be found again, piling up duplicates.
+	// Both are caller bugs, so fail fast rather than corrupt the PR's comments.
+	if marker == "" {
+		return fmt.Errorf("upsert comment %s/%s#%d: empty marker", owner, repo, number)
+	}
+	if !strings.Contains(body, marker) {
+		return fmt.Errorf("upsert comment %s/%s#%d: body must contain the marker", owner, repo, number)
+	}
+	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := c.gh.Issues.ListComments(ctx, owner, repo, number, opts)
+		if err != nil {
+			return fmt.Errorf("list comments %s/%s#%d: %w", owner, repo, number, err)
+		}
+		for _, ic := range comments {
+			if !strings.Contains(ic.GetBody(), marker) || !c.ownsComment(ic) {
+				continue
+			}
+			if _, _, err := c.gh.Issues.EditComment(ctx, owner, repo, ic.GetID(), &github.IssueComment{Body: ptr(body)}); err != nil {
+				// With a known login the match is authoritative, so any edit failure is a real
+				// error. On the weak author-type fallback (identity unresolved) the match can be a
+				// foreign bot that merely echoes the marker; a 403/404 there means "not ours", so
+				// skip it and fall through to create rather than fail the whole publish.
+				if c.authoredLogin == "" && isHTTPStatus(err, http.StatusForbidden, http.StatusNotFound) {
+					continue
+				}
+				return fmt.Errorf("edit comment %s/%s#%d: %w", owner, repo, number, err)
+			}
+			return nil
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	if _, _, err := c.gh.Issues.CreateComment(ctx, owner, repo, number, &github.IssueComment{Body: ptr(body)}); err != nil {
+		return fmt.Errorf("create comment %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return nil
+}
+
+// ownsComment reports whether this client authored ic — the precondition for editing it in place
+// (GitHub rejects editing a comment the client did not author). When the client's own login is
+// known it is the authoritative check: only a byte-for-byte login match is owned, so a foreign
+// comment — even another bot's — that merely echoes the marker is skipped and a fresh comment is
+// created instead. When the login is unknown (identity could not be resolved), it falls back to
+// author type: App mode trusts only bot-authored comments; PAT/anonymous (local-dev) trusts the
+// marker alone, since there is no distinct identity to match against.
+func (c *Client) ownsComment(ic *github.IssueComment) bool {
+	if c.authoredLogin != "" {
+		return ic.GetUser().GetLogin() == c.authoredLogin
+	}
+	if c.appAuthored {
+		return ic.GetUser().GetType() == "Bot"
+	}
+	return true
+}
+
+// isHTTPStatus reports whether err is (or wraps) a GitHub API error with one of the given HTTP
+// status codes.
+func isHTTPStatus(err error, codes ...int) bool {
+	var ge *github.ErrorResponse
+	if !errors.As(err, &ge) || ge.Response == nil {
+		return false
+	}
+	for _, code := range codes {
+		if ge.Response.StatusCode == code {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckRunInput describes the advisory agent-review check run (spec Decision 15): always
+// completed, conclusion success or neutral — never failure, so it informs without gating merges.
+type CheckRunInput struct {
+	Name       string
+	HeadSHA    string
+	Conclusion string // "success" | "neutral"
+	Title      string
+	Summary    string
+}
+
+// CreateCheckRun posts a completed, advisory check run for the head SHA.
+func (c *Client) CreateCheckRun(ctx context.Context, owner, repo string, in CheckRunInput) error {
+	// The agent-review check is advisory and must never gate a merge (spec Decision 15), so the
+	// conclusion is constrained here at the API boundary — a "failure"/"cancelled" can't slip in.
+	if in.Conclusion != "success" && in.Conclusion != "neutral" {
+		return fmt.Errorf("create check run %s/%s: advisory conclusion must be success or neutral, got %q", owner, repo, in.Conclusion)
+	}
+	_, _, err := c.gh.Checks.CreateCheckRun(ctx, owner, repo, github.CreateCheckRunOptions{
+		Name:       in.Name,
+		HeadSHA:    in.HeadSHA,
+		Status:     ptr("completed"),
+		Conclusion: ptr(in.Conclusion),
+		Output:     &github.CheckRunOutput{Title: ptr(in.Title), Summary: ptr(in.Summary)},
+	})
+	if err != nil {
+		return fmt.Errorf("create check run %s/%s @%s: %w", owner, repo, in.HeadSHA, err)
+	}
+	return nil
+}
 
 // Comparison summarizes what changed between two refs (base...head).
 type Comparison struct {

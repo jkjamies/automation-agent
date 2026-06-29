@@ -9,12 +9,14 @@
 // compute runs in-request via the execution transport (KindReview → /internal/dispatch),
 // so CPU stays allocated on Cloud Run.
 //
-// This change is the deterministic intake pipeline: parse the event, apply the trigger and
-// skip rules, fetch the changed files via the REST API, filter generated/vendored churn, and
-// apply the two-dimensional size gate — producing a decision (skip / deny / review). The
-// review work itself (fan out the category sub-agents, score, publish) and posting the deny
-// comment land in later changes; when the ADK sub-agents arrive, their pure wiring moves into
-// an agents_setup.go (the build-agent pattern). See specs/20260625-pr-code-review-agent.md.
+// The flow per pull_request event: parse it, apply the trigger and skip rules, fetch the changed
+// files via the REST API, filter generated/vendored churn, and apply the two-dimensional size gate
+// to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass,
+// scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
+// inline comments for in-diff actionable findings, a marker-updated summary comment, and an
+// advisory agent-review check. Deny publishes the "too large, please split" summary + a neutral
+// check. Still to come: fingerprint reconciliation / incremental re-review (resolve stale threads
+// on re-push) and standards-aware review. See specs/20260625-pr-code-review-agent.md.
 package reviewer
 
 import (
@@ -34,10 +36,18 @@ import (
 // fixers' own PRs in a loop (spec Decision 19). It mirrors the AGENT_PR_LABEL namespace.
 const ownBranchPrefix = "automation-agent/"
 
-// gitHubClient is the narrow slice of *githubapi.Client the reviewer needs — the changed
-// files (with patches) for a PR. A local interface keeps the engine testable with a fake.
+// gitHubClient is the slice of *githubapi.Client the reviewer needs: read the changed files
+// (with patches) and publish the review (an advisory pull-request review with inline comments,
+// the marker-updated summary comment, and the advisory agent-review check). A local interface
+// keeps the engine testable with a fake.
 type gitHubClient interface {
 	ListPRFiles(ctx context.Context, owner, repo string, number int) ([]githubapi.PRFile, error)
+	CreateReview(ctx context.Context, owner, repo string, number int, in githubapi.ReviewInput) error
+	UpsertMarkerComment(ctx context.Context, owner, repo string, number int, marker, body string) error
+	CreateCheckRun(ctx context.Context, owner, repo string, in githubapi.CheckRunInput) error
+	// AgentCheck reports whether the agent-review check already exists for a ref, so a redelivered
+	// task does not re-post a review it already published (publish idempotency).
+	AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (githubapi.CheckResult, error)
 }
 
 // Deps wires the reviewer engine.
@@ -135,11 +145,12 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		e.log.Debug("reviewer disabled (REVIEW_ENABLED=false); ignoring pull_request event", "bytes", len(raw))
 		return nil
 	}
-	// An enabled engine needs a client to fetch the diff and both tier models to review it;
-	// without them, return a controlled error rather than dereferencing a nil dependency (a
-	// wiring mistake, not a per-event condition — the dispatch retry surfaces it in logs).
-	if e.gh == nil || e.baseLLM == nil || e.codeLLM == nil {
-		return fmt.Errorf("reviewer: enabled but GitHub client or models not configured")
+	// An enabled engine needs a client to fetch the diff and publish (both deny and review use
+	// it); without it, return a controlled error rather than dereferencing a nil dependency (a
+	// wiring mistake, not a per-event condition — the dispatch retry surfaces it in logs). The
+	// tier models are validated in the review branch below, since a deny publishes no model call.
+	if e.gh == nil {
+		return fmt.Errorf("reviewer: enabled but GitHub client not configured")
 	}
 	ev, err := githubapi.ParsePullRequestEvent(raw)
 	if err != nil {
@@ -150,21 +161,33 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		return err
 	}
 	pr := ev.RepoFullName + "#" + strconv.Itoa(ev.Number)
+	// owner/repo are only used by the publish paths; decide() already validated the full name
+	// before reaching a deny/review decision, so the discarded ok is safe there.
+	owner, repo, _ := splitFullName(ev.RepoFullName)
+	meta := publishMeta{owner: owner, repo: repo, number: ev.Number, headSHA: ev.HeadSHA, files: d.files, tiers: "code-reasoning + base"}
 	switch d.kind {
 	case decisionSkip:
 		e.log.Info("review skipped", "pr", pr, "action", ev.Action, "reason", d.reason)
 	case decisionDeny:
-		// Posting the "too large — please split" comment + a neutral agent-review check lands
-		// in the publish change; intake only decides.
+		// Too large to review: post the "please split" summary + a neutral check, no model call.
+		if err := e.publishDeny(ctx, meta, d.reason, len(d.files), d.diffBytes); err != nil {
+			return err
+		}
 		e.log.Info("review denied", "pr", pr, "files", len(d.files), "diff_bytes", d.diffBytes, "reason", d.reason)
 	case decisionReview:
-		// Fan out the category lenses + glue pass and score the findings. Publishing the
-		// scorecard and inline comments lands in a later change; for now log the outcome.
-		card, err := e.review(ctx, d.files)
+		// Review needs both tier models; the deny branch above does not, so validate them here.
+		if e.baseLLM == nil || e.codeLLM == nil {
+			return fmt.Errorf("reviewer: enabled but review models not configured")
+		}
+		// Fan out the category lenses + glue pass, score, then publish the review.
+		card, findings, err := e.review(ctx, d.files)
 		if err != nil {
 			return err
 		}
-		e.log.Info("review scored", "pr", pr, "files", len(d.files), "overall", card.overall.String(), "findings", card.total)
+		if err := e.publish(ctx, card, findings, meta); err != nil {
+			return err
+		}
+		e.log.Info("review published", "pr", pr, "files", len(d.files), "overall", card.overall.String(), "findings", card.total)
 	}
 	return nil
 }

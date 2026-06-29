@@ -69,7 +69,24 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build token provider: %w", err)
 	}
-	gh := githubapi.New(provider)
+	// Resolve the login this deployment authors comments as ("<slug>[bot]" in App mode, the user
+	// in PAT mode) so the reviewer's marker-comment upsert edits only its own comments. Best
+	// effort: a lookup failure must not block startup, so warn and let the client fall back to
+	// author-type matching.
+	var authoredLogin string
+	if ir, ok := provider.(auth.IdentityResolver); ok {
+		// Bound the lookup so a slow GitHub API can't hang startup; cancel right after (not via
+		// defer — run() lives for the whole server lifetime).
+		lookupCtx, cancel := context.WithTimeout(sigCtx, 10*time.Second)
+		login, lookupErr := ir.AuthoredLogin(lookupCtx)
+		cancel()
+		if lookupErr != nil {
+			logger.Warn("could not resolve GitHub comment-author identity; marker upsert falls back to author-type matching", "err", lookupErr)
+		} else {
+			authoredLogin = login
+		}
+	}
+	gh := githubapi.New(provider, githubapi.WithAuthoredLogin(authoredLogin))
 	// SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
 	// and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
 	// rather than fail so read-only/dry-run flows still work, but PR operations will not.

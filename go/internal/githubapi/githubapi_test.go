@@ -3,9 +3,11 @@ package githubapi
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +264,281 @@ func TestAgentCheck(t *testing.T) {
 	}
 	if missing.Found {
 		t.Error("expected Found=false for a ref with no agent check")
+	}
+}
+
+func TestCreateReview(t *testing.T) {
+	var gotPath string
+	var body []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /repos/o/r/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	c := testClient(t, mux)
+
+	err := c.CreateReview(context.Background(), "o", "r", 7, ReviewInput{
+		Body:     "summary",
+		Comments: []ReviewComment{{Path: "a.go", Line: 3, Side: "RIGHT", Body: "issue"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateReview: %v", err)
+	}
+	if gotPath != "/repos/o/r/pulls/7/reviews" {
+		t.Errorf("path = %s", gotPath)
+	}
+	s := string(body)
+	for _, want := range []string{`"event":"COMMENT"`, `"a.go"`, `"RIGHT"`, `"issue"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("review body missing %q: %s", want, s)
+		}
+	}
+}
+
+func TestUpsertMarkerCommentEditsExisting(t *testing.T) {
+	var edited bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"other"},{"id":22,"body":"hi MARK here"}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		edited = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	c := testClient(t, mux)
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !edited {
+		t.Error("expected the existing marker comment to be edited in place")
+	}
+}
+
+func TestUpsertMarkerCommentCreatesWhenAbsent(t *testing.T) {
+	var created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"unrelated"}]`))
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !created {
+		t.Error("expected a new comment to be created when no marker matches")
+	}
+}
+
+// Identity-unresolved fallback: with no authoredLogin (App-mode identity lookup failed), the
+// upsert must not edit a marker-bearing comment authored by a non-bot (GitHub rejects editing a
+// foreign comment); it creates a fresh one when the only marker match is a human echoing it.
+func TestUpsertMarkerCommentAppModeSkipsForeignAuthor(t *testing.T) {
+	var editedForeign, created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		// A human quoted the hidden marker; it is not the app's own comment.
+		_, _ = w.Write([]byte(`[{"id":11,"body":"look at this MARK","user":{"type":"User"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(w http.ResponseWriter, _ *http.Request) {
+		editedForeign = true
+		_, _ = w.Write([]byte(`{"id":11}`))
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if editedForeign {
+		t.Error("must not edit a foreign (non-bot) comment that merely echoes the marker")
+	}
+	if !created {
+		t.Error("expected a new comment when the only marker match is foreign")
+	}
+}
+
+// Identity-unresolved fallback: with no authoredLogin, the app's own bot comment is edited in
+// place even when a human comment also echoes the marker.
+func TestUpsertMarkerCommentAppModeEditsOwnBot(t *testing.T) {
+	var editedBot bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"human MARK","user":{"type":"User"}},{"id":22,"body":"bot MARK","user":{"type":"Bot"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		editedBot = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !editedBot {
+		t.Error("expected the app's own bot comment to be edited in place")
+	}
+}
+
+// With the client's own login known, ownership is by identity: the comment with the matching
+// login is edited even when another bot's comment also echoes the marker.
+func TestUpsertMarkerCommentEditsOwnByLogin(t *testing.T) {
+	var editedOwn bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"foreign MARK","user":{"login":"other[bot]","type":"Bot"}},{"id":22,"body":"ours MARK","user":{"login":"agent-app[bot]","type":"Bot"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		editedOwn = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(http.ResponseWriter, *http.Request) {
+		t.Error("must not edit another bot's comment that merely echoes the marker")
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+	c.authoredLogin = "agent-app[bot]"
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !editedOwn {
+		t.Error("expected the comment authored by our own login to be edited in place")
+	}
+}
+
+// With the login known, a foreign bot echoing the marker is not ours: it is skipped and a fresh
+// comment is created (the type-only check would have wrongly edited it).
+func TestUpsertMarkerCommentSkipsForeignBotByLogin(t *testing.T) {
+	var created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"foreign MARK","user":{"login":"other[bot]","type":"Bot"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(http.ResponseWriter, *http.Request) {
+		t.Error("must not edit a foreign bot's comment")
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+	c.authoredLogin = "agent-app[bot]"
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !created {
+		t.Error("expected a new comment when the only marker match is a foreign bot")
+	}
+}
+
+// PAT mode: ownership is by the resolved self user login — the self-authored comment is edited
+// and another user's comment echoing the marker is left alone.
+func TestUpsertMarkerCommentPATMatchesSelfLogin(t *testing.T) {
+	var editedSelf bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"theirs MARK","user":{"login":"someone","type":"User"}},{"id":22,"body":"mine MARK","user":{"login":"me","type":"User"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		editedSelf = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(http.ResponseWriter, *http.Request) {
+		t.Error("must not edit another user's comment that merely echoes the marker")
+	})
+	c := testClient(t, mux)
+	c.authoredLogin = "me" // PAT mode: appAuthored stays false
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !editedSelf {
+		t.Error("expected the self-authored comment to be edited in place")
+	}
+}
+
+// Weak fallback (identity unresolved): a marker-bearing bot comment that turns out not to be ours
+// — the edit is rejected 403 — must not fail the publish; it falls through to create a fresh one.
+func TestUpsertMarkerCommentWeakFallbackCreatesOnForbiddenEdit(t *testing.T) {
+	var created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"bot MARK","user":{"login":"other[bot]","type":"Bot"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"not authored by this app"}`, http.StatusForbidden)
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true // identity unresolved → author-type fallback, no authoredLogin
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !created {
+		t.Error("a 403 on the weak-fallback edit must fall through to creating a fresh comment")
+	}
+}
+
+func TestCreateCheckRun(t *testing.T) {
+	var body []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /repos/o/r/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	c := testClient(t, mux)
+
+	err := c.CreateCheckRun(context.Background(), "o", "r", CheckRunInput{
+		Name: "agent-review", HeadSHA: "deadbeef", Conclusion: "neutral", Title: "t", Summary: "s",
+	})
+	if err != nil {
+		t.Fatalf("CreateCheckRun: %v", err)
+	}
+	s := string(body)
+	for _, want := range []string{`"agent-review"`, `"deadbeef"`, `"completed"`, `"neutral"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("check body missing %q: %s", want, s)
+		}
+	}
+}
+
+// The advisory check must never gate a merge, so the API boundary rejects any conclusion other
+// than success/neutral before it reaches GitHub (the empty mux is never called).
+func TestCreateCheckRunRejectsNonAdvisory(t *testing.T) {
+	c := testClient(t, http.NewServeMux())
+	for _, concl := range []string{"failure", "cancelled", "timed_out", ""} {
+		if err := c.CreateCheckRun(context.Background(), "o", "r", CheckRunInput{Name: "agent-review", HeadSHA: "s", Conclusion: concl}); err == nil {
+			t.Errorf("conclusion %q must be rejected (advisory: success/neutral only)", concl)
+		}
+	}
+}
+
+// An empty marker (matches every comment) or a body missing the marker (unfindable next time)
+// is a caller bug and is rejected before any API call.
+func TestUpsertMarkerCommentValidates(t *testing.T) {
+	c := testClient(t, http.NewServeMux())
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 1, "", "body"); err == nil {
+		t.Error("an empty marker must be rejected")
+	}
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 1, "MARK", "no marker here"); err == nil {
+		t.Error("a body that omits the marker must be rejected")
 	}
 }

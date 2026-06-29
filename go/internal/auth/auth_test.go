@@ -181,6 +181,42 @@ func TestAppProviderMintExchangeAndCache(t *testing.T) {
 	}
 }
 
+// AuthoredLogin resolves the app's "<slug>[bot]" identity via a JWT-authenticated GET /app and
+// caches it, so the service can recognize the comments it posted.
+func TestAppProviderAuthoredLogin(t *testing.T) {
+	var calls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		// /app authenticates as the app via an RS256 JWT bearer, not an installation token.
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			t.Errorf("GET /app missing bearer auth: %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42, "slug": "agent-app"})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	p, err := NewAppProvider(nil, 42, 99, testKeyPEM(t), WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatalf("NewAppProvider: %v", err)
+	}
+	login, err := p.AuthoredLogin(context.Background())
+	if err != nil {
+		t.Fatalf("AuthoredLogin: %v", err)
+	}
+	if login != "agent-app[bot]" {
+		t.Errorf("login = %q, want agent-app[bot]", login)
+	}
+	// Resolved once and cached — a second call makes no further request.
+	if _, err := p.AuthoredLogin(context.Background()); err != nil {
+		t.Fatalf("AuthoredLogin (cached): %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("GET /app calls = %d, want 1 (identity should be cached)", got)
+	}
+}
+
 func TestAppProviderRefreshesExpiredToken(t *testing.T) {
 	var exchanges int32
 	mux := http.NewServeMux()

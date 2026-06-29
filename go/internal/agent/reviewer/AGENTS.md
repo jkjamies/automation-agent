@@ -61,8 +61,8 @@ a `decision` (skip / deny / review):
 6. **Size gate** — two-dimensional (`REVIEW_MAX_FILES` **and** `REVIEW_MAX_DIFF_BYTES`):
    over either cap denies (review-or-deny, no degrade tier — Decision 4).
 
-When the decision is **review**, the model-calling stage runs (see below). Publishing the
-scorecard/inline comments and posting the deny comment land in later changes.
+When the decision is **review**, the model-calling stage runs (see below) and its result is
+published; when it is **deny**, the "too large" summary + a neutral check are published.
 
 ## Review stage (category fan-out → glue → scorecard)
 
@@ -81,7 +81,27 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
 4. **Scorecard** (Decision 5): a per-dimension severity histogram → level (🔴 any critical or
    ≥2 major · 🟡 any major or ≥3 medium · 🟢 else); overall = critical-cap (any critical in
    security / runtime safety → 🔴) combined with the worst dimension level. Count-based — no
-   synthetic 0–100 score. For now the scorecard is logged; publishing lands later.
+   synthetic 0–100 score.
+
+## Publish stage (CodeRabbit-style, advisory, all REST)
+
+`Engine.publish` posts the scored review; nothing here gates a merge (Decision 15):
+
+1. **Classify** the gated findings against the diff hunks (`hunks.go`): actionable
+   (critical/major/medium) findings on a commentable head-side line post **inline**; actionable
+   findings outside the diff are listed in the summary's **🔭 Outside diff range** section (never
+   dropped or snapped to a wrong line — Decision 6); nitpicks collapse into **🧹 Nitpicks**.
+2. **Inline comments** carry an icon+category prefix (`🔒 Security` / `⚠️ Potential issue` /
+   `🛠️ Refactor`), an optional ```suggestion block, and an optional collapsible **🤖 Prompt for
+   AI agents** block (`fix_prompt`, Decision 10), posted as one advisory `COMMENT` review.
+3. **Summary comment** is marker-updated (`<!-- automation-agent:review:<owner>/<repo>#<n> -->`,
+   Decision 9) so a re-review edits it in place: header + scorecard table + the collapsible
+   sections + review details (head SHA, file count, tiers).
+4. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never**
+   `failure`. Deny publishes the "too large, please split" summary + a neutral check.
+
+Still to come: fingerprint reconciliation / incremental re-review (resolve stale threads on a
+re-push — currently a re-push posts a fresh review) and standards-aware review.
 
 ### Structured output on the local model path
 
@@ -107,7 +127,11 @@ single-lens prompts are themselves the false-positive control, and the model is 
 - `scorecard.go` — the count-based `scoreFindings`.
 - `glue.go` — the deterministic verify gate + cross-lens `dedupe` the glue pass owns.
 - `review.go` — `Engine.review`: the fan-out drive (`ParallelReview`), glue drive, and diff
-  formatting.
+  formatting. Returns the scorecard and the gated findings for the publish stage.
+- `hunks.go` — `commentableLines` / `diffIndex.inDiff`: which head-side lines of a patch GitHub
+  accepts an inline comment on (added/context lines), used to route in-diff vs out-of-diff.
+- `publish.go` — `Engine.publish` / `Engine.publishDeny`: the CodeRabbit-style assembly + REST
+  writes (advisory review, marker summary comment, advisory `agent-review` check).
 - `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue LLM agents, the
   prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
 - `prompts/*.md` — one markdown prompt per category and the glue pass.
