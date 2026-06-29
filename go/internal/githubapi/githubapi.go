@@ -213,6 +213,47 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 	return content, nil
 }
 
+// PRFile is one changed file in a pull request: its path, change status, line counts, and
+// the unified diff patch. Patch carries the hunk text the reviewer needs to map a finding to
+// a diff line; GitHub omits it for binary or very large files, so it is then empty — kept,
+// not an error, so size accounting still counts the file.
+type PRFile struct {
+	Path         string
+	PreviousPath string // prior path for a rename, else empty
+	Status       string // added | modified | removed | renamed | copied | changed
+	Additions    int
+	Deletions    int
+	Patch        string // unified diff hunks; empty for binary/oversized files
+}
+
+// ListPRFiles returns every changed file in a pull request, following pagination. It is the
+// reviewer's primary input (changed files + patches), fetched via REST.
+func (c *Client) ListPRFiles(ctx context.Context, owner, repo string, number int) ([]PRFile, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var out []PRFile
+	for {
+		files, resp, err := c.gh.PullRequests.ListFiles(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("list PR files %s/%s#%d: %w", owner, repo, number, err)
+		}
+		for _, f := range files {
+			out = append(out, PRFile{
+				Path:         f.GetFilename(),
+				PreviousPath: f.GetPreviousFilename(),
+				Status:       f.GetStatus(),
+				Additions:    f.GetAdditions(),
+				Deletions:    f.GetDeletions(),
+				Patch:        f.GetPatch(),
+			})
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return out, nil
+}
+
 // CheckEvent is the parsed essentials of a GitHub check_run webhook event.
 type CheckEvent struct {
 	Action       string // created | completed | rerequested
@@ -250,6 +291,46 @@ func ParseCheckRunEvent(b []byte) (CheckEvent, error) {
 		if out.OutputText == "" {
 			out.OutputText = o.GetSummary()
 		}
+	}
+	return out, nil
+}
+
+// PullRequestEvent is the parsed essentials of a GitHub pull_request webhook event — the
+// reviewer's native-event kickoff. The diff itself is fetched separately via ListPRFiles
+// (the event body carries only metadata).
+type PullRequestEvent struct {
+	Action       string // opened | reopened | synchronize | ready_for_review | ...
+	Number       int
+	RepoFullName string // owner/name
+	HeadRef      string // source branch
+	HeadSHA      string
+	BaseRef      string // target branch
+	Draft        bool
+	Labels       []string
+	AuthorLogin  string // PR author login (e.g. "dependabot[bot]")
+}
+
+// ParsePullRequestEvent parses a pull_request webhook body into the fields the reviewer
+// gates on. It mirrors ParseCheckRunEvent: the webhook JSON is decoded in the tooling layer
+// so the agent consumes a stable projection, never the raw SDK type.
+func ParsePullRequestEvent(b []byte) (PullRequestEvent, error) {
+	var ev github.PullRequestEvent
+	if err := json.Unmarshal(b, &ev); err != nil {
+		return PullRequestEvent{}, fmt.Errorf("parse pull_request event: %w", err)
+	}
+	pr := ev.GetPullRequest()
+	out := PullRequestEvent{
+		Action:       ev.GetAction(),
+		Number:       pr.GetNumber(),
+		RepoFullName: ev.GetRepo().GetFullName(),
+		HeadRef:      pr.GetHead().GetRef(),
+		HeadSHA:      pr.GetHead().GetSHA(),
+		BaseRef:      pr.GetBase().GetRef(),
+		Draft:        pr.GetDraft(),
+		AuthorLogin:  pr.GetUser().GetLogin(),
+	}
+	for _, l := range pr.Labels {
+		out.Labels = append(out.Labels, l.GetName())
 	}
 	return out, nil
 }

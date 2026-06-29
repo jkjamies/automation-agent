@@ -45,15 +45,40 @@ GraphQL. (Corrected 2026-06-29: the earlier "GraphQL-native data layer" plan res
 mistaken belief that GraphQL exposes file patches and a `createCheckRun` mutation — it does
 neither.)
 
+## Intake pipeline
+
+`Engine.Kickoff` runs a deterministic, model-free intake before any review work and produces
+a `decision` (skip / deny / review):
+
+1. **Parse** the event (`githubapi.ParsePullRequestEvent`).
+2. **Trigger gate** — only `opened` / `reopened` / `synchronize` / `ready_for_review` proceed.
+3. **Skip rules** (Decision 19) — draft (unless `ready_for_review`, `REVIEW_SKIP_DRAFTS`),
+   the agent's own `automation-agent/*` branches, the `skip-review` label, and dependency-bot
+   authors (`dependabot[bot]` / `renovate[bot]`).
+4. **Fetch** the changed files + patches (`githubapi.ListPRFiles`, REST, paginated).
+5. **Filter** generated/vendored/lockfile/minified/binary paths (`REVIEW_EXCLUDE_GLOBS`);
+   size is computed on the **filtered** set. An empty filtered diff skips.
+6. **Size gate** — two-dimensional (`REVIEW_MAX_FILES` **and** `REVIEW_MAX_DIFF_BYTES`):
+   over either cap denies (review-or-deny, no degrade tier — Decision 4).
+
+The category fan-out, scorecard, publishing the review, and posting the deny comment land in
+later changes.
+
 ## Files
 
-- `reviewer.go` — `Deps`, `Engine`, `NewEngine`, and `Engine.Kickoff(ctx, raw)`: the
-  per-`pull_request` logic. Currently the ingress slice — gated by `REVIEW_ENABLED` (default
-  false, the kill switch); the diff fetch, category fan-out, scorecard, and publish land in
-  later changes. Like the lint/coverage fixers, this engine keeps its constructor and logic
-  in one file; the pure-wiring `agents_setup.go` (the build-agent split) arrives when the ADK
-  category sub-agents do.
+- `reviewer.go` — `Deps`, `Engine`, `NewEngine`, `Engine.Kickoff(ctx, raw)`, and the `decide`
+  intake orchestration + skip helpers. Gated by `REVIEW_ENABLED` (default false, the kill
+  switch). Like the lint/coverage fixers it keeps its constructor and logic in one file; the
+  pure-wiring `agents_setup.go` (the build-agent split) arrives when the ADK category
+  sub-agents do.
+- `filter.go` — the exclude-glob `fileFilter` (basename and `**`-aware path globs) that drops
+  generated/vendored/binary churn and totals the filtered patch bytes.
+- `sizegate.go` — `oversize`, the two-dimensional file-count/diff-byte cap.
+
+The `pull_request` webhook parse (`ParsePullRequestEvent`) and the file fetch (`ListPRFiles`)
+live in `githubapi` next to `ParseCheckRunEvent`, so the SDK stays in the tooling layer and
+the reviewer consumes stable projections — no `go-github` import here.
 
 Wiring: `root` registers `KindReview` → `Engine.Kickoff`; `cmd` builds the engine (via
-`NewEngine`) from config. Tooling (`githubapi`) is injected; provider SDKs stay out via
+`NewEngine`) from config and injects the `githubapi` client. Provider SDKs stay out via
 `setup` helpers. Tests are deterministic glue only — no assertions on LLM output.

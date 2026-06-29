@@ -74,6 +74,61 @@ func TestReviewEnabled(t *testing.T) {
 	}
 }
 
+func TestReviewIntakeDefaults(t *testing.T) {
+	c, err := loadFrom(mapLookup(nil))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if !c.ReviewSkipDrafts {
+		t.Error("ReviewSkipDrafts should default to true")
+	}
+	if c.ReviewMaxFiles != defaultReviewMaxFiles {
+		t.Errorf("ReviewMaxFiles = %d, want default %d", c.ReviewMaxFiles, defaultReviewMaxFiles)
+	}
+	if c.ReviewMaxDiffBytes != defaultReviewMaxDiffBytes {
+		t.Errorf("ReviewMaxDiffBytes = %d, want default %d", c.ReviewMaxDiffBytes, defaultReviewMaxDiffBytes)
+	}
+	if len(c.ReviewExcludeGlobs) == 0 {
+		t.Fatal("ReviewExcludeGlobs should default to a non-empty set")
+	}
+	var hasLock bool
+	for _, g := range c.ReviewExcludeGlobs {
+		if g == "go.sum" {
+			hasLock = true
+		}
+	}
+	if !hasLock {
+		t.Error("default exclude globs should include lockfiles like go.sum")
+	}
+}
+
+func TestReviewIntakeOverrides(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{
+		"REVIEW_SKIP_DRAFTS":    "false",
+		"REVIEW_MAX_FILES":      "10",
+		"REVIEW_MAX_DIFF_BYTES": "2048",
+		"REVIEW_EXCLUDE_GLOBS":  "*.foo, *.bar",
+	}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.ReviewSkipDrafts {
+		t.Error("REVIEW_SKIP_DRAFTS=false should disable draft skipping")
+	}
+	if c.ReviewMaxFiles != 10 || c.ReviewMaxDiffBytes != 2048 {
+		t.Errorf("caps = %d / %d, want 10 / 2048", c.ReviewMaxFiles, c.ReviewMaxDiffBytes)
+	}
+	if len(c.ReviewExcludeGlobs) != 2 || c.ReviewExcludeGlobs[0] != "*.foo" || c.ReviewExcludeGlobs[1] != "*.bar" {
+		t.Errorf("ReviewExcludeGlobs = %v, want [*.foo *.bar]", c.ReviewExcludeGlobs)
+	}
+}
+
+func TestReviewMaxFilesUnparseable(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MAX_FILES": "lots"})); err == nil {
+		t.Error("an unparseable REVIEW_MAX_FILES should be a startup error")
+	}
+}
+
 // A complete, valid cloudtasks configuration (used as the base for negative cases).
 func fullCloudTasksEnv() map[string]string {
 	return map[string]string{
