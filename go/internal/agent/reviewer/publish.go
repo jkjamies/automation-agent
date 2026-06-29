@@ -67,10 +67,14 @@ func (e *Engine) publish(ctx context.Context, card scorecard, findings []Finding
 		}
 	}
 
-	// Minimize the comments whose finding no longer applies.
+	// Minimize the comments whose finding no longer applies — best-effort. New inline comments are
+	// already posted but the summary and check are not; aborting here on a single minimize failure
+	// would leave the PR without its summary/check, and a retry would short-circuit at
+	// alreadyPublished once the check exists. So log and continue per node, letting the summary and
+	// check still publish. A leftover stale comment is collapsed on the next genuine re-push.
 	for _, id := range rec.toMinimize {
 		if err := e.gh.MinimizeComment(ctx, id); err != nil {
-			return fmt.Errorf("reviewer: minimize outdated comment: %w", err)
+			e.log.Warn("reviewer: minimize outdated comment failed; continuing", "repo", meta.owner+"/"+meta.repo, "node", id, "err", err)
 		}
 	}
 

@@ -139,6 +139,31 @@ func TestPublishReconciles(t *testing.T) {
 	}
 }
 
+// Minimizing an outdated comment is best-effort: a failure there must not abort publish, so the
+// summary comment and check run still post (otherwise a retry short-circuits at alreadyPublished
+// and the PR is left without its summary/check).
+func TestPublishMinimizeFailureStillPublishes(t *testing.T) {
+	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
+	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
+	gh := &fakeGH{
+		minimizeErr: errors.New("graphql boom"),
+		existing:    []githubapi.ReviewCommentRef{{NodeID: "stale", Body: "fixed " + fpMarker("a.go:9:obsolete")}},
+	}
+	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+		t.Fatalf("publish must not fail when minimize fails: %v", err)
+	}
+	if len(gh.minimized) != 1 || gh.minimized[0] != "stale" {
+		t.Errorf("minimize must be attempted, got %v", gh.minimized)
+	}
+	if len(gh.upserts) != 1 {
+		t.Errorf("summary comment must still be upserted despite minimize failure, got %d", len(gh.upserts))
+	}
+	if len(gh.checks) != 1 {
+		t.Errorf("check run must still be created despite minimize failure, got %d", len(gh.checks))
+	}
+}
+
 // A finding with no existing comment is posted, carrying its fingerprint marker for next time.
 func TestPublishPostsNewFinding(t *testing.T) {
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}

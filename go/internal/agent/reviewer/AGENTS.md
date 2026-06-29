@@ -46,7 +46,20 @@ holds the per-PR review state. On each publish (`reconcile.go` + `publish.go`):
   over the same `TokenProvider`, since the REST API has no minimize/resolve). Comments without our
   marker (foreign, or pre-reconciliation) are ignored.
 
-This replaced the publish stage's coarse whole-SHA skip. Still to come (later changes):
+Minimization is **best-effort**: it runs after the new inline comments are posted but a single
+`MinimizeComment` failure only logs and continues so the summary comment and check run still
+publish (a leftover stale comment is collapsed on the next genuine re-push). Reconciliation keys
+purely off the hidden `ar-fp:` marker and does **not** filter by comment author: at a single
+deployment every marked comment is one this agent posted, so closing-its-own-fixed-comments holds
+without identity resolution. Author/thread-identity awareness is **deferred to the future
+reply-to-reply feature** (which inherently needs to know which thread is the agent's and who
+replied); the cheap marker-scoping fix covers the only residual case (two deployments sharing one
+repo) if it ever becomes real.
+
+This replaced the publish stage's coarse whole-SHA skip **for inline comments only**. The
+`alreadyPublished` head-SHA guard still protects the non-comment outputs — the summary comment, the
+`agent-review` check run, and the `publishDeny` path — from duplicating on a redelivered task (a
+genuine re-push carries a new SHA and reconciles normally). Still to come (later changes):
 **incremental re-review** (only re-run changed-since-SHA files), **debounce**, and **reply-to-reply**
 threading. The read-aggregate path may move to GraphQL if pilot volume justifies it; patches stay
 REST (GraphQL cannot return diff hunks; `createCheckRun` is also REST-only).

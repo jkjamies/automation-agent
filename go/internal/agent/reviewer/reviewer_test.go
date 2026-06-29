@@ -15,13 +15,14 @@ type fakeGH struct {
 	err   error
 	calls int
 
-	review     *githubapi.ReviewInput       // last CreateReview input (nil if none posted)
-	upserts    []markerComment              // UpsertMarkerComment calls, in order
-	checks     []githubapi.CheckRunInput    // CreateCheckRun calls, in order
-	writeErr   error                        // forced error from the write methods
-	existing   []githubapi.ReviewCommentRef // returned by ListReviewComments (canned PR comments)
-	minimized  []string                     // subject ids passed to MinimizeComment, in order
-	agentCheck githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
+	review      *githubapi.ReviewInput       // last CreateReview input (nil if none posted)
+	upserts     []markerComment              // UpsertMarkerComment calls, in order
+	checks      []githubapi.CheckRunInput    // CreateCheckRun calls, in order
+	writeErr    error                        // forced error from the write methods
+	minimizeErr error                        // forced error from MinimizeComment only (best-effort path)
+	existing    []githubapi.ReviewCommentRef // returned by ListReviewComments (canned PR comments)
+	minimized   []string                     // subject ids passed to MinimizeComment, in order
+	agentCheck  githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
 }
 
 type markerComment struct{ marker, body string }
@@ -56,6 +57,9 @@ func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (gi
 
 func (f *fakeGH) MinimizeComment(_ context.Context, subjectID string) error {
 	f.minimized = append(f.minimized, subjectID)
+	if f.minimizeErr != nil {
+		return f.minimizeErr
+	}
 	return f.writeErr
 }
 
