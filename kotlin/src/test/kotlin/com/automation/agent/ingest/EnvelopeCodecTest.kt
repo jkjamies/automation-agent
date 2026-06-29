@@ -76,6 +76,24 @@ class EnvelopeCodecTest : BehaviorSpec({
         }
     }
 
+    Given("a wire body with an absent or JSON-null payload") {
+        // Go's wireEnvelope.Payload (a string, defaulting to its "" zero value) and the JS
+        // `w.payload ?? ''` both decode an absent or JSON-null payload to the empty string — i.e. an
+        // empty payload, never poison. Only a *non-string* payload (covered below) is poison. Pin
+        // this boundary so the cross-port "empty payload = empty string" rule cannot regress.
+        listOf(
+            "absent" to """{"kind":"lint","source":"s"}""",
+            "JSON null" to """{"kind":"lint","source":"s","payload":null}""",
+        ).forEach { (name, body) ->
+            When("decoding a $name payload") {
+                val e = decode(body)
+                Then("it defaults to an empty payload, not poison") {
+                    e.payload.size shouldBe 0
+                }
+            }
+        }
+    }
+
     Given("a wire body with an unknown extra key") {
         When("decoding it") {
             val e = decode("""{"kind":"lint","source":"s","payload":"aGk=","extra":true}""")

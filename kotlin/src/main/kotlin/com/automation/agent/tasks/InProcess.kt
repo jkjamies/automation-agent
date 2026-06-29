@@ -1,15 +1,17 @@
 package com.automation.agent.tasks
 
 import com.automation.agent.ingest.Envelope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.System.Logger.Level
@@ -46,8 +48,15 @@ class InProcess(
     private val log: System.Logger = log ?: DEFAULT_LOG
     private val maxConcurrent = if (maxConcurrent < 1) DEFAULT_MAX_CONCURRENT else maxConcurrent
 
-    // A burst blocks the enqueue caller (backpressure) instead of piling up detached coroutines.
-    private val sem = Semaphore(this.maxConcurrent)
+    // A burst blocks the enqueue caller (backpressure) instead of piling up detached coroutines. A
+    // slot is taken by sending Unit and released by receiving — a Channel rather than a Semaphore so
+    // the take can be raced against the close signal in a select (Semaphore.acquire has no select
+    // clause), mirroring the Go reference's select over its slot channel and its closed channel.
+    private val slots = Channel<Unit>(this.maxConcurrent)
+    // Completed by close() to wake any enqueue caller parked waiting for a slot, so it fails promptly
+    // with TransportClosedException once shutdown starts rather than waiting for a later release (the
+    // Go reference races this as its closed channel inside Enqueue's select).
+    private val closeSignal = CompletableDeferred<Unit>()
     // Owns the in-flight dispatch coroutines; close() drains them via the scope's children.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // Serializes the launch registration against close()'s drain snapshot. close() sets [closed]
@@ -69,24 +78,31 @@ class InProcess(
      */
     override suspend fun enqueue(e: Envelope, opts: EnqueueOptions) {
         if (closed) throw TransportClosedException()
-        // When every permit is held, acquire() suspends here — the intended backpressure. Surface
-        // it so sustained saturation is observable rather than a silently delayed webhook ACK.
-        if (sem.availablePermits == 0) {
+        // trySend takes a slot immediately when the pool has room. Only when it is full does the
+        // caller park — surface that so sustained saturation is observable rather than a silently
+        // delayed webhook ACK, then wait for a slot but race the close signal so a parked caller
+        // wakes promptly (with TransportClosedException) once shutdown begins, instead of waiting
+        // for a later release. This mirrors the Go reference selecting its slot channel against its
+        // closed channel.
+        if (slots.trySend(Unit).isFailure) {
             log.log(
                 Level.WARNING,
                 "dispatch concurrency saturated ($maxConcurrent in flight); " +
                     "webhook ingest is applying backpressure until a slot frees",
             )
+            select {
+                closeSignal.onAwait { throw TransportClosedException() }
+                slots.onSend(Unit) {}
+            }
         }
-        sem.acquire()
-        // Hand the permit to the launched coroutine (which releases it when the dispatch finishes)
+        // Hand the slot to the launched coroutine (which releases it when the dispatch finishes)
         // only once it is registered. If anything between here and a successful launch unwinds —
         // close() observed under the lock, or the caller being cancelled while suspended on the
-        // mutex — release the permit here so it is never leaked.
+        // mutex — release the slot here so it is never leaked.
         var launched = false
         try {
             // Recheck after the (possibly long) backpressure wait: close() may have begun while we
-            // were parked on a permit. Without this, a dispatch could slip past the drain snapshot
+            // were parked on a slot. Without this, a dispatch could slip past the drain snapshot
             // and be abandoned on exit. Done under the same lock close() snapshots the children with.
             mutex.withLock {
                 if (closed) throw TransportClosedException()
@@ -98,13 +114,13 @@ class InProcess(
                     } catch (ex: Exception) {
                         log.log(Level.ERROR, "dispatch failed kind=${e.kind} source=${e.source}", ex)
                     } finally {
-                        sem.release()
+                        slots.tryReceive() // release the slot (a buffered Unit is always present)
                     }
                 }
                 launched = true
             }
         } finally {
-            if (!launched) sem.release()
+            if (!launched) slots.tryReceive()
         }
     }
 
@@ -117,6 +133,7 @@ class InProcess(
     override suspend fun close() {
         val children: List<Job> = mutex.withLock {
             closed = true
+            closeSignal.complete(Unit) // wake any enqueue caller parked waiting for a slot
             scope.coroutineContext.job.children.toList()
         }
         if (children.isEmpty()) return

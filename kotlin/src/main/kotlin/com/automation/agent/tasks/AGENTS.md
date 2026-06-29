@@ -16,17 +16,20 @@ which Cloud Tasks delivers to (durable retry + queue rate-limiting, CPU stays al
 ## Backends (`TASKS_BACKEND`)
 
 - **`InProcess`** (default, local dev) — runs each dispatch on a bounded coroutine pool. A burst
-  applies backpressure (a permit `Semaphore`), and a clean SIGTERM drains in-flight work via
-  `close()`. It does **not** survive an instance being reclaimed mid-run — that is exactly why
-  production uses Cloud Tasks. The drain is guarded by a **recheck-after-acquire** under a `Mutex`:
-  after a parked enqueue acquires a permit it rechecks the closed flag and backs out (release +
-  reject) if shutdown began while it was parked, so a late enqueue can never slip past `close()`'s
-  drain snapshot. The `EnqueueOptions` hints are ignored here (Cloud Tasks features).
+  applies backpressure (a slot `Channel`), and a clean SIGTERM drains in-flight work via `close()`.
+  It does **not** survive an instance being reclaimed mid-run — that is exactly why production uses
+  Cloud Tasks. A parked enqueue **races the slot against a close signal**: when `close()` begins it
+  wakes immediately and rejects (`TransportClosedException`) instead of waiting for a later slot
+  release. The drain is also guarded by a **recheck-after-acquire** under a `Mutex`: after a parked
+  enqueue takes a slot it rechecks the closed flag and backs out (release + reject) if shutdown began
+  while it was parked, so a late enqueue can never slip past `close()`'s drain snapshot. (The slot
+  pool is a `Channel`, not a `Semaphore`, precisely because its take must be selectable against the
+  close signal.) The `EnqueueOptions` hints are ignored here (Cloud Tasks features).
 - **`CloudTasks`** (production) — enqueues each envelope as an HTTP-target task pointed at
   `/internal/dispatch`, carrying the wire-encoded envelope as the body and `INTERNAL_TOKEN` as a
   `Bearer` header, with an explicit per-task dispatch deadline and an enqueue-time ~1 MiB size guard.
   The queue gives durable retry with backoff and rate limiting (its `max-concurrent-dispatches`
-  replaces the in-process semaphore). The Cloud Tasks client is isolated behind the one-method
+  replaces the in-process slot pool). The Cloud Tasks client is isolated behind the one-method
   `Submitter` seam so task-building is unit-tested with no live gRPC.
 
 ## Files
