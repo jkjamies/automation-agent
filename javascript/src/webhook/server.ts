@@ -9,7 +9,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import express, { type Express, type Request, type Response } from 'express';
 
-import { type Envelope, Kind, decode, newEnvelope } from '../ingest/envelope';
+import { type Envelope, DecodeError, Kind, decode, newEnvelope } from '../ingest/envelope';
 
 /** maxBodyBytes caps how much of a webhook body we read. */
 export const MAX_BODY_BYTES = 5 << 20; // 5 MiB
@@ -204,9 +204,17 @@ export class Server {
     try {
       env = decode(body);
     } catch (err) {
-      // Permanent: ack so Cloud Tasks does not redeliver a poison payload.
-      this.log.warn('dropping undecodable dispatch task', { err: (err as Error).message });
-      res.status(200).end();
+      if (err instanceof DecodeError) {
+        // Permanent: ack so Cloud Tasks does not redeliver a poison payload. decode throws
+        // DecodeError for every poison case (bad base64, unknown kind, malformed body).
+        this.log.warn('dropping undecodable dispatch task', { err: err.message });
+        res.status(200).end();
+        return;
+      }
+      // Unexpected (not a poison decode error): surface as a retried 500 rather than silently
+      // dropping the task, so a genuine bug is not masked as poison.
+      this.log.error('unexpected error decoding dispatch task', { err: (err as Error).message });
+      res.status(500).type('text/plain').send('dispatch failed');
       return;
     }
     try {

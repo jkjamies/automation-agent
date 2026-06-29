@@ -41,6 +41,20 @@ export function newEnvelope(kind: Kind, source: string, payload: Buffer, at: Dat
 }
 
 /**
+ * Thrown by {@link decode} for a permanent (poison) body — a malformed payload, bad base64, or
+ * unrecognized kind that a redelivery cannot fix. The Cloud Tasks worker catches *only* this type
+ * to ack-and-drop a poison task, so an unexpected error (a genuine bug) surfaces as a retried 500
+ * instead of being silently swallowed as a dropped task. (The typed-error analogue of Python's
+ * `ValueError` and the Go reference's returned decode error.)
+ */
+export class DecodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DecodeError';
+  }
+}
+
+/**
  * The JSON wire form of an Envelope crossing the task-queue boundary (`tasks` -> POST
  * `/internal/dispatch`). It is an external contract and must stay byte-identical across all
  * four language ports (spec §7). `payload` is an explicit standard-base64 string — never a
@@ -101,16 +115,16 @@ export function decode(b: Buffer | string): Envelope {
   try {
     wire = JSON.parse(typeof b === 'string' ? b : b.toString('utf-8'));
   } catch (err) {
-    throw new Error(`ingest: decode envelope: ${(err as Error).message}`);
+    throw new DecodeError(`ingest: decode envelope: ${(err as Error).message}`);
   }
   if (typeof wire !== 'object' || wire === null || Array.isArray(wire)) {
-    throw new Error('ingest: decode envelope: want a JSON object');
+    throw new DecodeError('ingest: decode envelope: want a JSON object');
   }
   const w = wire as Record<string, unknown>;
 
   const kind = w.kind;
   if (typeof kind !== 'string' || !kindValid(kind)) {
-    throw new Error(`ingest: unknown kind ${JSON.stringify(kind)}`);
+    throw new DecodeError(`ingest: unknown kind ${JSON.stringify(kind)}`);
   }
 
   // The wire payload is always a base64 string (the typed wire schema). A non-string is a
@@ -118,7 +132,7 @@ export function decode(b: Buffer | string): Envelope {
   // to "" (empty payload). Decode strictly so trailing junk is rejected, not silently dropped.
   const payloadRaw = w.payload ?? '';
   if (typeof payloadRaw !== 'string') {
-    throw new Error(`ingest: decode payload: want a base64 string, got ${typeof payloadRaw}`);
+    throw new DecodeError(`ingest: decode payload: want a base64 string, got ${typeof payloadRaw}`);
   }
   const payload = strictBase64Decode(payloadRaw);
 
@@ -148,7 +162,7 @@ function toRFC3339(d: Date): string {
 function strictBase64Decode(s: string): Buffer {
   const buf = Buffer.from(s, 'base64');
   if (buf.toString('base64') !== s) {
-    throw new Error(`ingest: decode payload: ${JSON.stringify(s)} is not valid standard base64`);
+    throw new DecodeError(`ingest: decode payload: ${JSON.stringify(s)} is not valid standard base64`);
   }
   return buf;
 }
@@ -164,7 +178,7 @@ function wireString(w: Record<string, unknown>, key: string): string {
     return '';
   }
   if (typeof value !== 'string') {
-    throw new Error(`ingest: decode ${key}: want a string, got ${typeof value}`);
+    throw new DecodeError(`ingest: decode ${key}: want a string, got ${typeof value}`);
   }
   return value;
 }
@@ -195,11 +209,11 @@ function wireReceivedAt(w: Record<string, unknown>): Date {
     return new Date(0);
   }
   if (typeof value !== 'string') {
-    throw new Error(`ingest: decode received_at: want an RFC 3339 string, got ${typeof value}`);
+    throw new DecodeError(`ingest: decode received_at: want an RFC 3339 string, got ${typeof value}`);
   }
   const ms = RFC3339_RE.test(value) ? Date.parse(value) : NaN;
   if (Number.isNaN(ms)) {
-    throw new Error(`ingest: decode received_at: ${JSON.stringify(value)} is not a valid RFC 3339 timestamp`);
+    throw new DecodeError(`ingest: decode received_at: ${JSON.stringify(value)} is not a valid RFC 3339 timestamp`);
   }
   return new Date(ms);
 }

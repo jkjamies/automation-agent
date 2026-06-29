@@ -42,6 +42,7 @@ calls them.
   array — so an empty payload is the empty string in every port.
 - `decode` is strict: an unknown kind, non-standard/junk base64 (Node's lenient decoder is
   re-encode-checked), a non-string `payload`/`source`, or a present-but-unparseable
-  `received_at` is a **permanent (poison) error**. Absent or `null` `source`/`received_at`
-  default to the zero value. `encode` rejects an unknown kind so both transports fail the
-  same way.
+  `received_at` is a **permanent (poison) error**, thrown as a typed **`DecodeError`** so the
+  Cloud Tasks worker can tell intentional poison (ack + drop) from an unexpected bug (retried
+  500). Absent or `null` `source`/`received_at` default to the zero value. `encode` rejects an
+  unknown kind so both transports fail the same way.
