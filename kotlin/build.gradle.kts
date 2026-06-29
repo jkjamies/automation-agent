@@ -44,6 +44,12 @@ dependencies {
     // service (both hand-rolled, like Go's). Used only when the firestore backend is selected.
     implementation("com.google.cloud:google-cloud-firestore:3.43.1")
 
+    // Cloud Tasks client for the production TASKS_BACKEND=cloudtasks execution transport: webhook
+    // ingress enqueues an HTTP-target task that POSTs the envelope to /internal/dispatch, so the
+    // workflow runs in-request (CPU stays allocated on Cloud Run) with durable retry. Used only when
+    // the cloudtasks backend is selected. See specs/20260626-workflow-execution-transport.md.
+    implementation("com.google.cloud:google-cloud-tasks:2.93.0")
+
     // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`
     // layer needs core only — it implements the `Model` interface for the Ollama adapter and
     // drives the in-memory `Runner` (incl. resumability). KSP + the webserver stay deferred:

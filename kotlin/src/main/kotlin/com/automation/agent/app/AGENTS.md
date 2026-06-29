@@ -18,7 +18,8 @@ flowchart TD
     GH --> FIX
     SUM --> DISP["buildRootDispatcher(RootDeps)"]
     FIX --> DISP
-    DISP --> WH["webhookServer: enqueue -> dispatch"]
+    DISP --> TX["buildTransport: InProcess (default) | CloudTasks"]
+    TX --> WH["webhookServer: ingest -> transport.enqueue;\ndispatch -> /internal/dispatch"]
     WH --> RUN["server.start(wait = true)"]
 ```
 
@@ -36,11 +37,16 @@ workflow is enabled only when repositories and a notifier are configured; the fi
 without a notifier (they just won't post results). A check_run webhook is handed to every fix engine
 — each no-ops unless its check name matches.
 
-Webhook/cron deliveries are dispatched asynchronously under a 32-permit dispatch semaphore: a permit
-is acquired at ingest before the dispatch coroutine launches (admission backpressure — a burst blocks
-at the boundary instead of spawning unbounded coroutines) and released when the dispatch finishes. A
-shutdown hook drains those in-flight dispatches, then closes the park store's backing connection
-(`parkStore.close()` — a no-op for the memory backend). With the memory backend, parked CI-wait runs
-are abandoned on restart; the durable backends persist them.
+Webhooks `enqueue` onto the execution transport (`buildTransport`, selected by `TASKS_BACKEND`): the
+**in-process** backend (default, local dev) runs each dispatch on a bounded, drained coroutine pool
+with admission backpressure (a burst blocks at the ingest boundary instead of spawning unbounded
+coroutines); the **Cloud Tasks** backend (production) hands each envelope to the queue, which POSTs it
+to `/internal/dispatch` so the workflow runs **in-request** with durable retry — on Cloud Run's
+request-based billing CPU is throttled after the 202, so long LLM compute must run inside a request.
+The same `dispatcher.dispatch` backs that worker endpoint. A shutdown hook stops the server, then
+`transport.close()` drains in-flight dispatches (the in-process backend; Cloud Tasks closes its
+client), then closes the park store's backing connection (`parkStore.close()` — a no-op for the
+memory backend). With the memory backend, parked CI-wait runs are abandoned on restart; the durable
+backends persist them.
 
 The interactive local REPL lives in the separate [`playground`](../playground/AGENTS.md) entrypoint.

@@ -60,6 +60,21 @@ private fun writeKeyFile(contents: String): String {
     return p.toString()
 }
 
+/** The full Cloud Tasks env, with [overrides] merged in. An override value of "" reads as unset. */
+private fun fullCloudtasksEnv(overrides: Map<String, String> = emptyMap()): Map<String, String> {
+    val base = mutableMapOf(
+        "TASKS_BACKEND" to "cloudtasks",
+        "TASKS_PROJECT" to "proj",
+        "TASKS_LOCATION" to "us-central1",
+        "TASKS_QUEUE" to "agent-queue",
+        "DISPATCH_URL" to "https://agent.example.run.app/internal/dispatch",
+        "INTERNAL_TOKEN" to "sekret",
+        "GITHUB_WEBHOOK_SECRET" to "whsec",
+    )
+    base.putAll(overrides)
+    return base
+}
+
 class ConfigTest : BehaviorSpec({
     Given("an environment with no variables set") {
         When("loading the configuration") {
@@ -413,6 +428,80 @@ class ConfigTest : BehaviorSpec({
                     )
                 }
                 err.message shouldContain "read GITHUB_APP_PRIVATE_KEY_PATH"
+            }
+        }
+    }
+
+    Given("default execution-transport settings") {
+        When("loading with nothing set") {
+            val c = Config.loadFrom(lookupOf(emptyMap()))
+            Then("the in-process backend and 30m deadline default apply") {
+                c.tasksBackend shouldBe TasksBackend.INPROCESS
+                c.tasksDispatchDeadline.inWholeMinutes shouldBe 30L
+            }
+        }
+    }
+
+    Given("an invalid TASKS_BACKEND") {
+        When("loading the configuration") {
+            Then("it fails") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("TASKS_BACKEND" to "kafka")))
+                }
+            }
+        }
+    }
+
+    Given("a fully configured Cloud Tasks env") {
+        When("loading the configuration") {
+            val c = Config.loadFrom(lookupOf(fullCloudtasksEnv()))
+            Then("the queue coordinates, worker URL, and deadline are read") {
+                c.tasksBackend shouldBe TasksBackend.CLOUDTASKS
+                c.tasksProject shouldBe "proj"
+                c.tasksLocation shouldBe "us-central1"
+                c.tasksQueue shouldBe "agent-queue"
+                c.dispatchUrl shouldBe "https://agent.example.run.app/internal/dispatch"
+                c.tasksDispatchDeadline.inWholeMinutes shouldBe 30L
+            }
+        }
+
+        When("TASKS_PROJECT is unset but GOOGLE_CLOUD_PROJECT is present") {
+            val c = Config.loadFrom(
+                lookupOf(fullCloudtasksEnv(mapOf("TASKS_PROJECT" to "", "GOOGLE_CLOUD_PROJECT" to "ambient-proj"))),
+            )
+            Then("the ambient project is used") {
+                c.tasksProject shouldBe "ambient-proj"
+            }
+        }
+
+        When("an explicit in-range deadline is set") {
+            val c = Config.loadFrom(lookupOf(fullCloudtasksEnv(mapOf("TASKS_DISPATCH_DEADLINE" to "20m"))))
+            Then("it is honoured") {
+                c.tasksDispatchDeadline.inWholeMinutes shouldBe 20L
+            }
+        }
+    }
+
+    Given("a Cloud Tasks env missing a required field") {
+        listOf(
+            "missing project" to mapOf("TASKS_PROJECT" to ""),
+            "missing location" to mapOf("TASKS_LOCATION" to ""),
+            "missing queue" to mapOf("TASKS_QUEUE" to ""),
+            "missing dispatch url" to mapOf("DISPATCH_URL" to ""),
+            "missing internal token" to mapOf("INTERNAL_TOKEN" to ""),
+            "missing webhook secret" to mapOf("GITHUB_WEBHOOK_SECRET" to ""),
+            "http dispatch url (would leak the bearer)" to mapOf("DISPATCH_URL" to "http://agent.example.run.app/internal/dispatch"),
+            "dispatch url not ending in the worker path" to mapOf("DISPATCH_URL" to "https://agent.example.run.app/"),
+            "relative dispatch url" to mapOf("DISPATCH_URL" to "/internal/dispatch"),
+            "deadline below the floor" to mapOf("TASKS_DISPATCH_DEADLINE" to "10s"),
+            "deadline above the ceiling" to mapOf("TASKS_DISPATCH_DEADLINE" to "31m"),
+        ).forEach { (name, overrides) ->
+            When("loading with $name") {
+                Then("it fails fast") {
+                    shouldThrow<IllegalArgumentException> {
+                        Config.loadFrom(lookupOf(fullCloudtasksEnv(overrides)))
+                    }
+                }
             }
         }
     }

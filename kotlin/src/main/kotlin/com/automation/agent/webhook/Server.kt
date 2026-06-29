@@ -7,6 +7,7 @@ package com.automation.agent.webhook
 
 import com.automation.agent.ingest.Envelope
 import com.automation.agent.ingest.Kind
+import com.automation.agent.ingest.decode
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -24,6 +25,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
+import java.lang.System.Logger.Level
 import java.time.Instant
 
 /** The largest request body accepted on any webhook endpoint (matches the Go reference's 5 MiB). */
@@ -35,11 +37,23 @@ private const val CONNECTION_IDLE_TIMEOUT_SECONDS = 30
 /** An empty request body, used for the parameterless internal cron/sweep triggers. */
 private val EMPTY_BODY = ByteArray(0)
 
+/** The default logger for the dispatch worker when none is injected (the nil-logger guard). */
+private val DEFAULT_LOG: System.Logger = System.getLogger("automation-agent.webhook")
+
 /**
  * Consumes a normalized envelope. It should enqueue work and return quickly; a thrown
  * exception becomes a 500 to the caller.
  */
 fun interface IngestFunc {
+    suspend operator fun invoke(envelope: Envelope)
+}
+
+/**
+ * Runs an envelope's workflow synchronously, in-request. It backs POST /internal/dispatch, which the
+ * Cloud Tasks transport delivers to so the compute runs while CPU is allocated. Typically the root
+ * dispatcher's dispatch. A thrown exception is a transient failure (retried by the queue).
+ */
+fun interface DispatchFunc {
     suspend operator fun invoke(envelope: Envelope)
 }
 
@@ -59,6 +73,8 @@ fun Application.webhookRoutes(
     now: () -> Instant = Instant::now,
     internalToken: String = "",
     sweep: SweepFunc? = null,
+    dispatch: DispatchFunc? = null,
+    log: System.Logger = DEFAULT_LOG,
 ) {
     routing {
         get("/healthz") { call.respondText("ok") }
@@ -66,26 +82,26 @@ fun Application.webhookRoutes(
         post("/webhooks/lint") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
             if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
-            dispatch(ingest, Envelope.new(Kind.LINT, "webhook:/lint", body, now()))
+            accept(ingest, Envelope.new(Kind.LINT, "webhook:/lint", body, now()))
         }
 
         post("/webhooks/coverage") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
             if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
-            dispatch(ingest, Envelope.new(Kind.COVERAGE, "webhook:/coverage", body, now()))
+            accept(ingest, Envelope.new(Kind.COVERAGE, "webhook:/coverage", body, now()))
         }
 
         post("/webhooks/github") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
             if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
-            dispatch(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
+            accept(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
         }
 
         // Internal Cloud Scheduler ingress: the daily digest + the durable timeout sweep. Guarded by
         // a Bearer INTERNAL_TOKEN; an unset token disables the routes entirely (404).
         post("/internal/cron/daily") {
             if (!call.internalAuthorized(internalToken)) return@post
-            dispatch(ingest, Envelope.new(Kind.CRON_DAILY, "internal:/cron/daily", EMPTY_BODY, now()))
+            accept(ingest, Envelope.new(Kind.CRON_DAILY, "internal:/cron/daily", EMPTY_BODY, now()))
         }
 
         post("/internal/sweep") {
@@ -96,6 +112,36 @@ fun Application.webhookRoutes(
                 call.respond(HttpStatusCode.OK, "ok")
             } catch (_: Exception) {
                 call.respond(HttpStatusCode.InternalServerError, "sweep failed")
+            }
+        }
+
+        // The Cloud Tasks worker: runs one queued envelope's workflow synchronously in-request so
+        // Cloud Run keeps CPU allocated for the whole compute (unlike a post-202 background task).
+        // Retry classification follows Cloud Tasks' retry-on-non-2xx contract (spec §6): a transient
+        // dispatch failure -> 500 so the queue retries with backoff; a poison (undecodable) body ->
+        // 200 + log so the queue drops it rather than looping. The same INTERNAL_TOKEN Bearer guards
+        // it; an unwired dispatcher -> 501.
+        post("/internal/dispatch") {
+            if (!call.internalAuthorized(internalToken)) return@post
+            if (dispatch == null) return@post call.respond(HttpStatusCode.NotImplemented, "dispatch not configured")
+            val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
+            val envelope = try {
+                decode(body)
+            } catch (e: IllegalArgumentException) {
+                // Permanent: ack so Cloud Tasks does not redeliver a poison payload. decode signals
+                // every poison case (unknown kind, bad base64, malformed body) as IllegalArgumentException,
+                // so catching only that acks genuine poison while letting an unexpected bug surface as a
+                // 500 (retried) rather than being silently swallowed as a dropped task.
+                log.log(Level.WARNING, "dropping undecodable dispatch task", e)
+                return@post call.respond(HttpStatusCode.OK, "ok")
+            }
+            try {
+                dispatch(envelope)
+                call.respond(HttpStatusCode.OK, "ok")
+            } catch (e: Exception) {
+                // Transient: let Cloud Tasks retry with backoff.
+                log.log(Level.ERROR, "dispatch failed kind=${envelope.kind} source=${envelope.source}", e)
+                call.respond(HttpStatusCode.InternalServerError, "dispatch failed")
             }
         }
     }
@@ -144,7 +190,7 @@ private suspend fun ApplicationCall.receiveCapped(): ByteArray? {
     return if (bytes.size > MAX_BODY_BYTES) null else bytes
 }
 
-private suspend fun RoutingContext.dispatch(ingest: IngestFunc, e: Envelope) {
+private suspend fun RoutingContext.accept(ingest: IngestFunc, e: Envelope) {
     try {
         ingest(e)
         call.respond(HttpStatusCode.Accepted)
@@ -164,6 +210,8 @@ fun webhookServer(
     now: () -> Instant = Instant::now,
     internalToken: String = "",
     sweep: SweepFunc? = null,
+    dispatch: DispatchFunc? = null,
+    log: System.Logger = DEFAULT_LOG,
 ): EmbeddedServer<*, *> {
     val bindPort = port
     return embeddedServer(
@@ -172,6 +220,6 @@ fun webhookServer(
             connectors.add(EngineConnectorBuilder().apply { this.port = bindPort })
             connectionIdleTimeoutSeconds = CONNECTION_IDLE_TIMEOUT_SECONDS
         },
-        module = { webhookRoutes(ingest, secret, now, internalToken, sweep) },
+        module = { webhookRoutes(ingest, secret, now, internalToken, sweep, dispatch, log) },
     )
 }

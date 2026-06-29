@@ -64,6 +64,28 @@ enum class SessionBackend(val value: String) {
     }
 }
 
+/**
+ * TasksBackend selects the webhook execution transport: how an enqueued envelope reaches the
+ * dispatcher. See specs/20260626-workflow-execution-transport.md.
+ */
+enum class TasksBackend(val value: String) {
+    /** Runs each dispatch in a bounded in-process coroutine pool (the pre-transport behavior). */
+    INPROCESS("inprocess"),
+
+    /**
+     * Enqueues each envelope as a Cloud Tasks HTTP-target task pointed at /internal/dispatch, which
+     * executes it in-request (CPU stays allocated) with durable retry — the production backend.
+     */
+    CLOUDTASKS("cloudtasks"),
+    ;
+
+    override fun toString(): String = value
+
+    companion object {
+        fun from(s: String): TasksBackend? = entries.firstOrNull { it.value == s }
+    }
+}
+
 /** Config holds all runtime settings. */
 data class Config(
     // LLM
@@ -118,8 +140,27 @@ data class Config(
     val firestoreProject: String,
     val firestoreCollection: String,
     // internalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
-    // cron + sweep). Empty disables those routes (they 404).
+    // cron + sweep + dispatch). Empty disables those routes (they 404).
     val internalToken: String,
+    // Execution transport (webhook -> dispatcher). tasksBackend selects in-process (default) or
+    // Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; they are
+    // required (and validated) only in cloudtasks mode.
+    val tasksBackend: TasksBackend,
+    // tasksProject is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
+    // GOOGLE_CLOUD_PROJECT. Required for cloudtasks.
+    val tasksProject: String,
+    // tasksLocation is the queue's region (TASKS_LOCATION, e.g. "us-central1"). Required for cloudtasks.
+    val tasksLocation: String,
+    // tasksQueue is the Cloud Tasks queue name (TASKS_QUEUE). Required for cloudtasks.
+    val tasksQueue: String,
+    // dispatchUrl is the full URL of the /internal/dispatch worker the queue POSTs to (DISPATCH_URL,
+    // e.g. https://agent-xyz.run.app/internal/dispatch). Required for cloudtasks.
+    val dispatchUrl: String,
+    // tasksDispatchDeadline is how long Cloud Tasks waits for an /internal/dispatch attempt before
+    // cancelling it and retrying (TASKS_DISPATCH_DEADLINE). Set explicitly because the HTTP-target
+    // default is only 10m, far short of a multi-minute workflow. Cloud Tasks caps it at 30m, which
+    // is therefore the default and the ceiling. Used only in cloudtasks mode.
+    val tasksDispatchDeadline: Duration,
 ) {
     /**
      * Checks invariants that the type system alone cannot guarantee. Provider and notify
@@ -139,6 +180,41 @@ data class Config(
         require(!appMode() || repos.isNotEmpty()) {
             "REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)"
         }
+        validateTasks()
+    }
+
+    /**
+     * Validates the execution-transport settings. The in-process backend needs nothing. The Cloud
+     * Tasks backend needs the queue coordinates and worker URL, plus the Bearer token the task
+     * carries: without INTERNAL_TOKEN, /internal/dispatch is disabled (404) and every task would
+     * fail permanently. Fail fast rather than silently never dispatching.
+     */
+    private fun validateTasks() {
+        if (tasksBackend == TasksBackend.INPROCESS) return
+        val missing = mutableListOf<String>()
+        if (tasksProject.isEmpty()) missing += "TASKS_PROJECT (or GOOGLE_CLOUD_PROJECT)"
+        if (tasksLocation.isEmpty()) missing += "TASKS_LOCATION"
+        if (tasksQueue.isEmpty()) missing += "TASKS_QUEUE"
+        // DISPATCH_URL must be an absolute https URL ending in /internal/dispatch: the task carries
+        // INTERNAL_TOKEN as a Bearer header to it, so a plaintext http:// target would leak the
+        // token in transit, and a base URL or stray path would pass the scheme check then 404 every
+        // task at runtime. A suffix match (not equality) tolerates a gateway path prefix.
+        if (!isSecureDispatchUrl(dispatchUrl)) {
+            missing += "DISPATCH_URL (must be an absolute https:// URL ending in /internal/dispatch)"
+        }
+        if (internalToken.isEmpty()) missing += "INTERNAL_TOKEN (the Bearer the task carries to /internal/dispatch)"
+        // Cloud Tasks clamps an HTTP-target dispatch deadline to 15s..30m; a value outside that range
+        // is silently rejected at CreateTask, so reject it here instead.
+        if (tasksDispatchDeadline < 15.seconds || tasksDispatchDeadline > 30.minutes) {
+            missing += "TASKS_DISPATCH_DEADLINE (must be between 15s and 30m)"
+        }
+        // In Cloud Tasks mode the deployment is production-facing, so an unverified webhook surface
+        // is a real exposure rather than a dev convenience — require the HMAC secret (it stays an
+        // opt-in warning only for the local inprocess default).
+        if (githubWebhookSecret.isEmpty()) {
+            missing += "GITHUB_WEBHOOK_SECRET (webhook signatures must be verified in production)"
+        }
+        require(missing.isEmpty()) { "TASKS_BACKEND=cloudtasks requires ${missing.joinToString(", ")}" }
     }
 
     /**
@@ -167,7 +243,9 @@ data class Config(
             "port=$port, maxIterations=$maxIterations, ciTimeout=$ciTimeout, " +
             "githubWebhookSecret=${redactSecret(githubWebhookSecret)}, agentPrLabel=$agentPrLabel, " +
             "sessionBackend=$sessionBackend, sqliteDsn=$sqliteDsn, firestoreProject=$firestoreProject, " +
-            "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)})"
+            "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)}, " +
+            "tasksBackend=$tasksBackend, tasksProject=$tasksProject, tasksLocation=$tasksLocation, " +
+            "tasksQueue=$tasksQueue, dispatchUrl=$dispatchUrl, tasksDispatchDeadline=$tasksDispatchDeadline)"
 
     companion object {
         /** A function that resolves an environment key to its value, or null if unset. */
@@ -217,6 +295,14 @@ data class Config(
             val sessionBackend = SessionBackend.from(sessionBackendRaw)
                 ?: throw IllegalArgumentException("invalid SESSION_BACKEND \"$sessionBackendRaw\" (want memory|sqlite|firestore)")
 
+            val tasksBackendRaw = getOr(get, "TASKS_BACKEND", TasksBackend.INPROCESS.value)
+            val tasksBackend = TasksBackend.from(tasksBackendRaw)
+                ?: throw IllegalArgumentException("invalid TASKS_BACKEND \"$tasksBackendRaw\" (want inprocess|cloudtasks)")
+
+            val dispatchDeadlineRaw = getOr(get, "TASKS_DISPATCH_DEADLINE", "30m")
+            val tasksDispatchDeadline = parseGoDuration(dispatchDeadlineRaw)
+                ?: throw IllegalArgumentException("TASKS_DISPATCH_DEADLINE: invalid duration \"$dispatchDeadlineRaw\"")
+
             // Resolve GitHub App credentials (production auth path). Absent App vars leave the zero
             // value — PAT mode; partial/misconfigured App vars are a startup error, never a silent
             // fallback to PAT (Decision §4).
@@ -249,6 +335,13 @@ data class Config(
                 firestoreProject = getOr(get, "FIRESTORE_PROJECT", ""),
                 firestoreCollection = getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
                 internalToken = getOr(get, "INTERNAL_TOKEN", ""),
+                tasksBackend = tasksBackend,
+                // TASKS_PROJECT falls back to GOOGLE_CLOUD_PROJECT (the ambient Cloud Run var).
+                tasksProject = getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
+                tasksLocation = getOr(get, "TASKS_LOCATION", ""),
+                tasksQueue = getOr(get, "TASKS_QUEUE", ""),
+                dispatchUrl = getOr(get, "DISPATCH_URL", ""),
+                tasksDispatchDeadline = tasksDispatchDeadline,
             )
             c.validate()
             return c
@@ -364,6 +457,17 @@ private fun normalizePrivateKeyPem(raw: String): String =
 private fun splitList(s: String): List<String> {
     if (s.isBlank()) return emptyList()
     return s.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+}
+
+/** Whether [raw] is an absolute https URL whose path ends in /internal/dispatch. */
+private fun isSecureDispatchUrl(raw: String): Boolean {
+    if (raw.isEmpty()) return false
+    val uri = try {
+        java.net.URI(raw)
+    } catch (_: java.net.URISyntaxException) {
+        return false
+    }
+    return uri.scheme == "https" && !uri.host.isNullOrEmpty() && uri.path?.endsWith("/internal/dispatch") == true
 }
 
 /**
