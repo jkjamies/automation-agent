@@ -336,6 +336,61 @@ func TestUpsertMarkerCommentCreatesWhenAbsent(t *testing.T) {
 	}
 }
 
+// In App mode the upsert must not edit a marker-bearing comment authored by someone else (GitHub
+// rejects editing a foreign comment); it edits only the app's own bot comment, creating a fresh
+// one when the only marker match is a foreign (non-bot) author echoing the marker.
+func TestUpsertMarkerCommentAppModeSkipsForeignAuthor(t *testing.T) {
+	var editedForeign, created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		// A human quoted the hidden marker; it is not the app's own comment.
+		_, _ = w.Write([]byte(`[{"id":11,"body":"look at this MARK","user":{"type":"User"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/11", func(w http.ResponseWriter, _ *http.Request) {
+		editedForeign = true
+		_, _ = w.Write([]byte(`{"id":11}`))
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if editedForeign {
+		t.Error("must not edit a foreign (non-bot) comment that merely echoes the marker")
+	}
+	if !created {
+		t.Error("expected a new comment when the only marker match is foreign")
+	}
+}
+
+// In App mode the app's own bot comment is edited in place even when a foreign comment also
+// echoes the marker.
+func TestUpsertMarkerCommentAppModeEditsOwnBot(t *testing.T) {
+	var editedBot bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"human MARK","user":{"type":"User"}},{"id":22,"body":"bot MARK","user":{"type":"Bot"}}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		editedBot = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	c := testClient(t, mux)
+	c.appAuthored = true
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !editedBot {
+		t.Error("expected the app's own bot comment to be edited in place")
+	}
+}
+
 func TestCreateCheckRun(t *testing.T) {
 	var body []byte
 	mux := http.NewServeMux()

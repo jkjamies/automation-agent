@@ -25,6 +25,12 @@ const httpTimeout = 30 * time.Second
 // one client serves many repositories.
 type Client struct {
 	gh *github.Client
+	// appAuthored is true when the REST token comes from a GitHub App installation, so this
+	// client's own issue comments are authored by the app's "<slug>[bot]" user (type "Bot").
+	// UpsertMarkerComment uses it to edit only comments the app could have authored, never a
+	// foreign comment that merely echoes the marker (GitHub rejects editing another author's
+	// comment). PAT/anonymous mode posts as a human user, where this signal does not apply.
+	appAuthored bool
 }
 
 // New builds a Client whose every REST request is authenticated by a fresh token
@@ -36,7 +42,11 @@ func New(provider auth.TokenProvider) *Client {
 		Timeout:   httpTimeout,
 		Transport: auth.NewRoundTripper(nil, provider),
 	})
-	return &Client{gh: gh}
+	// An App installation token posts comments as the app's bot user; a PAT posts as a human.
+	// This distinguishes the two so the marker upsert can scope in-place edits to its own
+	// comments (see ownsComment).
+	_, appAuthored := provider.(*auth.AppProvider)
+	return &Client{gh: gh, appAuthored: appAuthored}
 }
 
 // Commit is a minimal commit projection for digests.
@@ -114,9 +124,11 @@ func (c *Client) CreateReview(ctx context.Context, owner, repo string, number in
 	return nil
 }
 
-// UpsertMarkerComment edits the single issue comment whose body contains marker, or creates one
-// if none exists. The reviewer's summary comment carries a hidden marker (spec Decision 9) so a
-// re-review updates it in place instead of piling up duplicates.
+// UpsertMarkerComment edits the single issue comment this client authored whose body contains
+// marker, or creates one if none exists. The reviewer's summary comment carries a hidden marker
+// (spec Decision 9) so a re-review updates it in place instead of piling up duplicates. Only a
+// comment the client could have authored is edited (see ownsComment): GitHub rejects editing a
+// foreign comment, so a comment that merely echoes the marker must not hijack the upsert.
 func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, number int, marker, body string) error {
 	// An empty marker would match every comment (Contains("", …) is always true) and edit an
 	// unrelated one; a body without the marker could never be found again, piling up duplicates.
@@ -134,7 +146,7 @@ func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, nu
 			return fmt.Errorf("list comments %s/%s#%d: %w", owner, repo, number, err)
 		}
 		for _, ic := range comments {
-			if strings.Contains(ic.GetBody(), marker) {
+			if strings.Contains(ic.GetBody(), marker) && c.ownsComment(ic) {
 				if _, _, err := c.gh.Issues.EditComment(ctx, owner, repo, ic.GetID(), &github.IssueComment{Body: ptr(body)}); err != nil {
 					return fmt.Errorf("edit comment %s/%s#%d: %w", owner, repo, number, err)
 				}
@@ -150,6 +162,18 @@ func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, nu
 		return fmt.Errorf("create comment %s/%s#%d: %w", owner, repo, number, err)
 	}
 	return nil
+}
+
+// ownsComment reports whether this client could have authored ic — the precondition for editing
+// it in place. In App mode only the app's bot user qualifies, so a foreign comment that merely
+// echoes the marker (e.g. a human quoting it) is skipped and a fresh comment is created rather
+// than attempting an edit GitHub would reject. In PAT/anonymous mode (local-dev) the marker alone
+// is trusted, since there is no distinct bot identity to match against.
+func (c *Client) ownsComment(ic *github.IssueComment) bool {
+	if !c.appAuthored {
+		return true
+	}
+	return ic.GetUser().GetType() == "Bot"
 }
 
 // CheckRunInput describes the advisory agent-review check run (spec Decision 15): always
