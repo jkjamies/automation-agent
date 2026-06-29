@@ -23,6 +23,7 @@ Package root: `com.automation.agent` under `src/main/kotlin/...`.
 | `githubapi` | `internal/githubapi` | GitHub REST tooling |
 | `gitrepo` | `internal/gitrepo` | git working-tree tooling |
 | `webhook` | `internal/webhook` | HTTP ingress |
+| `tasks` | `internal/tasks` | execution transport (in-process \| Cloud Tasks → `/internal/dispatch`) |
 | `agent.setup` | `internal/agent/setup` | LLM builder, Ollama adapter, prompt loader, runner |
 | `agent.root` | `internal/agent/root` | dispatcher |
 | `agent.summary` | `internal/agent/summary` | commit-digest workflow |

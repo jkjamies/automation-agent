@@ -104,7 +104,7 @@ async def test_inprocess_enqueue_after_close_is_rejected() -> None:
 async def test_inprocess_enqueue_rejected_if_closed_during_backpressure() -> None:
     # An enqueue parked on the semaphore when close() begins must back out (release its slot
     # and raise) once it acquires, rather than spawn a task the drain has already snapshotted
-    # past — the recheck-after-acquire guard (mirrors Go's second select on the closed channel).
+    # past — the recheck-after-acquire guard (re-checks the closed flag after acquiring).
     # Drives the real close() concurrently rather than poking _closed directly.
     started = asyncio.Event()
     release = asyncio.Event()
@@ -130,7 +130,7 @@ async def test_inprocess_enqueue_rejected_if_closed_during_backpressure() -> Non
 
 async def test_inprocess_close_timeout_does_not_cancel(monkeypatch) -> None:
     # On drain timeout, close() only stops waiting — it must NOT cancel the still-running
-    # dispatch (matches Go's Close letting in-flight goroutines run to completion).
+    # dispatch; in-flight work is left to run to completion past the drain deadline.
     monkeypatch.setattr(inprocess_mod, "DRAIN_TIMEOUT", 0.05)
     release = asyncio.Event()
     finished = asyncio.Event()

@@ -45,7 +45,10 @@ flowchart TD
     WLint -->|KindLint| Env
     WCov -->|KindCoverage| Env
     WCI -->|KindCI| Env
-    Env --> Root["root.Dispatcher.Dispatch (by Kind)"]
+    Env --> TX{"execution transport (TASKS_BACKEND)"}
+    TX -->|"inprocess: in-process worker pool (local)"| Root
+    TX -->|"cloudtasks: Cloud Tasks → POST /internal/dispatch (in-request)"| Root
+    Root["root.Dispatcher.Dispatch (by Kind)"]
     Root -->|"cron.daily"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: Kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: Kickoff"]
@@ -77,6 +80,11 @@ the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running 
 plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
 no longer strands in-flight runs; `memory` keeps the old ephemeral behavior.
+Webhook-triggered work is handed to the **execution transport** (`TASKS_BACKEND`):
+`inprocess` runs it in an in-process worker pool (local/default), while `cloudtasks`
+(prod) enqueues to Cloud Tasks → `POST /internal/dispatch` so the multi-minute compute
+runs **in-request** on Cloud Run (CPU stays allocated; scale-to-zero preserved) — see
+[`specs/20260626-workflow-execution-transport.md`](specs/20260626-workflow-execution-transport.md).
 Deterministic, agent-free tooling lives under `internal/` and is called by
 agents but never imports them. Env vars + local run modes:
 [`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,

@@ -18,7 +18,10 @@ flowchart TD
     WLint -->|KindLint| Env
     WCov -->|KindCoverage| Env
     WCI -->|KindCI| Env
-    Env --> Root["root.Dispatcher.dispatch (by Kind)"]
+    Env --> TX{"execution transport (TASKS_BACKEND)"}
+    TX -->|"inprocess: in-process worker pool (local)"| Root
+    TX -->|"cloudtasks: Cloud Tasks → POST /internal/dispatch (in-request)"| Root
+    Root["root.Dispatcher.dispatch (by Kind)"]
     Root -->|"cron.daily"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: kickoff"]
@@ -47,8 +50,12 @@ flowchart TD
 Ingest (Cloud Scheduler / webhook / future hooks) -> **root agent** (dispatcher) -> one of three
 workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
 remediation with a PR + CI loop), or **covfixer** (coverage remediation; shares the
-fixflow engine with the lint-fixer). Deterministic, agent-free tooling lives under
-`automation_agent/` and is called by agents but never imports them.
+fixflow engine with the lint-fixer). Webhook-triggered work is handed to the **execution
+transport** (`automation_agent/tasks`, switched by `TASKS_BACKEND`): `inprocess` runs it
+in an in-process worker pool (local/default), while `cloudtasks` (prod) enqueues to Cloud
+Tasks → `POST /internal/dispatch` so the multi-minute compute runs **in-request** on Cloud
+Run (CPU stays allocated; scale-to-zero preserved). Deterministic, agent-free tooling lives
+under `automation_agent/` and is called by agents but never imports them.
 
 ## Conventions (enforced by `arch/` + `make ci`)
 

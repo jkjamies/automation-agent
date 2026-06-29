@@ -38,7 +38,7 @@ class InProcess:
         if max_concurrent < 1:
             max_concurrent = DEFAULT_MAX_CONCURRENT
         self._max_concurrent = max_concurrent
-        # Caps in-flight dispatches (matches Go's sem-32 channel). Acquired in enqueue before
+        # Caps in-flight dispatches at the configured bound. Acquired in enqueue before
         # the task is spawned, so a burst blocks the handler (backpressure) instead of piling
         # up tasks; released when the dispatch finishes.
         self._sem = asyncio.Semaphore(max_concurrent)
@@ -73,7 +73,7 @@ class InProcess:
         await self._sem.acquire()
         # Recheck after the (possibly long) backpressure wait: close() may have begun while we
         # were blocked on the semaphore. Without this, a task could slip past the drain's
-        # snapshot and be abandoned on exit. (Mirrors Go's second select on the closed channel.)
+        # snapshot and be abandoned on exit. (This re-checks the closed flag after the wait.)
         if self._closed:
             self._sem.release()
             raise RuntimeError("tasks: in-process transport is closed")
@@ -102,8 +102,8 @@ class InProcess:
             return
         self._log.info("draining %d in-flight dispatch(es)", len(self._pending))
         # Wait on a snapshot with asyncio.wait (not wait_for+gather): on timeout it only stops
-        # waiting and does NOT cancel the still-running dispatches, matching Go's Close, which
-        # lets in-flight goroutines run to completion past the drain deadline.
+        # waiting and does NOT cancel the still-running dispatches, so in-flight work is left to
+        # run to completion past the drain deadline rather than being abandoned mid-flight.
         _, still_pending = await asyncio.wait(set(self._pending), timeout=DRAIN_TIMEOUT)
         if still_pending:
             self._log.warning("drain timed out; %d dispatch(es) abandoned", len(still_pending))

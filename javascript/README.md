@@ -17,7 +17,10 @@ Local-first on **Ollama + Gemma** via a small `BaseLlm` adapter, with a config s
 **Gemini/Vertex** for cloud deployment. The PR + CI suspend/resume loop rides on ADK
 long-running tools plus an injected `ParkStore` selected by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`); with a durable backend parked runs survive a restart,
-and the periodic `/internal/sweep` reconciles runs whose timeout timer was lost.
+and the periodic `/internal/sweep` reconciles runs whose timeout timer was lost. Webhook
+work runs through an **execution transport** (`TASKS_BACKEND`): an in-process worker pool
+locally, or Cloud Tasks → `POST /internal/dispatch` in production so the multi-minute
+compute runs in-request on Cloud Run (CPU stays allocated; scale-to-zero preserved).
 
 ## Quick start
 
@@ -36,7 +39,7 @@ make playground           # local ADK web UI at http://localhost:8080 (dev only)
 | `cmd/agent` | service entrypoint |
 | `cmd/playground` | local ADK web UI (dev only; never deployed) |
 | `src/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `src/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
+| `src/{githubapi,gitrepo,webhook,notify,tasks}` | deterministic tooling (`tasks` = execution transport: in-process \| Cloud Tasks) |
 | `src/{config,ingest}` | configuration + normalized event envelope |
 | `arch/` | architecture-conformance tests |
 

@@ -26,11 +26,18 @@ The detailed, copy-paste steps for each item are in
 
 - [ ] Firestore database in **Native mode**.
 - [ ] Cloud Run service account: `roles/datastore.user` (+ `roles/aiplatform.user` for
-      Gemini-on-Vertex). ADC is automatic on Cloud Run.
+      Gemini-on-Vertex, + `roles/cloudtasks.enqueuer` for the execution transport). ADC is
+      automatic on Cloud Run.
 - [ ] Secrets in **Secret Manager**: `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
       `INTERNAL_TOKEN`, notifier URL.
 - [ ] Deploy `cmd/agent` (`make docker`) to Cloud Run with `SESSION_BACKEND=firestore`,
-      `LLM_PROVIDER=gemini`, and the secrets/`REPOS` as env.
+      `LLM_PROVIDER=gemini`, `TASKS_BACKEND=cloudtasks` (+ the queue vars below), and the
+      secrets/`REPOS` as env.
+- [ ] **Cloud Tasks queue** (`gcloud tasks queues create <name> --location=<region>`) for the
+      in-request execution transport. Set `TASKS_LOCATION`, `TASKS_QUEUE`, and
+      `DISPATCH_URL=https://<service>/internal/dispatch` (the queue POSTs here carrying the
+      `INTERNAL_TOKEN` Bearer; `TASKS_DISPATCH_DEADLINE` defaults to `30m`). Without this,
+      multi-minute compute is throttled after the 202 on scale-to-zero.
 - [ ] GitHub **Check runs** webhook → `https://<service>/webhooks/github` (HMAC =
       `GITHUB_WEBHOOK_SECRET`).
 - [ ] Two Cloud Scheduler jobs (Bearer `INTERNAL_TOKEN`): `/internal/cron/daily` (the daily
