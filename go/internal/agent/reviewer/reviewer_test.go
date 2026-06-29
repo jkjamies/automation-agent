@@ -22,10 +22,15 @@ func (f *fakeGH) ListPRFiles(context.Context, string, string, int) ([]githubapi.
 }
 
 // testEngine builds an enabled engine with small caps and a default exclude set, overridable.
+// The fake LLMs return no findings, so a review that reaches the fan-out completes cleanly
+// (intake-focused tests assert decide()'s outcome, not review output).
 func testEngine(gh gitHubClient, mut ...func(*Deps)) *Engine {
+	noFindings := fakeLLM{json: "[]"}
 	d := Deps{
 		Enabled:      true,
 		GH:           gh,
+		BaseLLM:      noFindings,
+		CodeLLM:      noFindings,
 		SkipDrafts:   true,
 		ExcludeGlobs: []string{"go.sum", "vendor/**"},
 		MaxFiles:     50,

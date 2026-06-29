@@ -43,6 +43,23 @@ func TextEvent(author, text string, state map[string]any) *session.Event {
 	return ev
 }
 
+// JSONConfig requests JSON-formatted model output. On the local Ollama path this switches the
+// adapter into JSON mode (so the response is at least syntactically valid JSON); it does not
+// enforce a schema. Lives here so callers need not import the provider SDK directly.
+func JSONConfig() *genai.GenerateContentConfig {
+	return &genai.GenerateContentConfig{ResponseMIMEType: "application/json"}
+}
+
+// FinalTextResponse builds a terminal (turn-complete) model text response. Model adapters and
+// test doubles use it to emit a final answer without naming genai's finish-reason enum.
+func FinalTextResponse(text string) *model.LLMResponse {
+	return &model.LLMResponse{
+		Content:      AssistantText(text),
+		TurnComplete: true,
+		FinishReason: genai.FinishReasonStop,
+	}
+}
+
 // StateReader is the read side of session state (satisfied by both session.State
 // and session.ReadonlyState).
 type StateReader interface {
