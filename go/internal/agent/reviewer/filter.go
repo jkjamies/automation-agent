@@ -54,15 +54,38 @@ func (f *fileFilter) excluded(p string) bool {
 	return false
 }
 
+// avgDiffLineBytes is the per-changed-line byte estimate charged when GitHub omits a file's
+// patch for an oversized text diff. A unified-diff line is its content plus a one-char +/-
+// prefix and a newline; real source lines average well above this, so the estimate is
+// deliberately conservative: the size gate must over-, never under-, charge an omitted diff so
+// a very large PR cannot slip the byte cap by changing files too big for GitHub to diff.
+const avgDiffLineBytes = 50
+
+// patchBytes is the diff-byte cost charged for one kept file. When GitHub returns the patch it
+// is the exact byte length. When GitHub omits it for an oversized text file (empty patch but
+// non-zero line counts) it is estimated from the reported additions+deletions, so the file is
+// not undercounted as zero diff bytes. Binary files (no patch, no line counts) cost nothing.
+func patchBytes(fl githubapi.PRFile) int {
+	if fl.Patch != "" {
+		return len(fl.Patch)
+	}
+	if lines := fl.Additions + fl.Deletions; lines > 0 {
+		return lines * avgDiffLineBytes
+	}
+	return 0
+}
+
 // apply returns the kept (non-excluded) files and the total size of their patches in bytes.
-// Size is computed on the filtered set so the size gate sees real review surface, not churn.
+// Size is computed on the filtered set so the size gate sees real review surface, not churn;
+// files whose patch GitHub omitted are charged conservatively (see patchBytes) so an oversized
+// PR cannot undercount its way past the byte cap.
 func (f *fileFilter) apply(files []githubapi.PRFile) (kept []githubapi.PRFile, diffBytes int) {
 	for _, fl := range files {
 		if f.excluded(fl.Path) {
 			continue
 		}
 		kept = append(kept, fl)
-		diffBytes += len(fl.Patch)
+		diffBytes += patchBytes(fl)
 	}
 	return kept, diffBytes
 }

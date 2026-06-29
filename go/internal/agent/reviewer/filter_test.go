@@ -45,6 +45,27 @@ func TestFileFilterApplyAndSize(t *testing.T) {
 	}
 }
 
+func TestFileFilterOmittedPatchCharged(t *testing.T) {
+	// GitHub omits the patch for oversized text files but still reports line counts. Such a
+	// file must be charged conservatively (avgDiffLineBytes per changed line), not undercounted
+	// as zero, so a huge PR cannot slip past the byte cap. A binary file (no patch, no line
+	// counts) costs nothing.
+	f := newFileFilter(nil)
+	files := []githubapi.PRFile{
+		{Path: "small.go", Patch: "123"},                               // 3 bytes (exact)
+		{Path: "huge.go", Patch: "", Additions: 4000, Deletions: 1000}, // omitted text diff
+		{Path: "logo.png", Patch: "", Additions: 0, Deletions: 0},      // binary, no charge
+	}
+	kept, bytes := f.apply(files)
+	if len(kept) != 3 {
+		t.Fatalf("kept %d files, want 3", len(kept))
+	}
+	want := 3 + 5000*avgDiffLineBytes
+	if bytes != want {
+		t.Errorf("diff bytes = %d, want %d (exact patch + estimated omitted diff, binary free)", bytes, want)
+	}
+}
+
 func TestFileFilterBlankEntries(t *testing.T) {
 	// Blank entries are tolerated (a trailing comma in the env); nothing is excluded.
 	f := newFileFilter([]string{"", "   "})

@@ -215,8 +215,10 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 
 // PRFile is one changed file in a pull request: its path, change status, line counts, and
 // the unified diff patch. Patch carries the hunk text the reviewer needs to map a finding to
-// a diff line; GitHub omits it for binary or very large files, so it is then empty — kept,
-// not an error, so size accounting still counts the file.
+// a diff line; GitHub omits it for binary or very large files, so it is then empty — kept, not
+// an error. An empty Patch is ambiguous (binary vs. oversized text), so size accounting must
+// not treat it as zero diff bytes: Additions+Deletions are reported even when the patch is
+// omitted, letting an omitted text diff be charged conservatively from its line counts.
 type PRFile struct {
 	Path         string
 	PreviousPath string // prior path for a rename, else empty
