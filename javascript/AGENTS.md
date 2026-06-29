@@ -11,8 +11,12 @@ to one of three workflow agents:
 The PR + CI suspend/resume loop runs on ADK long-running tools plus an injected `ParkStore`
 selected by `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`); a durable backend lets
 parked runs survive a restart, and `/internal/sweep` reconciles runs whose timeout timer
-was lost. Deterministic, agent-free tooling lives under `src/` and is called by agents but
-never imports them.
+was lost. Webhook-triggered work is handed to the **execution transport** (`src/tasks`,
+switched by `TASKS_BACKEND`): `inprocess` runs it in an in-process worker pool
+(local/default), while `cloudtasks` (prod) enqueues to Cloud Tasks → `POST /internal/dispatch`
+so the multi-minute compute runs **in-request** on Cloud Run (CPU stays allocated;
+scale-to-zero preserved). Deterministic, agent-free tooling lives under `src/` and is called
+by agents but never imports them.
 
 The authoritative, language-neutral design is [`.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md).
 

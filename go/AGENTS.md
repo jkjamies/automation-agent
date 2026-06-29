@@ -18,7 +18,10 @@ flowchart TD
     WLint -->|KindLint| Env
     WCov -->|KindCoverage| Env
     WCI -->|KindCI| Env
-    Env --> Root["root.Dispatcher.Dispatch (by Kind)"]
+    Env --> TX{"execution transport (TASKS_BACKEND)"}
+    TX -->|"inprocess: in-process worker pool (local)"| Root
+    TX -->|"cloudtasks: Cloud Tasks → POST /internal/dispatch (in-request)"| Root
+    Root["root.Dispatcher.Dispatch (by Kind)"]
     Root -->|"cron.daily"| Sum["Summary workflow"]
     Root -->|lint| LFK["Lint-fixer: Kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: Kickoff"]
@@ -51,9 +54,13 @@ plus a `setup.ParkStore` of parked runs. Both the ADK `session.Service` and the
 `ParkStore` are selected by `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`,
 default `memory`) and built once at startup in `internal/agent/setup`: with a durable
 backend (sqlite/firestore) a restart no longer strands in-flight runs; `memory` keeps
-the old ephemeral behavior. Deterministic, agent-free tooling lives under `internal/`
-and is called by agents but never imports them. For ops, env, and the `/internal/*`
-hooks see [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
+the old ephemeral behavior. Webhook-triggered work is handed to the **execution
+transport** (`internal/tasks`, switched by `TASKS_BACKEND`): `inprocess` runs it in an
+in-process worker pool (local/default), while `cloudtasks` (prod) enqueues to Cloud Tasks
+→ `POST /internal/dispatch` so the multi-minute compute runs **in-request** on Cloud Run
+(CPU stays allocated; scale-to-zero preserved). Deterministic, agent-free tooling lives
+under `internal/` and is called by agents but never imports them. For ops, env, and the
+`/internal/*` hooks see [`../DEPLOYMENT.md`](../DEPLOYMENT.md).
 
 ## Conventions (enforced by `ARCH/` + `make ci`)
 

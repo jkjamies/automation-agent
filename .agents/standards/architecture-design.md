@@ -677,7 +677,13 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `MAX_ITERATIONS` | lint-fix loop cap | `3` |
 | `CI_TIMEOUT` | how long a suspended fix run waits for its CI result before the timer/sweep frees it ("needs review") | `90m` |
 | `GITHUB_WEBHOOK_SECRET` | HMAC verify for `/webhooks/*` | — |
-| `INTERNAL_TOKEN` | Bearer token for `/internal/*` (Cloud Scheduler cron + sweep); empty disables them (404) | — |
+| `INTERNAL_TOKEN` | Bearer token for `/internal/*` (Cloud Scheduler cron + sweep, **and** the Cloud Tasks `/internal/dispatch` worker); empty disables them (404) | — |
+| `TASKS_BACKEND` | execution transport for webhook-triggered work: `inprocess` (in-process background worker pool — local/default; not durable) \| `cloudtasks` (enqueue → Cloud Tasks HTTP-target → `POST /internal/dispatch`, run **in-request** so Cloud Run keeps CPU allocated) | `inprocess` |
+| `TASKS_PROJECT` | GCP project owning the Cloud Tasks queue (`cloudtasks` only); blank = `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_PROJECT` |
+| `TASKS_LOCATION` | Cloud Tasks queue region, e.g. `us-central1` (**required** for `cloudtasks`) | — |
+| `TASKS_QUEUE` | Cloud Tasks queue name (**required** for `cloudtasks`) | — |
+| `DISPATCH_URL` | absolute `https://` URL the queue POSTs to; must end in `/internal/dispatch` (**required** for `cloudtasks`) | — |
+| `TASKS_DISPATCH_DEADLINE` | explicit per-task dispatch deadline; range `15s`..`30m` (Cloud Tasks HTTP-target max; unset queue default is only 10m); `cloudtasks` only | `30m` |
 | `AGENT_PR_LABEL` | label applied to every agent PR on creation (write-only — PR lookup is by branch) | `automation-agent` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
@@ -701,12 +707,26 @@ the firestore emulator for local tests, and the pending-work list — lives in
                                          │
                                     Cloud Run service (this app)
                                          │
+                       webhook returns fast ─► enqueue on the execution transport
+                                         │
+                       TASKS_BACKEND = inprocess | cloudtasks
+                          inprocess: in-process background worker pool (local/default)
+                          cloudtasks: Cloud Tasks ─bearer─► POST /internal/dispatch
+                                         │              (runs the workflow IN-REQUEST)
                        ┌─────────────────┴─────────────────┐
                   session.Service                       ParkStore
                   (suspend/resume history)         (prKey→session, attempts, params)
                   memory | sqlite | firestore     memory | sqlite | firestore
 ```
 
+- **Execution transport (`TASKS_BACKEND`).** A webhook returns fast, then its multi-minute LLM
+  compute runs **in-request** — on Cloud Run, CPU is throttled once the response is sent, so post-202
+  background work is starved and a mid-run instance reclaim loses it. `cloudtasks` (prod) enqueues each
+  envelope as a Cloud Tasks HTTP-target task → `POST /internal/dispatch` (Bearer `INTERNAL_TOKEN`),
+  which runs the workflow synchronously with CPU allocated; the queue adds durable retry + rate
+  limiting. `inprocess` (local/default) reproduces the in-process worker pool. **Scale-to-zero is
+  preserved** (no `min-instances`). Orthogonal to the fixers' durable CI wait (that offloads *waiting*;
+  this fixes *computing*). See `specs/20260626-workflow-execution-transport.md`.
 - **Prod (scale-to-zero): Cloud Run + `SESSION_BACKEND=firestore`.** Because firestore makes
   parked runs durable, the instance no longer has to stay warm to avoid stranding work — it can
   scale toward zero and rehydrate a parked run when CI reports. ADC gives the service account

@@ -130,7 +130,7 @@ async def test_inprocess_enqueue_rejected_if_closed_during_backpressure() -> Non
 
 async def test_inprocess_close_timeout_does_not_cancel(monkeypatch) -> None:
     # On drain timeout, close() only stops waiting — it must NOT cancel the still-running
-    # dispatch (matches Go's Close letting in-flight goroutines run to completion).
+    # dispatch; in-flight work is left to run to completion past the drain deadline.
     monkeypatch.setattr(inprocess_mod, "DRAIN_TIMEOUT", 0.05)
     release = asyncio.Event()
     finished = asyncio.Event()

@@ -102,8 +102,8 @@ class InProcess:
             return
         self._log.info("draining %d in-flight dispatch(es)", len(self._pending))
         # Wait on a snapshot with asyncio.wait (not wait_for+gather): on timeout it only stops
-        # waiting and does NOT cancel the still-running dispatches, matching Go's Close, which
-        # lets in-flight goroutines run to completion past the drain deadline.
+        # waiting and does NOT cancel the still-running dispatches, so in-flight work is left to
+        # run to completion past the drain deadline rather than being abandoned mid-flight.
         _, still_pending = await asyncio.wait(set(self._pending), timeout=DRAIN_TIMEOUT)
         if still_pending:
             self._log.warning("drain timed out; %d dispatch(es) abandoned", len(still_pending))

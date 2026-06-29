@@ -103,7 +103,7 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC for `/webhooks/*`; **blank locally = verification skipped (dev only)** |
 | `INTERNAL_TOKEN` | — | Bearer for `/internal/*` (cron, sweep, dispatch); blank = those routes are 404 |
 | **Execution transport (webhook → dispatcher)** | | |
-| `TASKS_BACKEND` | `inprocess` | `inprocess` (background goroutine pool — local) \| `cloudtasks` (Cloud Tasks → `/internal/dispatch`, in-request — prod) |
+| `TASKS_BACKEND` | `inprocess` | `inprocess` (in-process background worker pool — local) \| `cloudtasks` (Cloud Tasks → `/internal/dispatch`, in-request — prod) |
 | `TASKS_PROJECT` | `GOOGLE_CLOUD_PROJECT` | GCP project owning the queue; `cloudtasks` only |
 | `TASKS_LOCATION` | — | queue region (e.g. `us-central1`); **required** for `cloudtasks` |
 | `TASKS_QUEUE` | — | Cloud Tasks queue name; **required** for `cloudtasks` |

@@ -31,7 +31,7 @@ back here (no environment is stood up yet — the repo is code only).
                        webhook returns fast ─► enqueue on the execution transport
                                          │
                        TASKS_BACKEND = inprocess | cloudtasks
-                          inprocess: background goroutine pool (local/default)
+                          inprocess: in-process background worker pool (local/default)
                           cloudtasks: Cloud Tasks ─bearer─► POST /internal/dispatch
                                          │              (runs the workflow IN-REQUEST)
                        ┌─────────────────┴─────────────────┐
@@ -67,7 +67,7 @@ skipped only when `GITHUB_WEBHOOK_SECRET` is empty (local dev).
 A webhook handler must **return fast** (GitHub/your CI expects a prompt 2xx), but the
 workflow it triggers is **multi-minute LLM compute**. On Cloud Run with the default
 request-based billing, **CPU is throttled to near-zero once the response is sent**, so
-running that compute in a post-202 background goroutine starves it and the instance can be
+running that compute in a post-202 background task starves it and the instance can be
 reclaimed mid-run. The fix: the webhook **enqueues** and the compute runs **inside a
 request**, where CPU stays allocated for the whole run. Two timeouts bound that run and are
 set explicitly so a slow-but-healthy workflow is not cancelled and retried: the worker
@@ -80,7 +80,7 @@ Tasks' HTTP-target maximum; the unset default is only 10m).
 
 | Backend | Use | Behavior |
 |---|---|---|
-| `inprocess` (default) | local dev | Background goroutine pool, drained on SIGTERM. Not durable — a reclaim loses in-flight work; on Cloud Run the compute is throttled after the 202. Reproduces the pre-transport behavior exactly. |
+| `inprocess` (default) | local dev | In-process background worker pool, drained on SIGTERM. Not durable — a reclaim loses in-flight work; on Cloud Run the compute is throttled after the 202. Reproduces the pre-transport behavior exactly. |
 | `cloudtasks` | production | Each envelope is enqueued as a Cloud Tasks HTTP-target task → `POST /internal/dispatch`, which runs the workflow **synchronously, in-request**. The queue gives **durable retry with backoff** (a task survives a mid-run reclaim and is redelivered) and **rate limiting** (the queue's `max-concurrent-dispatches` replaces the in-process semaphore). |
 
 Selecting `cloudtasks` is a production posture, so config validation **fails fast** unless
