@@ -38,7 +38,7 @@ func TestReviewPipeline(t *testing.T) {
 	e := reviewEngine(canned)
 	files := []githubapi.PRFile{{Path: "main.go", Patch: "@@ -1 +1 @@\n+x", Status: "modified"}}
 
-	card, err := e.review(context.Background(), files)
+	card, _, err := e.review(context.Background(), files)
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestReviewPipeline(t *testing.T) {
 func TestReviewPipelineDropsLowConfidence(t *testing.T) {
 	// All findings below the 0.6 gate -> dropped -> green, no findings.
 	canned := `[{"file":"main.go","line":10,"dimension":"security","severity":"critical","message":"x","confidence":0.2}]`
-	card, err := reviewEngine(canned).review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}})
+	card, _, err := reviewEngine(canned).review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}})
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestReviewPipelineDropsLowConfidence(t *testing.T) {
 }
 
 func TestReviewPipelineEmptyFindings(t *testing.T) {
-	card, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}})
+	card, _, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}})
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}

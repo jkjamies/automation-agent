@@ -3,9 +3,11 @@ package githubapi
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +264,120 @@ func TestAgentCheck(t *testing.T) {
 	}
 	if missing.Found {
 		t.Error("expected Found=false for a ref with no agent check")
+	}
+}
+
+func TestCreateReview(t *testing.T) {
+	var gotPath string
+	var body []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /repos/o/r/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	c := testClient(t, mux)
+
+	err := c.CreateReview(context.Background(), "o", "r", 7, ReviewInput{
+		Body:     "summary",
+		Comments: []ReviewComment{{Path: "a.go", Line: 3, Side: "RIGHT", Body: "issue"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateReview: %v", err)
+	}
+	if gotPath != "/repos/o/r/pulls/7/reviews" {
+		t.Errorf("path = %s", gotPath)
+	}
+	s := string(body)
+	for _, want := range []string{`"event":"COMMENT"`, `"a.go"`, `"RIGHT"`, `"issue"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("review body missing %q: %s", want, s)
+		}
+	}
+}
+
+func TestUpsertMarkerCommentEditsExisting(t *testing.T) {
+	var edited bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"other"},{"id":22,"body":"hi MARK here"}]`))
+	})
+	mux.HandleFunc("PATCH /repos/o/r/issues/comments/22", func(w http.ResponseWriter, _ *http.Request) {
+		edited = true
+		_, _ = w.Write([]byte(`{"id":22}`))
+	})
+	c := testClient(t, mux)
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "new MARK body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !edited {
+		t.Error("expected the existing marker comment to be edited in place")
+	}
+}
+
+func TestUpsertMarkerCommentCreatesWhenAbsent(t *testing.T) {
+	var created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":11,"body":"unrelated"}]`))
+	})
+	mux.HandleFunc("POST /repos/o/r/issues/7/comments", func(w http.ResponseWriter, _ *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"id":99}`))
+	})
+	c := testClient(t, mux)
+
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 7, "MARK", "body MARK"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !created {
+		t.Error("expected a new comment to be created when no marker matches")
+	}
+}
+
+func TestCreateCheckRun(t *testing.T) {
+	var body []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /repos/o/r/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	c := testClient(t, mux)
+
+	err := c.CreateCheckRun(context.Background(), "o", "r", CheckRunInput{
+		Name: "agent-review", HeadSHA: "deadbeef", Conclusion: "neutral", Title: "t", Summary: "s",
+	})
+	if err != nil {
+		t.Fatalf("CreateCheckRun: %v", err)
+	}
+	s := string(body)
+	for _, want := range []string{`"agent-review"`, `"deadbeef"`, `"completed"`, `"neutral"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("check body missing %q: %s", want, s)
+		}
+	}
+}
+
+// The advisory check must never gate a merge, so the API boundary rejects any conclusion other
+// than success/neutral before it reaches GitHub (the empty mux is never called).
+func TestCreateCheckRunRejectsNonAdvisory(t *testing.T) {
+	c := testClient(t, http.NewServeMux())
+	for _, concl := range []string{"failure", "cancelled", "timed_out", ""} {
+		if err := c.CreateCheckRun(context.Background(), "o", "r", CheckRunInput{Name: "agent-review", HeadSHA: "s", Conclusion: concl}); err == nil {
+			t.Errorf("conclusion %q must be rejected (advisory: success/neutral only)", concl)
+		}
+	}
+}
+
+// An empty marker (matches every comment) or a body missing the marker (unfindable next time)
+// is a caller bug and is rejected before any API call.
+func TestUpsertMarkerCommentValidates(t *testing.T) {
+	c := testClient(t, http.NewServeMux())
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 1, "", "body"); err == nil {
+		t.Error("an empty marker must be rejected")
+	}
+	if err := c.UpsertMarkerComment(context.Background(), "o", "r", 1, "MARK", "no marker here"); err == nil {
+		t.Error("a body that omits the marker must be rejected")
 	}
 }

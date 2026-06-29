@@ -8,17 +8,44 @@ import (
 	"automation-agent/internal/githubapi"
 )
 
-// fakeGH is a stub gitHubClient: it returns canned files (or an error) and counts calls so a
-// test can assert whether intake reached the fetch step.
+// fakeGH is a stub gitHubClient: it returns canned files (or an error), counts ListPRFiles calls,
+// and captures the publish writes so a test can assert what was posted.
 type fakeGH struct {
 	files []githubapi.PRFile
 	err   error
 	calls int
+
+	review     *githubapi.ReviewInput    // last CreateReview input (nil if none posted)
+	upserts    []markerComment           // UpsertMarkerComment calls, in order
+	checks     []githubapi.CheckRunInput // CreateCheckRun calls, in order
+	writeErr   error                     // forced error from the write methods
+	agentCheck githubapi.CheckResult     // returned by AgentCheck (zero value = not found)
 }
+
+type markerComment struct{ marker, body string }
 
 func (f *fakeGH) ListPRFiles(context.Context, string, string, int) ([]githubapi.PRFile, error) {
 	f.calls++
 	return f.files, f.err
+}
+
+func (f *fakeGH) CreateReview(_ context.Context, _, _ string, _ int, in githubapi.ReviewInput) error {
+	f.review = &in
+	return f.writeErr
+}
+
+func (f *fakeGH) UpsertMarkerComment(_ context.Context, _, _ string, _ int, marker, body string) error {
+	f.upserts = append(f.upserts, markerComment{marker: marker, body: body})
+	return f.writeErr
+}
+
+func (f *fakeGH) CreateCheckRun(_ context.Context, _, _ string, in githubapi.CheckRunInput) error {
+	f.checks = append(f.checks, in)
+	return f.writeErr
+}
+
+func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (githubapi.CheckResult, error) {
+	return f.agentCheck, nil
 }
 
 // testEngine builds an enabled engine with small caps and a default exclude set, overridable.

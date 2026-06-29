@@ -20,26 +20,27 @@ const (
 	glueTrigger   = "Synthesize the holistic findings as the JSON array specified."
 )
 
-// review runs the model-calling stage for a reviewable PR: fan out the category lenses, run
-// the holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup)
-// and score. It posts nothing — publishing the scorecard and inline comments lands later.
-func (e *Engine) review(ctx context.Context, files []githubapi.PRFile) (scorecard, error) {
+// review runs the model-calling stage for a reviewable PR: fan out the category lenses, run the
+// holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
+// score. It returns the scorecard and the gated findings (the caller publishes them); it posts
+// nothing itself.
+func (e *Engine) review(ctx context.Context, files []githubapi.PRFile) (scorecard, []Finding, error) {
 	diff := formatDiff(files)
 	cats := selectCategories(files)
 
 	category, err := e.runCategoryReview(ctx, diff, cats)
 	if err != nil {
-		return scorecard{}, fmt.Errorf("reviewer: category review: %w", err)
+		return scorecard{}, nil, fmt.Errorf("reviewer: category review: %w", err)
 	}
 	glue, err := e.runGlue(ctx, diff, category)
 	if err != nil {
-		return scorecard{}, fmt.Errorf("reviewer: glue review: %w", err)
+		return scorecard{}, nil, fmt.Errorf("reviewer: glue review: %w", err)
 	}
 
 	all := append(category, glue...)
 	all = dropLowConfidence(all, e.minConfidence) // phase-1 verify gate (spec Decision 13)
 	all = dedupe(all)                             // cross-lens dedup (spec Decision 3/7)
-	return scoreFindings(all), nil
+	return scoreFindings(all), all, nil
 }
 
 // runCategoryReview builds one agent per applicable category, runs them in parallel (ADK

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v78/github"
@@ -77,6 +78,109 @@ type CheckResult struct {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// ReviewComment is one inline review comment on the head (RIGHT) side of a file. GitHub rejects
+// an inline comment whose line is outside the PR's diff hunks, so the caller posts only in-diff
+// findings here and lists the rest in the summary comment.
+type ReviewComment struct {
+	Path string
+	Line int
+	Side string // "RIGHT" (head side)
+	Body string
+}
+
+// ReviewInput is an advisory pull-request review: a body plus optional inline comments. The
+// reviewer never approves or requests changes (spec Decision 15), so the event is always COMMENT.
+type ReviewInput struct {
+	Body     string
+	Comments []ReviewComment
+}
+
+// CreateReview posts an advisory (COMMENT) pull-request review with optional inline comments.
+func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, in ReviewInput) error {
+	comments := make([]*github.DraftReviewComment, 0, len(in.Comments))
+	for _, rc := range in.Comments {
+		comments = append(comments, &github.DraftReviewComment{
+			Path: ptr(rc.Path), Body: ptr(rc.Body), Line: ptr(rc.Line), Side: ptr(rc.Side),
+		})
+	}
+	req := &github.PullRequestReviewRequest{Event: ptr("COMMENT"), Comments: comments}
+	if in.Body != "" {
+		req.Body = ptr(in.Body)
+	}
+	if _, _, err := c.gh.PullRequests.CreateReview(ctx, owner, repo, number, req); err != nil {
+		return fmt.Errorf("create review %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return nil
+}
+
+// UpsertMarkerComment edits the single issue comment whose body contains marker, or creates one
+// if none exists. The reviewer's summary comment carries a hidden marker (spec Decision 9) so a
+// re-review updates it in place instead of piling up duplicates.
+func (c *Client) UpsertMarkerComment(ctx context.Context, owner, repo string, number int, marker, body string) error {
+	// An empty marker would match every comment (Contains("", …) is always true) and edit an
+	// unrelated one; a body without the marker could never be found again, piling up duplicates.
+	// Both are caller bugs, so fail fast rather than corrupt the PR's comments.
+	if marker == "" {
+		return fmt.Errorf("upsert comment %s/%s#%d: empty marker", owner, repo, number)
+	}
+	if !strings.Contains(body, marker) {
+		return fmt.Errorf("upsert comment %s/%s#%d: body must contain the marker", owner, repo, number)
+	}
+	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := c.gh.Issues.ListComments(ctx, owner, repo, number, opts)
+		if err != nil {
+			return fmt.Errorf("list comments %s/%s#%d: %w", owner, repo, number, err)
+		}
+		for _, ic := range comments {
+			if strings.Contains(ic.GetBody(), marker) {
+				if _, _, err := c.gh.Issues.EditComment(ctx, owner, repo, ic.GetID(), &github.IssueComment{Body: ptr(body)}); err != nil {
+					return fmt.Errorf("edit comment %s/%s#%d: %w", owner, repo, number, err)
+				}
+				return nil
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	if _, _, err := c.gh.Issues.CreateComment(ctx, owner, repo, number, &github.IssueComment{Body: ptr(body)}); err != nil {
+		return fmt.Errorf("create comment %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return nil
+}
+
+// CheckRunInput describes the advisory agent-review check run (spec Decision 15): always
+// completed, conclusion success or neutral — never failure, so it informs without gating merges.
+type CheckRunInput struct {
+	Name       string
+	HeadSHA    string
+	Conclusion string // "success" | "neutral"
+	Title      string
+	Summary    string
+}
+
+// CreateCheckRun posts a completed, advisory check run for the head SHA.
+func (c *Client) CreateCheckRun(ctx context.Context, owner, repo string, in CheckRunInput) error {
+	// The agent-review check is advisory and must never gate a merge (spec Decision 15), so the
+	// conclusion is constrained here at the API boundary — a "failure"/"cancelled" can't slip in.
+	if in.Conclusion != "success" && in.Conclusion != "neutral" {
+		return fmt.Errorf("create check run %s/%s: advisory conclusion must be success or neutral, got %q", owner, repo, in.Conclusion)
+	}
+	_, _, err := c.gh.Checks.CreateCheckRun(ctx, owner, repo, github.CreateCheckRunOptions{
+		Name:       in.Name,
+		HeadSHA:    in.HeadSHA,
+		Status:     ptr("completed"),
+		Conclusion: ptr(in.Conclusion),
+		Output:     &github.CheckRunOutput{Title: ptr(in.Title), Summary: ptr(in.Summary)},
+	})
+	if err != nil {
+		return fmt.Errorf("create check run %s/%s @%s: %w", owner, repo, in.HeadSHA, err)
+	}
+	return nil
+}
 
 // Comparison summarizes what changed between two refs (base...head).
 type Comparison struct {
