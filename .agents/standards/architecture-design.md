@@ -685,6 +685,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `DISPATCH_URL` | absolute `https://` URL the queue POSTs to; must end in `/internal/dispatch` (**required** for `cloudtasks`) | — |
 | `TASKS_DISPATCH_DEADLINE` | explicit per-task dispatch deadline; range `15s`..`30m` (Cloud Tasks HTTP-target max; unset queue default is only 10m); `cloudtasks` only | `30m` |
 | `AGENT_PR_LABEL` | label applied to every agent PR on creation (write-only — PR lookup is by branch) | `automation-agent` |
+| `REVIEW_ENABLED` | PR code-review ingress kill switch: `false` accepts/acknowledges `pull_request` events but runs no reviewer work; `true` enables the current kickoff path (which only logs receipt today — diff fetch, sub-agents, scoring, and publishing land in later changes) | `false` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
 [`DEPLOYMENT.md`](../../DEPLOYMENT.md).

@@ -126,6 +126,11 @@ type Config struct {
 	// (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
 	AgentPRLabel string
 
+	// Reviewer (PR code-review agent). ReviewEnabled (REVIEW_ENABLED) is the kill switch:
+	// false (the default) means pull_request events are accepted and acknowledged but no
+	// review work runs. See specs/20260625-pr-code-review-agent.md.
+	ReviewEnabled bool
+
 	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
 	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
 	// task carries InternalToken as its Bearer credential (no new auth var). See
@@ -268,6 +273,9 @@ func loadFrom(get lookup) (Config, error) {
 	}
 
 	var err error
+	if c.ReviewEnabled, err = getBool(get, "REVIEW_ENABLED", false); err != nil {
+		return Config{}, err
+	}
 	if c.MaxIterations, err = strconv.Atoi(getOr(get, "MAX_ITERATIONS", "3")); err != nil {
 		return Config{}, fmt.Errorf("MAX_ITERATIONS: %w", err)
 	}
@@ -490,6 +498,21 @@ func getOr(get lookup, key, def string) string {
 		}
 	}
 	return def
+}
+
+// getBool parses a boolean env var (REVIEW_ENABLED etc.). Unset or blank yields def; a
+// set-but-unparseable value is a startup error rather than a silent default, matching the
+// strict handling of the numeric/duration vars.
+func getBool(get lookup, key string, def bool) (bool, error) {
+	v := getOr(get, key, "")
+	if v == "" {
+		return def, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", key, err)
+	}
+	return b, nil
 }
 
 func splitList(s string) []string {

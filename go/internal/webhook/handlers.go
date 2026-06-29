@@ -53,13 +53,28 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 	s.dispatch(r.Context(), w, ingest.New(ingest.KindCoverage, "webhook:/coverage", body, s.now()))
 }
 
-// handleGitHub is the lint/coverage-fixer resume: GitHub check_run events.
+// handleGitHub is the single GitHub App webhook door. The App delivers every event to
+// this one URL, so it routes by the X-GitHub-Event header:
+//
+//   - check_run    -> KindCI:     resume a parked lint/coverage fix run.
+//   - pull_request -> KindReview: kick off the PR code-review agent (native-event kickoff).
+//
+// Any other event (e.g. ping, or one the App is subscribed to but this service ignores) is
+// acknowledged with 200 and not dispatched, so GitHub records a successful delivery. HMAC
+// verification applies to every delivery before routing.
 func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	body, ok := s.readBody(w, r)
 	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
-	s.dispatch(r.Context(), w, ingest.New(ingest.KindCI, "webhook:/github", body, s.now()))
+	switch r.Header.Get("X-GitHub-Event") {
+	case "pull_request":
+		s.dispatch(r.Context(), w, ingest.New(ingest.KindReview, "webhook:/github", body, s.now()))
+	case "check_run":
+		s.dispatch(r.Context(), w, ingest.New(ingest.KindCI, "webhook:/github", body, s.now()))
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // handleCronDaily lets Cloud Scheduler trigger the daily summary digest, so the schedule

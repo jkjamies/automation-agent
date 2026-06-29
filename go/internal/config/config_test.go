@@ -52,6 +52,28 @@ func TestInvalidTasksBackend(t *testing.T) {
 	}
 }
 
+func TestReviewEnabled(t *testing.T) {
+	c, err := loadFrom(mapLookup(nil))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.ReviewEnabled {
+		t.Error("ReviewEnabled should default to false")
+	}
+
+	c, err = loadFrom(mapLookup(map[string]string{"REVIEW_ENABLED": "true"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if !c.ReviewEnabled {
+		t.Error("REVIEW_ENABLED=true should enable the reviewer")
+	}
+
+	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_ENABLED": "maybe"})); err == nil {
+		t.Error("an unparseable REVIEW_ENABLED should be a startup error")
+	}
+}
+
 // A complete, valid cloudtasks configuration (used as the base for negative cases).
 func fullCloudTasksEnv() map[string]string {
 	return map[string]string{

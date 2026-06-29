@@ -8,7 +8,7 @@ import (
 )
 
 func TestKindValid(t *testing.T) {
-	valid := []Kind{KindCronDaily, KindLint, KindCoverage, KindCI}
+	valid := []Kind{KindCronDaily, KindLint, KindCoverage, KindCI, KindReview}
 	for _, k := range valid {
 		if !k.Valid() {
 			t.Errorf("%q should be valid", k)
@@ -45,7 +45,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			in := New(KindCI, "webhook:/github", payload, at)
+			in := New(KindReview, "webhook:/github", payload, at)
 			b, err := Encode(in)
 			if err != nil {
 				t.Fatalf("Encode: %v", err)
