@@ -64,33 +64,38 @@ future human interaction or additional hooks — hence the root-agent indirectio
 ## 2. Architecture at a glance
 
 ```
-                          ┌──────────────── ingest sources ─────────────────┐
-   Cloud Scheduler ───┐    │  webhook: /ci   webhook: /ingest   (future: Jira)│
-   (daily) ───────────┼───▶│   managed API gateway ──► HTTP server           │
-   GitHub webhooks ───┘    └───────────────────────┬─────────────────────────┘
-                                                  ▼
-                                       ingest.Envelope (normalized)
-                                                  ▼
-                                          ┌───────────────┐
-                                          │  ROOT AGENT   │  (dispatcher)
-                                          └───────┬───────┘
-                          ┌───────────────────────┼───────────────────────┐
-                          ▼                       ▼                        ▼
-              ┌────────────────────┐   ┌──────────────────────┐  ┌──────────────────────┐
-              │  SUMMARY workflow   │   │  LINT-FIXER workflow  │  │ COVERAGE-FIXER workflow│
-              │ Sequential:         │   │  (fixflow Spec)       │  │  (fixflow Spec)        │
-              │  Parallel[fetch×N]  │   │   apply_fix(git/PR)   │  │   apply_fix(git/PR)    │
-              │   → summarize(LLM)  │   │   → await_ci (suspend)│  │   → await_ci (suspend) │
-              │   → notify          │   │   → resume (webhook / │  │   → resume (webhook /  │
-              └─────────┬──────────┘   │      timer / sweep)    │  │      timer / sweep)    │
-                        ▼              │   → notify(summary)    │  │   → notify(summary)    │
-                  Slack / Teams        └───────────┬───────────┘  └───────────┬───────────┘
-                                                   ▼                          ▼
-                                             Slack / Teams              Slack / Teams
+                       ┌──────────────────── ingest sources ────────────────────┐
+   Cloud Scheduler ─┐   │ POST /webhooks/{lint,coverage}   POST /webhooks/github  │
+   (daily) ─────────┼──▶│ managed API gateway ──► HTTP server                     │
+   GitHub App ──────┘   │ (github: check_run resume + pull_request review)        │
+                        └────────────────────────────┬───────────────────────────┘
+                                                     ▼
+                                  ingest.Envelope (normalized; routed by Kind)
+                                                     ▼
+                                            ┌───────────────┐
+                                            │  ROOT AGENT   │  (dispatcher)
+                                            └───────┬───────┘
+        ┌──────────────────┬──────────────────┬─────┴──────────────┐
+        ▼                  ▼                   ▼                    ▼
+ ┌────────────┐   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+ │  SUMMARY   │   │   LINT-FIXER     │  │  COVERAGE-FIXER  │  │     REVIEWER     │
+ │ KindCron   │   │ KindLint (+CI)   │  │ KindCoverage(+CI)│  │   KindReview     │
+ │ Sequential:│   │  (fixflow Spec)  │  │  (fixflow Spec)  │  │ intake → filter  │
+ │ Parallel[  │   │  apply_fix(PR)   │  │  apply_fix(PR)   │  │ → size-gate →    │
+ │  fetch×N]  │   │  → await_ci      │  │  → await_ci      │  │ Parallel[lenses] │
+ │ →summarize │   │   (suspend)      │  │   (suspend)      │  │ → glue →         │
+ │ →notify    │   │  → resume        │  │  → resume        │  │ scorecard →      │
+ │            │   │  → notify        │  │  → notify        │  │ publish (advisory)│
+ └─────┬──────┘   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
+       ▼                   ▼                     ▼                     ▼
+  Slack / Teams       Slack / Teams         Slack / Teams      PR review + agent-review check
 ```
 
 Lint-fixer and Coverage-fixer share the generic `fixflow` engine; each is a thin `Spec`
-(branch/label/check + triage/analyze) over it.
+(branch/label/check + triage/analyze) over it. The **Reviewer** is a separate workflow,
+triggered by the native `pull_request` event (`KindReview`); unlike the fixers it does **not**
+suspend/resume — it runs one-shot **in-request** and posts an advisory, comment-only review
+(it opens no PR/branch). See §8 and [`webhooks.md`](webhooks.md).
 
 Tooling (`gitrepo`, `githubapi`, `webhook`, `notify`) is **deterministic
 and agent-free** — agents call it, it never imports agents. This boundary is enforced by
@@ -369,6 +374,12 @@ uses branch `automation-agent/test-coverage`, check `agent-coverage-verify`.
 > **Durable sessions.** One `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`) selects
 > two provider-switched stores; `memory` is the zero-dependency default, `firestore` is the
 > prod path. Per-port parity is tracked per-PR (see [`language-parity.md`](language-parity.md)).
+
+> **Scope: the fixers only.** This section describes the lint/coverage fixers, which wait on
+> CI and so suspend/resume. The **Reviewer** does **not** park: it has no CI to wait on, so it
+> runs one-shot **in-request** (its multi-minute LLM compute rides the execution transport;
+> see §13) and posts an advisory review. It keeps no per-run session/park record — re-review
+> idempotency comes from reconciling against the PR's own comments (GitHub-as-store).
 
 ### The hard constraint: CI takes 20–40 minutes (often more with retries)
 
@@ -685,7 +696,17 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `DISPATCH_URL` | absolute `https://` URL the queue POSTs to; must end in `/internal/dispatch` (**required** for `cloudtasks`) | — |
 | `TASKS_DISPATCH_DEADLINE` | explicit per-task dispatch deadline; range `15s`..`30m` (Cloud Tasks HTTP-target max; unset queue default is only 10m); `cloudtasks` only | `30m` |
 | `AGENT_PR_LABEL` | label applied to every agent PR on creation (write-only — PR lookup is by branch) | `automation-agent` |
-| `REVIEW_ENABLED` | PR code-review ingress kill switch: `false` accepts/acknowledges `pull_request` events but runs no reviewer work; `true` enables the current kickoff path (which only logs receipt today — diff fetch, sub-agents, scoring, and publishing land in later changes) | `false` |
+| `REVIEW_ENABLED` | PR code-review kill switch: `false` accepts/acknowledges `pull_request` events but runs no reviewer work; `true` runs the full reviewer (intake → category lenses → glue → scorecard → publish) | `false` |
+| `REVIEW_SKIP_DRAFTS` | skip draft PRs unless the triggering action is `ready_for_review` | `true` |
+| `REVIEW_EXCLUDE_GLOBS` | comma-separated globs dropped before sizing/review (generated, vendored, lockfiles, minified, binaries); blank uses the built-in default set | (built-in set) |
+| `REVIEW_MAX_FILES` | size-gate cap on changed files (measured on the **filtered** diff); over it the PR is denied (review-or-deny) | `50` |
+| `REVIEW_MAX_DIFF_BYTES` | size-gate cap on total filtered patch bytes; over it the PR is denied | `262144` (256 KiB) |
+| `REVIEW_MIN_CONFIDENCE` | drop findings below this confidence before scoring (phase-1 verify gate); must be in `[0,1]`, non-positive keeps all | `0.6` |
+| `REVIEW_DEBOUNCE` | coalesce rapid pushes: a `synchronize` review is enqueued under a per-PR-per-window Cloud Tasks name with this delay, so a burst collapses to one review of the latest SHA (Cloud Tasks backend only) | `30s` |
+| `REVIEW_STANDARDS` | standards-aware review: discover the **reviewed** repo's own convention docs, distill them, and steer the lenses off them; `false` reviews generically | `true` |
+| `REVIEW_STANDARDS_GLOBS` | comma-separated discovery globs matched against the reviewed repo's tree (`AGENTS.md`, `.cursor/rules/**`, `CLAUDE.md`, …); blank uses the built-in default set | (built-in set) |
+| `REVIEW_STANDARDS_MAX_BYTES` | cap on total convention-doc bytes fed to the distiller; must be positive | `262144` (256 KiB) |
+| `REVIEW_UNCITED_MODE` | how a conformance finding citing no real repo rule is handled: `nitpick` (demote) or `drop` | `nitpick` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
 [`DEPLOYMENT.md`](../../DEPLOYMENT.md).

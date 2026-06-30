@@ -41,10 +41,12 @@ flowchart TD
     GW --> WLint["POST /webhooks/lint (CI lint report)"]
     GW --> WCov["POST /webhooks/coverage (coverage report)"]
     GW --> WCI["POST /webhooks/github (check_run)"]
+    GW --> WReview["POST /webhooks/github (pull_request)"]
     Cron -->|KindCronDaily| Env["ingest.Envelope{Kind, Source, Payload}"]
     WLint -->|KindLint| Env
     WCov -->|KindCoverage| Env
     WCI -->|KindCI| Env
+    WReview -->|KindReview| Env
     Env --> TX{"execution transport (TASKS_BACKEND)"}
     TX -->|"inprocess: in-process worker pool (local)"| Root
     TX -->|"cloudtasks: Cloud Tasks → POST /internal/dispatch (in-request)"| Root
@@ -53,6 +55,7 @@ flowchart TD
     Root -->|lint| LFK["Lint-fixer: Kickoff"]
     Root -->|coverage| CFK["Coverage-fixer: Kickoff"]
     Root -->|ci| LFR["Lint/Coverage-fixer: Resume (by check name)"]
+    Root -->|review| RVK["Reviewer: Kickoff (one-shot, in-request)"]
 
     Sum --> Par["Parallel[fetch_repo x N] -> state commits:<repo>"]
     Par --> Smz["summarize (LLM, OutputKey=digest)"]
@@ -67,16 +70,22 @@ flowchart TD
     Dec -->|"failure & attempts>=3"| Chat
     TO["per-run CI_TIMEOUT (soft timer + durable /internal/sweep)"] -.->|"CI never reports -> needs review"| Chat
 
+    RVK -->|"filter -> size-gate -> Parallel[lenses] -> glue -> scorecard -> reconcile/publish"| RV[("GitHub PR: review comments + agent-review check (advisory)")]
+
     Models["model.LLM: Ollama/Gemma (local) | Gemini (cloud)"] -.-> Sum
     Models -.-> LFK
+    Models -.-> RVK
 ```
 
 ## Mental model
 
-Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of three
+Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of four
 workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
-remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sharing
-the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
+remediation with a PR + CI loop), **covfixer** (test-coverage remediation, sharing
+the `fixflow` engine), or **reviewer** (PR code review on the native `pull_request`
+event — one-shot/in-request, no suspend/resume; fans out category lenses → glue →
+count-based scorecard → an advisory, comment-only review). The PR + CI suspend/resume loop
+(fixers only) runs on ADK long-running tools
 plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
 no longer strands in-flight runs; `memory` keeps the old ephemeral behavior.

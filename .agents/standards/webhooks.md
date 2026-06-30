@@ -51,17 +51,32 @@ These arrive on the single App webhook URL and are routed by the `X-GitHub-Event
 | Reviewer | `pull_request` | `KindReview` | Native-event kickoff. Comment-only; opens no PR/branch. |
 | Fixer resume | `check_run` | `KindCI` | Resume routing matches by `CheckName` (see below). |
 
-The reviewer publishes its own advisory **`agent-review`** check — an *agent-published,
-human-consumed* check (distinct from the fixers' `agent-*-verify` checks, which the agent
-*reads* to resume). That check and its registry row land when the reviewer's publish path
-ships; it must still be globally unique and identical across all four ports.
+The reviewer publishes its own advisory **`agent-review`** check — see *Agent-published
+checks* below.
 
 ## Resume check names (`check_run`)
+
+These are the checks the agent **reads** (on a `check_run` event) to resume a parked fixer run.
 
 | Workflow | Verify check name | Branch gate (`head.ref ==`) | Resume route |
 |---|---|---|---|
 | Lint | `agent-lint-verify` | `automation-agent/lint-fix` | `POST /webhooks/github` |
 | Coverage | `agent-coverage-verify` | `automation-agent/test-coverage` | `POST /webhooks/github` |
+
+## Agent-published checks
+
+Distinct from the verify checks above: the reviewer **publishes** a check that humans (not
+the agent) consume. It is advisory — its conclusion is `success` (green) or `neutral`
+(yellow/red, and the too-large *deny* path); it is **never `failure`**, so it never gates a
+merge.
+
+| Workflow | Published check name | Conclusion | Consumed by |
+|---|---|---|---|
+| Reviewer | `agent-review` | `success` \| `neutral` (never `failure`) | humans (advisory) |
+
+`agent-review` is set as the `checkName` constant in
+`go/internal/agent/reviewer/publish.go`. Like the verify-check names it is an **external
+contract** — globally unique and identical across all four ports.
 
 ## The rules (the contract)
 
@@ -86,6 +101,7 @@ the reference:
 
 - Lint — `go/internal/agent/lintfixer/lint.go` (`CheckName: "agent-lint-verify"`, branch `automation-agent/lint-fix`)
 - Coverage — `go/internal/agent/covfixer/coverage.go` (`CheckName: "agent-coverage-verify"`, branch `automation-agent/test-coverage`)
+- Reviewer — `go/internal/agent/reviewer/publish.go` (`checkName: "agent-review"`); a native-event kickoff on `pull_request` (no kickoff route, no branch, opens no PR)
 
 These strings are an **external contract** and must be **identical across all four ports**
 (`go/`, `python/`, `kotlin/`, `javascript/`) — see [`language-parity.md`](language-parity.md)
