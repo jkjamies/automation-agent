@@ -485,6 +485,32 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 	return content, nil
 }
 
+// TreeEntry is one entry in a repository git tree: its repo-relative path, blob/tree SHA, and type.
+type TreeEntry struct {
+	Path string
+	SHA  string
+	Type string // "blob" | "tree"
+}
+
+// Tree lists the repository's git tree at ref (a commit SHA, branch, or tag), recursively. It is
+// how the reviewer discovers a repo's own standards docs without a clone. A truncated response
+// (only on very large repos) silently omits deep entries; standards live at shallow well-known
+// paths, so this is acceptable for discovery.
+// Tree's second return is GitHub's truncation flag: the API caps a recursive tree (very large
+// repos), and a truncated listing may omit deep entries, so the caller can decide whether
+// incomplete discovery is acceptable rather than silently missing files.
+func (c *Client) Tree(ctx context.Context, owner, repo, ref string) ([]TreeEntry, bool, error) {
+	tree, _, err := c.gh.Git.GetTree(ctx, owner, repo, ref, true)
+	if err != nil {
+		return nil, false, fmt.Errorf("get tree %s/%s@%s: %w", owner, repo, ref, err)
+	}
+	out := make([]TreeEntry, 0, len(tree.Entries))
+	for _, te := range tree.Entries {
+		out = append(out, TreeEntry{Path: te.GetPath(), SHA: te.GetSHA(), Type: te.GetType()})
+	}
+	return out, tree.GetTruncated(), nil
+}
+
 // PRFile is one changed file in a pull request: its path, change status, line counts, and
 // the unified diff patch. Patch carries the hunk text the reviewer needs to map a finding to
 // a diff line; GitHub omits it for binary or very large files, so it is then empty — kept, not

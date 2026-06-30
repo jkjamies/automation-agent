@@ -15,9 +15,10 @@
 // scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
 // inline comments for in-diff actionable findings, a marker-updated summary comment, and an
 // advisory agent-review check, reconciled against the PR's existing comments (keep/add/minimize-
-// outdated). Deny publishes the "too large, please split" summary + a neutral check. Still to come:
-// reply-to-reply threading and standards-aware review (incremental re-review is intentionally
-// deferred). See specs/20260625-pr-code-review-agent.md.
+// outdated), and steered off the reviewed repo's own standards (.agents/standards, .cursor/rules,
+// CLAUDE.md, …) when present. Deny publishes the "too large, please split" summary + a neutral
+// check. Still to come: reply-to-reply threading (incremental re-review is intentionally deferred).
+// See specs/20260625-pr-code-review-agent.md.
 package reviewer
 
 import (
@@ -58,6 +59,10 @@ type gitHubClient interface {
 	// PullRequestHeadSHA returns the PR's current head SHA, so a review task superseded by a newer
 	// push (Cloud Tasks gives no ordering) is skipped at execution rather than posting a stale review.
 	PullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
+	// Tree lists the reviewed repo's files at the head SHA so standards-aware review can discover
+	// the repo's own convention docs; GetFileContent then fetches the matched ones. No clone.
+	Tree(ctx context.Context, owner, repo, ref string) ([]githubapi.TreeEntry, bool, error)
+	GetFileContent(ctx context.Context, owner, repo, path, ref string) (string, error)
 }
 
 // Deps wires the reviewer engine.
@@ -85,6 +90,17 @@ type Deps struct {
 	// REVIEW_MAX_DIFF_BYTES); a non-positive value disables that dimension.
 	MaxFiles     int
 	MaxDiffBytes int
+	// StandardsEnabled toggles standards-aware review (REVIEW_STANDARDS, default true): discover the
+	// reviewed repo's own convention docs, distill them, and steer the lenses off them.
+	StandardsEnabled bool
+	// StandardsGlobs are the discovery globs matched against the reviewed repo's tree
+	// (REVIEW_STANDARDS_GLOBS). StandardsMaxBytes caps the total doc bytes fed to the distiller
+	// (REVIEW_STANDARDS_MAX_BYTES).
+	StandardsGlobs    []string
+	StandardsMaxBytes int
+	// UncitedDrop, when true (REVIEW_UNCITED_MODE=drop), drops a conformance finding that cites no
+	// real repo rule; otherwise (default) it is demoted to nitpick.
+	UncitedDrop bool
 	// Log receives the engine's diagnostics; nil falls back to slog.Default.
 	Log *slog.Logger
 }
@@ -100,7 +116,14 @@ type Engine struct {
 	filter        *fileFilter
 	maxFiles      int
 	maxDiffBytes  int
-	log           *slog.Logger
+
+	standardsEnabled  bool
+	standardsGlobs    []string
+	standardsMaxBytes int
+	uncitedMode       uncitedMode
+	standardsCache    *standardsCache
+
+	log *slog.Logger
 }
 
 // NewEngine builds the reviewer engine from its dependencies, compiling the exclude globs
@@ -110,17 +133,26 @@ func NewEngine(d Deps) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
+	mode := uncitedNitpick
+	if d.UncitedDrop {
+		mode = uncitedDrop
+	}
 	return &Engine{
-		enabled:       d.Enabled,
-		gh:            d.GH,
-		baseLLM:       d.BaseLLM,
-		codeLLM:       d.CodeLLM,
-		minConfidence: clampThreshold(d.MinConfidence),
-		skipDrafts:    d.SkipDrafts,
-		filter:        newFileFilter(d.ExcludeGlobs),
-		maxFiles:      d.MaxFiles,
-		maxDiffBytes:  d.MaxDiffBytes,
-		log:           log,
+		enabled:           d.Enabled,
+		gh:                d.GH,
+		baseLLM:           d.BaseLLM,
+		codeLLM:           d.CodeLLM,
+		minConfidence:     clampThreshold(d.MinConfidence),
+		skipDrafts:        d.SkipDrafts,
+		filter:            newFileFilter(d.ExcludeGlobs),
+		maxFiles:          d.MaxFiles,
+		maxDiffBytes:      d.MaxDiffBytes,
+		standardsEnabled:  d.StandardsEnabled,
+		standardsGlobs:    d.StandardsGlobs,
+		standardsMaxBytes: d.StandardsMaxBytes,
+		uncitedMode:       mode,
+		standardsCache:    newStandardsCache(),
+		log:               log,
 	}
 }
 
@@ -196,8 +228,12 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		if e.baseLLM == nil || e.codeLLM == nil {
 			return fmt.Errorf("reviewer: enabled but review models not configured")
 		}
+		// Steer the lenses off the reviewed repo's own conventions (standards-aware review); nil
+		// when disabled or none found, in which case the lenses review generically.
+		std := e.discoverStandards(ctx, owner, repo, ev.HeadSHA, d.files)
+		meta.standards = std.sourceList()
 		// Fan out the category lenses + glue pass, score, then publish the review.
-		card, findings, err := e.review(ctx, d.files)
+		card, findings, err := e.review(ctx, d.files, std)
 		if err != nil {
 			return err
 		}

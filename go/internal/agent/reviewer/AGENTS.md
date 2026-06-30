@@ -116,13 +116,45 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
    catch-all whose findings are demoted to nitpick.
 2. **Glue/synthesis** (code tier, always) runs over the diff + the category findings and adds
    the cross-cutting lenses: architectural alignment, testability, test coverage (Decision 3/12).
-3. **Verify gate + dedup** (Decision 13/5, deterministic, in code — not asked of the model):
-   drop findings below `REVIEW_MIN_CONFIDENCE`, then collapse cross-lens duplicates by
-   fingerprint (keep worst severity).
+3. **Verify gate + citation gate + dedup** (deterministic, in code — not asked of the model):
+   drop findings below `REVIEW_MIN_CONFIDENCE`; apply the standards citation gate (below); then
+   collapse cross-lens duplicates by fingerprint (keep worst severity).
 4. **Scorecard** (Decision 5): a per-dimension severity histogram → level (🔴 any critical or
    ≥2 major · 🟡 any major or ≥3 medium · 🟢 else); overall = critical-cap (any critical in
    security / runtime safety → 🔴) combined with the worst dimension level. Count-based — no
    synthetic 0–100 score.
+
+## Standards-aware review — steer off the reviewed repo's own conventions (Decision 14)
+
+The reviewer steers off the conventions of the **repo under review** — `.agents/standards`,
+`.cursor/rules`, `CLAUDE.md`, `CONTRIBUTING.md`, linter configs, whatever that repo has — **not**
+automation-agent's own. All **API-only** (no clone). `standards.go`:
+
+1. **Discover** (`discoverStandards`): list the reviewed repo's tree at the head SHA
+   (`githubapi.Tree`) and match it against the `REVIEW_STANDARDS_GLOBS` (format-agnostic;
+   default covers the common AI-assistant + project conventions), then fetch the matched docs
+   (`GetFileContent`, capped by `REVIEW_STANDARDS_MAX_BYTES`).
+2. **Distill** (the base-tier model — distillation is summarization, the base tier per
+   model-size-split): `buildDistillerAgent` feeds the discovered docs (heterogeneous formats) to
+   the base model, which emits **one uniform tagged rule list** `[{id, dimension, summary,
+   source}]` (`prompts/distill.md`, parsed defensively by `parseRules`).
+3. **Cache** per repo + docs revision (`standardsCache`, keyed on the matched blob SHAs), so
+   distillation runs **once per standards change** — every subsequent review reads the cached list.
+4. **Inject** the compact rule list into **every** category + glue lens (`writeStandardsMenu`) — no
+   per-lens routing; the list is small and the narrow lens prompt focuses it. Full rule text is
+   available on demand via the lazy **`get_rule(id)`** tool (`standardsTools`, same pattern as the
+   fixers' `read_file`), so deep detail never sits in context unprompted.
+5. **Citation gate** (`gateCitations`, `REVIEW_UNCITED_MODE`): a conformance-dimension finding
+   (`pattern_violation` / `architectural_alignment`) that cites no real injected `rule_id` is
+   **dropped** or **demoted to nitpick** — so a "violation" only carries full weight when anchored
+   to one of the repo's own documented rules. Other dimensions (e.g. security) need no citation.
+6. **Report**: the summary's *Review details* lists the applied standards source paths, or
+   "generic" when none were found.
+
+Graceful by design: standards off, no docs found, or a distillation/fetch error all degrade to a
+**generic** review (best-effort). The reviewer stays **out of the mechanizable lint layer** — it is
+no-clone, so it does **not** run the repo's linters (the repo's own CI owns that); it spends its LLM
+budget on the judgment conventions a linter can't check.
 
 ## Publish stage (CodeRabbit-style, advisory, all REST)
 
@@ -143,7 +175,7 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
 5. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never**
    `failure`. Deny publishes the "too large, please split" summary + a neutral check.
 
-Still to come: reply-to-reply threading and standards-aware review. (Debounce is built;
+Still to come: reply-to-reply threading. (Debounce and standards-aware review are built;
 incremental re-review is intentionally deferred — see the *Coalesce-to-latest* section.)
 
 ### Structured output on the local model path
@@ -177,9 +209,13 @@ single-lens prompts are themselves the false-positive control, and the model is 
   writes (advisory review, marker summary comment, advisory `agent-review` check).
 - `reconcile.go` — the fingerprint marker (`fpMarker`/`parseFPMarker`) and the pure `reconcile`:
   given this run's inline findings + the PR's existing comments, what to post vs minimize.
-- `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue LLM agents, the
-  prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
-- `prompts/*.md` — one markdown prompt per category and the glue pass.
+- `standards.go` — standards-aware review: discovery (`matchStandards`), the distiller
+  orchestration + defensive `parseRules`, the per-repo `standardsCache`, the rule menu / lazy
+  `get_rule` tool (`standardsTools`), and the `gateCitations` citation gate.
+- `enqueue.go` — `EnqueueOptions`: the debounce/coalesce transport hints for a synchronize review.
+- `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue + distiller LLM
+  agents, the prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
+- `prompts/*.md` — one markdown prompt per category, the glue pass, and the standards distiller.
 
 The `pull_request` webhook parse (`ParsePullRequestEvent`) and the file fetch (`ListPRFiles`)
 live in `githubapi` next to `ParseCheckRunEvent`, so the SDK stays in the tooling layer and

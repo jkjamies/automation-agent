@@ -24,21 +24,22 @@ const (
 // holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
 // score. It returns the scorecard and the gated findings (the caller publishes them); it posts
 // nothing itself.
-func (e *Engine) review(ctx context.Context, files []githubapi.PRFile) (scorecard, []Finding, error) {
+func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards) (scorecard, []Finding, error) {
 	diff := formatDiff(files)
 	cats := selectCategories(files)
 
-	category, err := e.runCategoryReview(ctx, diff, cats)
+	category, err := e.runCategoryReview(ctx, diff, cats, std)
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: category review: %w", err)
 	}
-	glue, err := e.runGlue(ctx, diff, category)
+	glue, err := e.runGlue(ctx, diff, category, std)
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: glue review: %w", err)
 	}
 
 	all := append(category, glue...)
 	all = dropLowConfidence(all, e.minConfidence) // phase-1 verify gate (spec Decision 13)
+	all = e.gateCitations(all, std)               // standards citation gate (spec Decision 14)
 	all = dedupe(all)                             // cross-lens dedup (spec Decision 3/7)
 	return scoreFindings(all), all, nil
 }
@@ -47,10 +48,10 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile) (scorecar
 // ParallelAgent — genuine concurrency on Vertex, GPU-serialized locally with no code change,
 // spec Decision 17), and returns every category's parsed findings. Empty findings is success
 // (spec Decision 2). The "(other)" catch-all's findings are demoted to nitpick.
-func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category) ([]Finding, error) {
+func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category, std *standards) ([]Finding, error) {
 	agents := make([]agent.Agent, 0, len(cats))
 	for _, c := range cats {
-		a, err := e.buildCategoryAgent(c, diff)
+		a, err := e.buildCategoryAgent(c, diff, std)
 		if err != nil {
 			return nil, err
 		}
@@ -94,8 +95,8 @@ func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []cate
 
 // runGlue runs the holistic synthesis pass over the diff and the category findings, returning
 // the additional architectural/testability/coverage findings it produced. Empty is success.
-func (e *Engine) runGlue(ctx context.Context, diff string, prior []Finding) ([]Finding, error) {
-	a, err := e.buildGlueAgent(diff, prior)
+func (e *Engine) runGlue(ctx context.Context, diff string, prior []Finding, std *standards) ([]Finding, error) {
+	a, err := e.buildGlueAgent(diff, prior, std)
 	if err != nil {
 		return nil, err
 	}
@@ -172,25 +173,41 @@ func (e *Engine) modelForTier(t tier) model.LLM {
 	return e.baseLLM
 }
 
-// buildReviewInstruction composes a category agent's instruction: the lens prompt followed by the
-// filtered diff (baked in because it is per-event).
-func buildReviewInstruction(promptBody, diff string) string {
+// buildReviewInstruction composes a category agent's instruction: the lens prompt, the repo's
+// standards rule menu (when any), and the filtered diff (baked in because they are per-event).
+func buildReviewInstruction(promptBody, diff string, std *standards) string {
 	var b strings.Builder
 	b.WriteString(promptBody)
+	writeStandardsMenu(&b, std)
 	b.WriteString("\n\n## Diff under review\n\n")
 	b.WriteString(diff)
 	return b.String()
 }
 
-// buildGlueInstruction composes the glue agent's instruction: the glue prompt, the diff, and the
-// findings the category agents already produced (so it reasons holistically without re-flagging
-// them).
-func buildGlueInstruction(promptBody, diff string, prior []Finding) string {
+// buildGlueInstruction composes the glue agent's instruction: the glue prompt, the standards menu,
+// the diff, and the findings the category agents already produced (so it reasons holistically
+// without re-flagging them).
+func buildGlueInstruction(promptBody, diff string, prior []Finding, std *standards) string {
 	var b strings.Builder
 	b.WriteString(promptBody)
+	writeStandardsMenu(&b, std)
 	b.WriteString("\n\n## Diff under review\n\n")
 	b.WriteString(diff)
 	b.WriteString("\n\n## Findings already reported by other lenses\n\n")
 	b.WriteString(findingsJSON(prior))
 	return b.String()
+}
+
+// writeStandardsMenu appends the repo's compact rule menu and the citation instruction to an agent
+// prompt when standards were discovered. The full text of any rule is available via get_rule.
+func writeStandardsMenu(b *strings.Builder, std *standards) {
+	if std.empty() {
+		return
+	}
+	b.WriteString("\n\n## Repo standards (cite rule_id for conformance findings)\n\n")
+	b.WriteString(std.menu())
+	b.WriteString("\nWhen a finding is a violation of one of these rules, set its dimension to the " +
+		"rule's dimension and set \"rule_id\" to the rule's id. Call get_rule(id) to read a rule's " +
+		"full text before flagging. Never invent a rule id; a pattern/architecture finding with no " +
+		"matching rule is not a standards violation.\n")
 }
