@@ -9,6 +9,8 @@ import (
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	gax "github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"automation-agent/internal/ingest"
 )
@@ -161,6 +163,18 @@ func TestCloudTasksSurfacesSubmitError(t *testing.T) {
 	err := ct.Enqueue(context.Background(), ingest.New(ingest.KindCI, "s", nil, time.Unix(0, 0)))
 	if err == nil || !strings.Contains(err.Error(), "create task") {
 		t.Fatalf("err = %v, want create-task error", err)
+	}
+}
+
+// A duplicate dedup name (ALREADY_EXISTS) is a successful coalesce, not a failure: a burst of
+// pushes within the debounce window collapses onto the one task already scheduled, so Enqueue
+// returns nil rather than 500-ing the webhook into a retry storm against the reserved name.
+func TestCloudTasksTreatsAlreadyExistsAsCoalesce(t *testing.T) {
+	f := &fakeSubmitter{err: status.Error(codes.AlreadyExists, "task name already exists")}
+	ct := newTestCloudTasks(f, "")
+	err := ct.Enqueue(context.Background(), ingest.New(ingest.KindReview, "s", nil, time.Unix(0, 0)), WithName("review-x-7-1700000000"))
+	if err != nil {
+		t.Fatalf("Enqueue with duplicate name = %v, want nil (coalesce)", err)
 	}
 }
 

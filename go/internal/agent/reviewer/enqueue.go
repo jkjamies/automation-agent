@@ -30,17 +30,27 @@ func EnqueueOptions(e ingest.Envelope, debounce time.Duration) []tasks.Option {
 		return nil
 	}
 	return []tasks.Option{
-		tasks.WithName(coalesceKey(ev)),
+		tasks.WithName(coalesceKey(ev, e.ReceivedAt.Truncate(debounce))),
 		tasks.WithDelay(debounce),
 	}
 }
 
-// coalesceKey is the per-PR Cloud Tasks dedup name. Identically-named tasks within the dedup
-// window collapse to one. The repo full name is base64url-encoded so the name is both valid in the
-// Cloud Tasks charset ([A-Za-z0-9_-]) and lossless: a naive replace-invalid-with-'-' would collapse
-// distinct repos (e.g. "acme/web.api" and "acme/web-api") to the same name and silently drop one
-// PR's review (the staleness check can't recover a cross-repo collision — it only guards stale SHAs
-// within a PR).
-func coalesceKey(ev githubapi.PullRequestEvent) string {
-	return "review-" + base64.RawURLEncoding.EncodeToString([]byte(ev.RepoFullName)) + "-" + strconv.Itoa(ev.Number)
+// coalesceKey is the per-PR-per-window Cloud Tasks dedup name. Identically-named tasks collapse to
+// one, so a burst of pushes within a debounce window coalesces to a single review of the latest SHA.
+//
+// The name carries a time bucket (the receipt time floored to the debounce window) because Cloud
+// Tasks keeps a task name reserved for ~1h after the task completes or is deleted: a fixed per-PR
+// name would make a push that lands minutes after the previous review collide with the reserved
+// name and silently drop the new review. Bucketing gives each window a fresh name, so only pushes
+// genuinely within one window coalesce.
+//
+// The repo full name is base64url-encoded so the name is both valid in the Cloud Tasks charset
+// ([A-Za-z0-9_-]) and lossless: a naive replace-invalid-with-'-' would collapse distinct repos
+// (e.g. "acme/web.api" and "acme/web-api") to the same name and silently drop one PR's review (the
+// staleness check can't recover a cross-repo collision — it only guards stale SHAs within a PR).
+func coalesceKey(ev githubapi.PullRequestEvent, bucket time.Time) string {
+	return "review-" +
+		base64.RawURLEncoding.EncodeToString([]byte(ev.RepoFullName)) + "-" +
+		strconv.Itoa(ev.Number) + "-" +
+		strconv.FormatInt(bucket.UnixNano(), 10)
 }

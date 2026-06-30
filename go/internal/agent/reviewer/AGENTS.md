@@ -25,10 +25,13 @@ Rapid pushes to one PR are collapsed so only the latest SHA is reviewed (two par
 Cloud Tasks gives no ordering and cannot cancel an in-flight task):
 
 - **Debounce at enqueue** (`enqueue.go`, `EnqueueOptions`): a `synchronize` review is enqueued
-  with `REVIEW_DEBOUNCE` delay under a per-PR Cloud Tasks dedup name, so a burst of pushes
-  collapses to one delayed task. `opened`/`reopened`/`ready_for_review` enqueue immediately. This
-  is a workflow concern, so it lives here, not in the transport. Only the Cloud Tasks backend
-  honors the hints.
+  with `REVIEW_DEBOUNCE` delay under a per-PR-per-window Cloud Tasks dedup name, so a burst of
+  pushes collapses to one delayed task. The name carries a time bucket (receipt time floored to the
+  debounce window) so a push minutes later doesn't collide with Cloud Tasks' ~1h name reservation
+  and get silently dropped. `opened`/`reopened`/`ready_for_review` enqueue immediately. This is a
+  workflow concern, so it lives here, not in the transport. Only the Cloud Tasks backend honors the
+  hints (and it is the backend, not this layer, that treats a duplicate name as a successful
+  coalesce rather than an error).
 - **Staleness at execution** (`Kickoff` → `superseded`): before doing the review work, the engine
   fetches the PR's current head SHA and skips if it no longer matches the event's SHA (a newer
   push won). Best-effort — a lookup error proceeds rather than suppressing a real review.
