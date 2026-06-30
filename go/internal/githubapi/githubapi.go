@@ -493,12 +493,10 @@ type TreeEntry struct {
 }
 
 // Tree lists the repository's git tree at ref (a commit SHA, branch, or tag), recursively. It is
-// how the reviewer discovers a repo's own standards docs without a clone. A truncated response
-// (only on very large repos) silently omits deep entries; standards live at shallow well-known
-// paths, so this is acceptable for discovery.
+// how the reviewer discovers a repo's own standards docs without a clone.
 // Tree's second return is GitHub's truncation flag: the API caps a recursive tree (very large
-// repos), and a truncated listing may omit deep entries, so the caller can decide whether
-// incomplete discovery is acceptable rather than silently missing files.
+// repos), and a truncated listing may omit entries, so the caller can decide whether incomplete
+// discovery is acceptable rather than silently missing files.
 func (c *Client) Tree(ctx context.Context, owner, repo, ref string) ([]TreeEntry, bool, error) {
 	tree, _, err := c.gh.Git.GetTree(ctx, owner, repo, ref, true)
 	if err != nil {

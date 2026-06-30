@@ -204,6 +204,43 @@ func TestDiscoverStandards(t *testing.T) {
 		}
 	})
 
+	// A truncated tree means discovery may have missed convention files; gating against the partial
+	// set is worse than a generic review, so degrade to nil (and don't cache).
+	t.Run("truncated tree degrades to generic nil", func(t *testing.T) {
+		gh := &fakeGH{
+			tree:      []githubapi.TreeEntry{{Path: "AGENTS.md", SHA: "s1", Type: "blob"}},
+			truncated: true,
+			contents:  map[string]string{"AGENTS.md": "wrap errors with %w"},
+		}
+		if std := newEngine(gh).discoverStandards(context.Background(), "o", "r", "head", nil); std != nil {
+			t.Errorf("truncated tree must degrade to nil, got %+v", std)
+		}
+	})
+
+	// A fetch failure leaves the rule set incomplete; degrade to generic for this round and do not
+	// cache, so a later event retries the full set rather than serving a memoized partial.
+	t.Run("partial fetch failure degrades to nil, uncached", func(t *testing.T) {
+		gh := &fakeGH{
+			tree: []githubapi.TreeEntry{
+				{Path: "AGENTS.md", SHA: "s1", Type: "blob"},
+				{Path: "CONTRIBUTING.md", SHA: "s2", Type: "blob"},
+			},
+			contents: map[string]string{"AGENTS.md": "wrap errors"}, // CONTRIBUTING.md fetch fails
+		}
+		e := NewEngine(Deps{
+			Enabled: true, GH: gh, BaseLLM: fakeLLM{json: rulesJSON}, CodeLLM: fakeLLM{json: rulesJSON},
+			StandardsEnabled: true, StandardsGlobs: []string{"AGENTS.md", "CONTRIBUTING.md"}, StandardsMaxBytes: 1 << 20,
+		})
+		if std := e.discoverStandards(context.Background(), "o", "r", "head", nil); std != nil {
+			t.Errorf("partial fetch must degrade to nil, got %+v", std)
+		}
+		// Not memoized: once the missing doc resolves, the next event must build the full set.
+		gh.contents["CONTRIBUTING.md"] = "prefer composition"
+		if std := e.discoverStandards(context.Background(), "o", "r", "head", nil); std.empty() {
+			t.Error("after the fetch resolves, discovery must build (partial was not cached)")
+		}
+	})
+
 	// A per-directory instruction file applies only to its own touched module; root files always
 	// apply; an untouched module's file is excluded.
 	t.Run("per-module instruction file scoped to touched dirs", func(t *testing.T) {

@@ -103,9 +103,12 @@ func (e *Engine) discoverStandards(ctx context.Context, owner, repo, ref string,
 		return nil
 	}
 	if truncated {
-		// A truncated tree (very large repo) may have missed deep convention files; proceed with
-		// what we have rather than failing, but surface the gap (no silent caps).
-		e.log.Warn("standards: repo tree truncated; discovery may be incomplete", "repo", owner+"/"+repo)
+		// A truncated tree (very large repo) may have missed convention files. Steering off a
+		// knowingly-incomplete rule set is worse than a generic review: the citation gate would then
+		// demote/drop legitimate conformance findings whose rule simply wasn't discovered. Degrade to
+		// generic (no cache, so a later event with a complete tree retries).
+		e.log.Warn("standards: repo tree truncated; reviewing generic", "repo", owner+"/"+repo)
+		return nil
 	}
 	// Per-module scoping (Decision 14): a per-directory instruction file applies only when the PR
 	// touches its module, so a finding in one module isn't judged against another's conventions and
@@ -128,11 +131,12 @@ func (e *Engine) discoverStandards(ctx context.Context, owner, repo, ref string,
 	for _, m := range matched {
 		content, err := e.gh.GetFileContent(ctx, owner, repo, m.Path, ref)
 		if err != nil {
-			// A transient fetch failure must not poison the cache for this revision; use what we
-			// have this round but don't memoize, so a later event retries the full set.
-			e.log.Warn("standards: fetch failed; skipping doc", "path", m.Path, "err", err)
+			// A transient fetch failure leaves the rule set incomplete; rather than gate conformance
+			// findings against a partial set, degrade to generic for this round (and don't memoize,
+			// so a later event retries the full set).
+			e.log.Warn("standards: fetch failed; reviewing generic", "path", m.Path, "err", err)
 			fetchOK = false
-			continue
+			break
 		}
 		if total+len(content) > e.standardsMaxBytes {
 			e.log.Warn("standards: byte cap reached; remaining docs skipped", "cap", e.standardsMaxBytes, "applied", len(sources))
@@ -142,7 +146,8 @@ func (e *Engine) discoverStandards(ctx context.Context, owner, repo, ref string,
 		docs[m.Path] = content
 		sources = append(sources, m.Path)
 	}
-	if len(docs) == 0 {
+	if !fetchOK || len(docs) == 0 {
+		// Incomplete discovery (a fetch failed) or nothing fetched: review generic, uncached, retry.
 		return nil
 	}
 
@@ -153,11 +158,9 @@ func (e *Engine) discoverStandards(ctx context.Context, owner, repo, ref string,
 		return nil
 	}
 	std := buildStandards(rules, docs, sources)
-	if fetchOK {
-		// Cache only a fully-successful build (incl. a legitimate empty distill, so a rule-less repo
-		// isn't re-distilled until its docs change); a partial fetch is left uncached to retry.
-		e.standardsCache.put(key, std)
-	}
+	// Discovery was complete (whole tree, every matched doc fetched), so memoize — incl. a legitimate
+	// empty distill, so a rule-less repo isn't re-distilled until its docs change.
+	e.standardsCache.put(key, std)
 	if std.empty() {
 		e.log.Info("standards: discovered docs but distilled no rules; reviewing generic", "repo", owner+"/"+repo, "docs", len(sources))
 		return nil

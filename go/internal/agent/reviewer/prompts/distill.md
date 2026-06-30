@@ -5,6 +5,12 @@ You are given one or more of the repository's standards/convention documents (fo
 produce a JSON array of the concrete, checkable rules they state. Normalize the different formats
 into one uniform list.
 
+Skip purely mechanizable rules that a repository's own linter, formatter, or CI already enforces
+automatically — formatting, indentation, import ordering, line length, naming-case lint, and
+similar style-only constraints. Those are checked by tooling, not this reviewer. Keep only the
+judgment conventions that need a human-style read (architecture, layering, error-handling policy,
+API/usage patterns, security/test expectations).
+
 Output ONLY a JSON array — no prose. Each element is an object:
 
 ```json

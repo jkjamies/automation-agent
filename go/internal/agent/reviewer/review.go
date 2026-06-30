@@ -32,7 +32,12 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *stan
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: category review: %w", err)
 	}
-	glue, err := e.runGlue(ctx, diff, category, std)
+	// Glue sees the category findings as "already reported" and skips re-flagging them, so it must
+	// see only the findings that survive the same gates as the final output. Otherwise a finding the
+	// verify/citation gate later drops (REVIEW_UNCITED_MODE=drop) is suppressed in glue and then
+	// dropped here, vanishing from the review entirely.
+	gatedForGlue := e.gateCitations(dropLowConfidence(append([]Finding(nil), category...), e.minConfidence), std)
+	glue, err := e.runGlue(ctx, diff, gatedForGlue, std)
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: glue review: %w", err)
 	}

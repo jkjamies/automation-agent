@@ -280,7 +280,9 @@ func reviewDetails(meta publishMeta) string {
 	if len(meta.standards) > 0 {
 		fmt.Fprintf(&b, "- Standards applied: %s\n", strings.Join(meta.standards, ", "))
 	} else {
-		b.WriteString("- Standards: generic (no repo standards found)\n")
+		// Empty also covers standards-off and the discovery/distill fallback, not just a repo with
+		// no convention docs — so stay neutral rather than asserting none were found.
+		b.WriteString("- Standards: generic review\n")
 	}
 	return b.String()
 }
