@@ -143,6 +143,16 @@ type Config struct {
 	// not a fixed number).
 	ReviewMaxFiles     int
 	ReviewMaxDiffBytes int
+	// ReviewStandards toggles standards-aware review (REVIEW_STANDARDS, default true): discover the
+	// reviewed repo's own convention docs (.agents/standards, .cursor/rules, CLAUDE.md, …), distill
+	// them, and steer the lenses off them. ReviewStandardsGlobs are the discovery globs
+	// (REVIEW_STANDARDS_GLOBS); ReviewStandardsMaxBytes caps the total doc bytes fed to the distiller
+	// (REVIEW_STANDARDS_MAX_BYTES). ReviewUncitedMode (REVIEW_UNCITED_MODE, drop|nitpick, default
+	// nitpick) handles a conformance finding that cites no real repo rule.
+	ReviewStandards         bool
+	ReviewStandardsGlobs    []string
+	ReviewStandardsMaxBytes int
+	ReviewUncitedMode       string
 	// ReviewMinConfidence drops findings below this confidence before scoring
 	// (REVIEW_MIN_CONFIDENCE, the phase-1 verify gate). A non-positive value keeps everything.
 	ReviewMinConfidence float64
@@ -265,33 +275,35 @@ func ghCLIToken() string {
 // testable without mutating the real environment.
 func loadFrom(get lookup) (Config, error) {
 	c := Config{
-		LLMProvider:         Provider(getOr(get, "LLM_PROVIDER", string(ProviderOllama))),
-		OllamaHost:          getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
-		OllamaModel:         getOr(get, "OLLAMA_MODEL", "gemma4:12b"),
-		OllamaCodeModel:     getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
-		GeminiModel:         getOr(get, "GEMINI_MODEL", ""),
-		GeminiCodeModel:     getOr(get, "GEMINI_CODE_MODEL", ""),
-		SessionBackend:      SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
-		SQLiteDSN:           getOr(get, "SQLITE_DSN", "file:automation-agent.db?_pragma=busy_timeout(5000)"),
-		FirestoreProject:    getOr(get, "FIRESTORE_PROJECT", ""),
-		FirestoreCollection: getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
-		Repos:               splitList(getOr(get, "REPOS", "")),
-		GitHubToken:         getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
-		GitTransport:        getOr(get, "GIT_TRANSPORT", "https"),
-		GitSSHKey:           getOr(get, "GIT_SSH_KEY", ""),
-		NotifyProvider:      NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
-		SlackWebhookURL:     getOr(get, "SLACK_WEBHOOK_URL", ""),
-		TeamsWebhookURL:     getOr(get, "TEAMS_WEBHOOK_URL", ""),
-		Port:                getOr(get, "PORT", "8080"),
-		GitHubWebhookSecret: getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
-		InternalToken:       getOr(get, "INTERNAL_TOKEN", ""),
-		AgentPRLabel:        getOr(get, "AGENT_PR_LABEL", "automation-agent"),
-		ReviewExcludeGlobs:  splitList(getOr(get, "REVIEW_EXCLUDE_GLOBS", defaultReviewExcludeGlobs)),
-		TasksBackend:        TasksBackend(getOr(get, "TASKS_BACKEND", string(TasksInProcess))),
-		TasksProject:        getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
-		TasksLocation:       getOr(get, "TASKS_LOCATION", ""),
-		TasksQueue:          getOr(get, "TASKS_QUEUE", ""),
-		DispatchURL:         getOr(get, "DISPATCH_URL", ""),
+		LLMProvider:          Provider(getOr(get, "LLM_PROVIDER", string(ProviderOllama))),
+		OllamaHost:           getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
+		OllamaModel:          getOr(get, "OLLAMA_MODEL", "gemma4:12b"),
+		OllamaCodeModel:      getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
+		GeminiModel:          getOr(get, "GEMINI_MODEL", ""),
+		GeminiCodeModel:      getOr(get, "GEMINI_CODE_MODEL", ""),
+		SessionBackend:       SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
+		SQLiteDSN:            getOr(get, "SQLITE_DSN", "file:automation-agent.db?_pragma=busy_timeout(5000)"),
+		FirestoreProject:     getOr(get, "FIRESTORE_PROJECT", ""),
+		FirestoreCollection:  getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
+		Repos:                splitList(getOr(get, "REPOS", "")),
+		GitHubToken:          getOr(get, "GITHUB_TOKEN", getOr(get, "GH_TOKEN", "")),
+		GitTransport:         getOr(get, "GIT_TRANSPORT", "https"),
+		GitSSHKey:            getOr(get, "GIT_SSH_KEY", ""),
+		NotifyProvider:       NotifyProvider(getOr(get, "NOTIFY_PROVIDER", string(NotifySlack))),
+		SlackWebhookURL:      getOr(get, "SLACK_WEBHOOK_URL", ""),
+		TeamsWebhookURL:      getOr(get, "TEAMS_WEBHOOK_URL", ""),
+		Port:                 getOr(get, "PORT", "8080"),
+		GitHubWebhookSecret:  getOr(get, "GITHUB_WEBHOOK_SECRET", ""),
+		InternalToken:        getOr(get, "INTERNAL_TOKEN", ""),
+		AgentPRLabel:         getOr(get, "AGENT_PR_LABEL", "automation-agent"),
+		ReviewExcludeGlobs:   splitList(getOr(get, "REVIEW_EXCLUDE_GLOBS", defaultReviewExcludeGlobs)),
+		ReviewStandardsGlobs: splitList(getOr(get, "REVIEW_STANDARDS_GLOBS", defaultReviewStandardsGlobs)),
+		ReviewUncitedMode:    getOr(get, "REVIEW_UNCITED_MODE", "nitpick"),
+		TasksBackend:         TasksBackend(getOr(get, "TASKS_BACKEND", string(TasksInProcess))),
+		TasksProject:         getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
+		TasksLocation:        getOr(get, "TASKS_LOCATION", ""),
+		TasksQueue:           getOr(get, "TASKS_QUEUE", ""),
+		DispatchURL:          getOr(get, "DISPATCH_URL", ""),
 	}
 
 	var err error
@@ -306,6 +318,15 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewMaxDiffBytes); err != nil {
 		return Config{}, err
+	}
+	if c.ReviewStandards, err = getBool(get, "REVIEW_STANDARDS", true); err != nil {
+		return Config{}, err
+	}
+	if c.ReviewStandardsMaxBytes, err = getInt(get, "REVIEW_STANDARDS_MAX_BYTES", defaultReviewStandardsMaxBytes); err != nil {
+		return Config{}, err
+	}
+	if c.ReviewStandardsMaxBytes <= 0 {
+		return Config{}, fmt.Errorf("REVIEW_STANDARDS_MAX_BYTES: must be positive, got %d", c.ReviewStandardsMaxBytes)
 	}
 	if c.ReviewMinConfidence, err = getFloat(get, "REVIEW_MIN_CONFIDENCE", defaultReviewMinConfidence); err != nil {
 		return Config{}, err
@@ -371,6 +392,11 @@ func (c Config) Validate() error {
 	case "https", "ssh":
 	default:
 		return fmt.Errorf("invalid GIT_TRANSPORT %q (want https|ssh)", c.GitTransport)
+	}
+	switch c.ReviewUncitedMode {
+	case "drop", "nitpick":
+	default:
+		return fmt.Errorf("invalid REVIEW_UNCITED_MODE %q (want drop|nitpick)", c.ReviewUncitedMode)
 	}
 	switch c.TasksBackend {
 	case TasksInProcess:
@@ -609,6 +635,17 @@ const (
 		"vendor/**,node_modules/**,third_party/**,dist/**,build/**,__snapshots__/**," +
 		"*.png,*.jpg,*.jpeg,*.gif,*.webp,*.ico,*.pdf,*.woff,*.woff2,*.ttf,*.eot," +
 		"*.zip,*.gz,*.tar,*.jar,*.bin,*.so,*.dylib,*.dll,*.exe"
+
+	// defaultReviewStandardsGlobs are the convention-doc paths discovered in the reviewed repo
+	// (Decision 14) — format-agnostic across the common AI-assistant and project conventions. A
+	// pattern with no '/' matches the basename; one with '/' matches the full path.
+	defaultReviewStandardsGlobs = "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md," +
+		".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md," +
+		".windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md," +
+		".editorconfig,.golangci.yml,.golangci.yaml"
+
+	// defaultReviewStandardsMaxBytes caps the total standards-doc bytes fed to the distiller.
+	defaultReviewStandardsMaxBytes = 256 * 1024 // 256 KiB
 )
 
 func splitList(s string) []string {

@@ -101,6 +101,7 @@ type Finding struct {
 	Message    string
 	Suggestion string  // optional ```suggestion body (a localized in-diff fix)
 	FixPrompt  string  // optional "Prompt for AI agents" body (feeds the future fix hand-off)
+	RuleID     string  // optional repo-standard rule id this finding cites (standards-aware review)
 	Confidence float64 // 0..1; below REVIEW_MIN_CONFIDENCE is dropped before scoring
 }
 
@@ -127,6 +128,7 @@ type findingWire struct {
 	Message    string  `json:"message"`
 	Suggestion string  `json:"suggestion"`
 	FixPrompt  string  `json:"fix_prompt"`
+	RuleID     string  `json:"rule_id"`
 	Confidence float64 `json:"confidence"`
 }
 
@@ -155,6 +157,7 @@ func parseFindings(raw string) []Finding {
 			Message:    msg,
 			Suggestion: strings.TrimSpace(w.Suggestion),
 			FixPrompt:  strings.TrimSpace(w.FixPrompt),
+			RuleID:     strings.TrimSpace(w.RuleID),
 			Confidence: clampConfidence(w.Confidence),
 		})
 	}

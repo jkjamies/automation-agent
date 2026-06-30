@@ -629,3 +629,32 @@ func TestPullRequestHeadSHA(t *testing.T) {
 		t.Errorf("head SHA = %q, want headsha123", got)
 	}
 }
+
+func TestTree(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/git/trees/head", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("recursive") != "1" {
+			t.Errorf("want recursive=1, got query %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"sha":"head","tree":[
+			{"path":"AGENTS.md","type":"blob","sha":"b1"},
+			{"path":".cursor/rules/go.mdc","type":"blob","sha":"b2"},
+			{"path":"internal","type":"tree","sha":"t1"}
+		],"truncated":false}`))
+	})
+	c := testClient(t, mux)
+
+	entries, _, err := c.Tree(context.Background(), "o", "r", "head")
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("got %d entries, want 3", len(entries))
+	}
+	if entries[0].Path != "AGENTS.md" || entries[0].SHA != "b1" || entries[0].Type != "blob" {
+		t.Errorf("entry[0] = %+v", entries[0])
+	}
+	if entries[2].Type != "tree" {
+		t.Errorf("entry[2] should be a tree: %+v", entries[2])
+	}
+}

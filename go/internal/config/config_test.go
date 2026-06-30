@@ -403,3 +403,32 @@ func TestReviewDebounce(t *testing.T) {
 		t.Error("an unparseable REVIEW_DEBOUNCE should be a startup error")
 	}
 }
+
+func TestReviewStandardsConfig(t *testing.T) {
+	c, err := loadFrom(mapLookup(nil))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if !c.ReviewStandards {
+		t.Error("REVIEW_STANDARDS should default true")
+	}
+	if c.ReviewUncitedMode != "nitpick" {
+		t.Errorf("REVIEW_UNCITED_MODE default = %q, want nitpick", c.ReviewUncitedMode)
+	}
+	if len(c.ReviewStandardsGlobs) == 0 {
+		t.Error("REVIEW_STANDARDS_GLOBS should have defaults")
+	}
+	if c.ReviewStandardsMaxBytes <= 0 {
+		t.Error("REVIEW_STANDARDS_MAX_BYTES should default positive")
+	}
+	// An invalid mode is a startup error, not a silent default.
+	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_UNCITED_MODE": "bogus"})); err == nil {
+		t.Error("invalid REVIEW_UNCITED_MODE must be a startup error")
+	}
+	// A non-positive byte cap fetches no docs, so it is rejected at startup.
+	for _, v := range []string{"0", "-1"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_STANDARDS_MAX_BYTES": v})); err == nil {
+			t.Errorf("REVIEW_STANDARDS_MAX_BYTES=%q must be a startup error", v)
+		}
+	}
+}

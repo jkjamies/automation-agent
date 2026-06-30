@@ -3,6 +3,7 @@ package reviewer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"automation-agent/internal/githubapi"
@@ -25,6 +26,10 @@ type fakeGH struct {
 	agentCheck  githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
 	headSHA     string                       // returned by PullRequestHeadSHA ("" = no staleness)
 	headSHAErr  error                        // forced error from PullRequestHeadSHA
+	tree        []githubapi.TreeEntry        // returned by Tree (standards discovery)
+	treeErr     error                        // forced error from Tree
+	truncated   bool                         // Tree's truncation flag
+	contents    map[string]string            // returned by GetFileContent, keyed by path
 }
 
 type markerComment struct{ marker, body string }
@@ -59,6 +64,17 @@ func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (gi
 
 func (f *fakeGH) PullRequestHeadSHA(context.Context, string, string, int) (string, error) {
 	return f.headSHA, f.headSHAErr
+}
+
+func (f *fakeGH) Tree(context.Context, string, string, string) ([]githubapi.TreeEntry, bool, error) {
+	return f.tree, f.truncated, f.treeErr
+}
+
+func (f *fakeGH) GetFileContent(_ context.Context, _, _, path, _ string) (string, error) {
+	if c, ok := f.contents[path]; ok {
+		return c, nil
+	}
+	return "", fmt.Errorf("fakeGH: no content for %q", path)
 }
 
 func (f *fakeGH) MinimizeComment(_ context.Context, subjectID string) error {

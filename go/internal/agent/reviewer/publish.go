@@ -21,6 +21,7 @@ type publishMeta struct {
 	headSHA     string
 	files       []githubapi.PRFile // for the in-diff index
 	tiers       string             // model tiers used, for the Review details section
+	standards   []string           // applied standards source paths (nil = generic), for reporting
 }
 
 // summaryMarker is the hidden HTML comment that identifies the reviewer's single summary comment
@@ -275,6 +276,13 @@ func reviewDetails(meta publishMeta) string {
 	fmt.Fprintf(&b, "- Files reviewed: %d\n", len(meta.files))
 	if meta.tiers != "" {
 		fmt.Fprintf(&b, "- Model tiers: %s\n", meta.tiers)
+	}
+	if len(meta.standards) > 0 {
+		fmt.Fprintf(&b, "- Standards applied: %s\n", strings.Join(meta.standards, ", "))
+	} else {
+		// Empty also covers standards-off and the discovery/distill fallback, not just a repo with
+		// no convention docs — so stay neutral rather than asserting none were found.
+		b.WriteString("- Standards: generic review\n")
 	}
 	return b.String()
 }
