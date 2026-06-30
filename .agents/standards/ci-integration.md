@@ -229,7 +229,10 @@ a restart can't leave a run waiting forever. Either way the agent posts a timeou
 
 In production this delivery is configured **once** as the deployment's GitHub App
 webhook (URL `https://<agent-host>/webhooks/github`, content type `application/json`,
-secret = `GITHUB_WEBHOOK_SECRET`, events = **Check runs**) — not per repo. See the
+secret = `GITHUB_WEBHOOK_SECRET`, events = **Check runs** (fixer resume) **and Pull
+requests** (the reviewer's native-event kickoff — see [`webhooks.md`](webhooks.md))) — not
+per repo. The handler routes the single URL by `X-GitHub-Event`: `check_run` → fixer
+resume, `pull_request` → `KindReview`. See the
 [GitHub App setup](deployment.md#github-app-setup-production-auth) in `deployment.md`.
 
 ---
