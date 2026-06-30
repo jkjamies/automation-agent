@@ -383,3 +383,23 @@ func TestInvalidPort(t *testing.T) {
 		t.Fatal("expected error for out-of-range PORT")
 	}
 }
+
+func TestReviewDebounce(t *testing.T) {
+	c, err := loadFrom(mapLookup(nil))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.ReviewDebounce != 30*time.Second {
+		t.Errorf("default ReviewDebounce = %v, want 30s", c.ReviewDebounce)
+	}
+	c, err = loadFrom(mapLookup(map[string]string{"REVIEW_DEBOUNCE": "5s"}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.ReviewDebounce != 5*time.Second {
+		t.Errorf("ReviewDebounce = %v, want 5s", c.ReviewDebounce)
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_DEBOUNCE": "soon"})); err == nil {
+		t.Error("an unparseable REVIEW_DEBOUNCE should be a startup error")
+	}
+}

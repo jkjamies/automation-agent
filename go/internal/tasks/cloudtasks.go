@@ -8,6 +8,8 @@ import (
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	gax "github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -104,6 +106,13 @@ func (c *CloudTasks) Enqueue(ctx context.Context, e ingest.Envelope, opts ...Opt
 	}
 
 	if _, err := c.client.CreateTask(ctx, &taskspb.CreateTaskRequest{Parent: c.queuePath, Task: task}); err != nil {
+		// A named task that already exists is a successful coalesce, not a failure: a burst of
+		// pushes (or a re-delivered webhook) within the dedup window collapses onto the one task
+		// already scheduled. Surfacing it would 500 the webhook and trigger source retries that
+		// keep colliding for the ~1h the name stays reserved.
+		if status.Code(err) == codes.AlreadyExists {
+			return nil
+		}
 		return fmt.Errorf("tasks: create task: %w", err)
 	}
 	return nil

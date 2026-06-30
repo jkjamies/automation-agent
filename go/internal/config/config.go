@@ -146,6 +146,11 @@ type Config struct {
 	// ReviewMinConfidence drops findings below this confidence before scoring
 	// (REVIEW_MIN_CONFIDENCE, the phase-1 verify gate). A non-positive value keeps everything.
 	ReviewMinConfidence float64
+	// ReviewDebounce coalesces rapid pushes (REVIEW_DEBOUNCE): a synchronize review is enqueued
+	// with this delay under a per-PR dedup name, so a burst of pushes collapses to one task that
+	// reviews the latest SHA. A non-positive value disables debounce (immediate enqueue). Only the
+	// Cloud Tasks transport honors the delay/name; the in-process backend runs immediately.
+	ReviewDebounce time.Duration
 
 	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
 	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
@@ -310,6 +315,9 @@ func loadFrom(get lookup) (Config, error) {
 	// than silently dropping every finding (>1) or none.
 	if !(c.ReviewMinConfidence >= 0 && c.ReviewMinConfidence <= 1) {
 		return Config{}, fmt.Errorf("REVIEW_MIN_CONFIDENCE: must be in [0,1], got %v", c.ReviewMinConfidence)
+	}
+	if c.ReviewDebounce, err = time.ParseDuration(getOr(get, "REVIEW_DEBOUNCE", "30s")); err != nil {
+		return Config{}, fmt.Errorf("REVIEW_DEBOUNCE: %w", err)
 	}
 	if c.MaxIterations, err = strconv.Atoi(getOr(get, "MAX_ITERATIONS", "3")); err != nil {
 		return Config{}, fmt.Errorf("MAX_ITERATIONS: %w", err)

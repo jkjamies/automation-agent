@@ -14,9 +14,10 @@
 // to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass,
 // scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
 // inline comments for in-diff actionable findings, a marker-updated summary comment, and an
-// advisory agent-review check. Deny publishes the "too large, please split" summary + a neutral
-// check. Still to come: fingerprint reconciliation / incremental re-review (resolve stale threads
-// on re-push) and standards-aware review. See specs/20260625-pr-code-review-agent.md.
+// advisory agent-review check, reconciled against the PR's existing comments (keep/add/minimize-
+// outdated). Deny publishes the "too large, please split" summary + a neutral check. Still to come:
+// reply-to-reply threading and standards-aware review (incremental re-review is intentionally
+// deferred). See specs/20260625-pr-code-review-agent.md.
 package reviewer
 
 import (
@@ -54,6 +55,9 @@ type gitHubClient interface {
 	// makes the comments idempotent, but the check run and summary are not — so a redelivered task for
 	// an already-published SHA skips re-posting (a re-push has a new SHA and still reconciles).
 	AgentCheck(ctx context.Context, owner, repo, ref, checkName string) (githubapi.CheckResult, error)
+	// PullRequestHeadSHA returns the PR's current head SHA, so a review task superseded by a newer
+	// push (Cloud Tasks gives no ordering) is skipped at execution rather than posting a stale review.
+	PullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
 }
 
 // Deps wires the reviewer engine.
@@ -170,6 +174,13 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 	// owner/repo are only used by the publish paths; decide() already validated the full name
 	// before reaching a deny/review decision, so the discarded ok is safe there.
 	owner, repo, _ := splitFullName(ev.RepoFullName)
+	// Coalesce-to-latest: a deny/review acts on the event's SHA, so if a newer push has superseded
+	// it (debounce only narrows the window — Cloud Tasks has no ordering), skip rather than post a
+	// stale review. A skip decision produced nothing, so it needs no check.
+	if d.kind != decisionSkip && e.superseded(ctx, owner, repo, ev) {
+		e.log.Info("stale review skipped (superseded by a newer push)", "pr", pr, "event_sha", ev.HeadSHA)
+		return nil
+	}
 	meta := publishMeta{owner: owner, repo: repo, number: ev.Number, headSHA: ev.HeadSHA, files: d.files, tiers: "code-reasoning + base"}
 	switch d.kind {
 	case decisionSkip:
@@ -248,6 +259,22 @@ func (e *Engine) decide(ctx context.Context, ev githubapi.PullRequestEvent) (dec
 // skip builds a decisionSkip with a formatted reason.
 func skip(format string, args ...any) decision {
 	return decision{kind: decisionSkip, reason: fmt.Sprintf(format, args...)}
+}
+
+// superseded reports whether a newer push has replaced the SHA this task was enqueued for, so the
+// review is stale and should be skipped (coalesce-to-latest). It is best-effort: a missing event
+// SHA or a lookup error yields false (proceed) so a transient failure never suppresses a real
+// review.
+func (e *Engine) superseded(ctx context.Context, owner, repo string, ev githubapi.PullRequestEvent) bool {
+	if ev.HeadSHA == "" {
+		return false
+	}
+	current, err := e.gh.PullRequestHeadSHA(ctx, owner, repo, ev.Number)
+	if err != nil {
+		e.log.Warn("could not fetch current head SHA; proceeding with review", "pr", ev.RepoFullName, "err", err)
+		return false
+	}
+	return current != "" && current != ev.HeadSHA
 }
 
 // isDependencyBot reports whether the author is a known dependency-update bot (spec Decision
