@@ -7,6 +7,7 @@
  * Run with `tsx cmd/agent/main.ts` (or `make run`).
  */
 import type { BaseAgent } from '@google/adk';
+import express from 'express';
 
 import { newCoverageEngine } from '../../src/agent/covfixer/index';
 import { type Deps as FixDeps, type Engine } from '../../src/agent/fixflow/index';
@@ -23,6 +24,7 @@ import { Client } from '../../src/githubapi/client';
 import { sshCommand } from '../../src/gitrepo/repo';
 import { type Envelope } from '../../src/ingest/envelope';
 import { type Notifier, newNotifier } from '../../src/notify/notify';
+import * as obs from '../../src/obs/index';
 import { type DispatchFunc, InProcess, type Transport, newCloudTasks } from '../../src/tasks/index';
 import { Server } from '../../src/webhook/server';
 
@@ -54,9 +56,9 @@ function buildTokenProvider(cfg: Config): TokenProvider {
  * rate-limited by the queue) or the in-process task pool for local dev (the default). See
  * `specs/20260626-workflow-execution-transport.md`.
  */
-function buildTransport(cfg: Config, dispatch: DispatchFunc): Transport {
+function buildTransport(cfg: Config, dispatch: DispatchFunc, logger: obs.Logger): Transport {
   if (cfg.tasksBackend === TasksBackend.CloudTasks) {
-    log.info('execution transport: cloud tasks', {
+    logger.info('execution transport: cloud tasks', {
       project: cfg.tasksProject,
       location: cfg.tasksLocation,
       queue: cfg.tasksQueue,
@@ -71,8 +73,8 @@ function buildTransport(cfg: Config, dispatch: DispatchFunc): Transport {
       cfg.tasksDispatchDeadlineMs,
     );
   }
-  log.info('execution transport: in-process (local/default)');
-  return new InProcess(dispatch, log, MAX_CONCURRENT_DISPATCH);
+  logger.info('execution transport: in-process (local/default)');
+  return new InProcess(dispatch, logger, MAX_CONCURRENT_DISPATCH);
 }
 
 function buildNotifier(cfg: Config): Notifier | null {
@@ -149,6 +151,21 @@ async function run(): Promise<void> {
   }
   const cfg = load();
 
+  // Register the OTel tracer provider so the agent framework's native span tree is exported. A
+  // no-op by default (OTEL_TRACES_EXPORTER=none) — merging changes nothing in prod until an
+  // environment opts in. shutdownObs force-flushes buffered spans at exit (the scale-to-zero
+  // span-loss guard, mirrored per-request by the HTTP middleware).
+  const shutdownObs = await obs.init({
+    exporter: cfg.otelTracesExporter,
+    serviceName: cfg.otelServiceName,
+    otlpEndpoint: cfg.otelExporterOtlpEndpoint,
+    otlpHeaders: cfg.otelExporterOtlpHeaders,
+    sampler: cfg.otelTracesSampler,
+  });
+  // The request-path logger stamps trace_id/span_id onto records emitted under a span, so a log
+  // line links to its trace. The bare `log` stays for startup/shutdown (no active span there).
+  const rlog = obs.newLogHandler(log);
+
   // Honor GIT_SSH_KEY for the shell-out git: export GIT_SSH_COMMAND so every child git
   // (clone/push) pins its ssh transport to the explicit key while still inheriting the full
   // environment (PATH/HOME/known_hosts). Done here at the composition root rather than via
@@ -203,7 +220,7 @@ async function run(): Promise<void> {
     repos: cfg.repos,
     maxIter: cfg.maxIterations,
     ciTimeoutMs: cfg.ciTimeoutMs,
-    log,
+    log: rlog,
     prLabel: cfg.agentPrLabel,
     sessionService,
     parkStore,
@@ -217,7 +234,7 @@ async function run(): Promise<void> {
     lintKickoff: payloadHandler((raw) => lintEngine.kickoff(raw)),
     coverageKickoff: payloadHandler((raw) => covEngine.kickoff(raw)),
     ciResume: ciResumeHandler(engines),
-    log,
+    log: rlog,
   });
 
   // Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
@@ -226,7 +243,7 @@ async function run(): Promise<void> {
   // in-request (CPU stays allocated) with durable retry. (With the default `memory` session
   // backend, parked runs are not durable, so a restart strands them; a sqlite/firestore
   // backend survives restart.) See specs/20260626-workflow-execution-transport.md.
-  const transport = buildTransport(cfg, (e: Envelope) => dispatcher.dispatch(e));
+  const transport = buildTransport(cfg, (e: Envelope) => dispatcher.dispatch(e), rlog);
 
   // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
   // parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One
@@ -264,11 +281,19 @@ async function run(): Promise<void> {
       sweep,
       // /internal/dispatch executes a queued envelope in-request (the Cloud Tasks worker).
       dispatch: (e) => dispatcher.dispatch(e),
-      log,
+      log: rlog,
     },
   );
 
-  const httpServer = srv.app.listen(Number(cfg.port), '0.0.0.0', () => {
+  // Wrap the webhook app in a parent app whose first middleware adds a server span per request
+  // (the trace root on ingress, continued from the task's traceparent header on /internal/dispatch)
+  // and force-flushes spans before each response completes. A no-op when tracing is disabled, so
+  // the wrapped app is unchanged.
+  const rootApp = express();
+  rootApp.use(obs.httpMiddleware());
+  rootApp.use(srv.app);
+
+  const httpServer = rootApp.listen(Number(cfg.port), '0.0.0.0', () => {
     log.info('automation-agent listening', {
       port: cfg.port,
       llmProvider: cfg.llmProvider,
@@ -290,13 +315,31 @@ async function run(): Promise<void> {
     }
     shuttingDown = true;
     log.info('shutting down');
+    // Attempt each cleanup independently so one failure cannot strand the others (a transport
+    // close error must not skip the park-store close or the span flush).
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     // Close the transport after the server stops accepting: the in-process backend drains
     // in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done before
     // the park-store close so any draining dispatch still has its store.
-    await transport.close();
+    try {
+      await transport.close();
+    } catch (err) {
+      log.error(`transport close failed during shutdown: ${(err as Error).message}`);
+    }
     // Release a durable park store's backing connection (a no-op for the memory backend).
-    await parkStore.close();
+    try {
+      await parkStore.close();
+    } catch (err) {
+      log.error(`park store close failed during shutdown: ${(err as Error).message}`);
+    }
+    // Force-flush and release the tracer provider last, so spans from the draining dispatches and
+    // shutdown path are exported before exit — even if a close above failed, which is exactly when
+    // those spans are most useful (a no-op when tracing is disabled).
+    try {
+      await shutdownObs();
+    } catch (err) {
+      log.error(`tracer shutdown failed: ${(err as Error).message}`);
+    }
   };
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());

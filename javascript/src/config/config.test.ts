@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
-import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend, TasksBackend } from './config';
+import { appMode, loadFrom, NotifyProvider, Provider, SessionBackend, TasksBackend, TracesExporter } from './config';
 
 function mapLookup(m: Record<string, string>) {
   return (key: string): string | undefined => m[key];
@@ -290,6 +290,73 @@ describe('config: github app', () => {
     // Redaction is display-only: the real values stay readable on the object itself.
     expect(c.githubToken).toBe('ghp_supersecretpat');
     expect(c.githubAppPrivateKeyPem).toContain('PRIVATE KEY');
+  });
+
+  // --- Observability (OTEL_*) --------------------------------------------
+
+  it('defaults observability off', () => {
+    // Off by default: the no-op exporter, the service name, always-on sampling, message-content off.
+    const c = loadFrom(mapLookup({}));
+    expect(c.otelTracesExporter).toBe(TracesExporter.None);
+    expect(c.otelTracesExporterSet).toBe(false);
+    expect(c.otelServiceName).toBe('automation-agent');
+    expect(c.otelExporterOtlpEndpoint).toBe('');
+    expect(c.otelExporterOtlpHeaders).toBe('');
+    expect(c.otelTracesSampler).toBe('parentbased_always_on');
+    expect(c.otelCaptureMessageContent).toBe(false);
+  });
+
+  it('accepts console and gcp without an endpoint, recording the exporter as set', () => {
+    for (const exporter of [TracesExporter.Console, TracesExporter.Gcp]) {
+      const c = loadFrom(mapLookup({ OTEL_TRACES_EXPORTER: exporter }));
+      expect(c.otelTracesExporter).toBe(exporter);
+      // An explicitly provided exporter is recorded as set (the playground uses this to decide
+      // whether to override with its console default).
+      expect(c.otelTracesExporterSet).toBe(true);
+    }
+  });
+
+  it('rejects otlp without an endpoint', () => {
+    expect(() => loadFrom(mapLookup({ OTEL_TRACES_EXPORTER: 'otlp' }))).toThrow(/OTEL_EXPORTER_OTLP_ENDPOINT/);
+  });
+
+  it('loads a full otlp configuration', () => {
+    const c = loadFrom(
+      mapLookup({
+        OTEL_TRACES_EXPORTER: 'otlp',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otlp.example.com',
+        OTEL_EXPORTER_OTLP_HEADERS: 'api-key=secret',
+        OTEL_SERVICE_NAME: 'my-agent',
+      }),
+    );
+    expect(c.otelTracesExporter).toBe(TracesExporter.Otlp);
+    expect(c.otelExporterOtlpEndpoint).toBe('https://otlp.example.com');
+    expect(c.otelServiceName).toBe('my-agent');
+  });
+
+  it('rejects an unknown exporter', () => {
+    expect(() => loadFrom(mapLookup({ OTEL_TRACES_EXPORTER: 'jaeger' }))).toThrow(/invalid OTEL_TRACES_EXPORTER/);
+  });
+
+  it('parses the message-content capture flag', () => {
+    const c = loadFrom(mapLookup({ OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'true' }));
+    expect(c.otelCaptureMessageContent).toBe(true);
+  });
+
+  it('masks the OTLP headers when inspected/logged', () => {
+    // The OTLP headers can carry a vendor API key, so they must be masked like every other secret.
+    const c = loadFrom(
+      mapLookup({
+        OTEL_TRACES_EXPORTER: 'otlp',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otlp.example.com',
+        OTEL_EXPORTER_OTLP_HEADERS: 'api-key=secret',
+      }),
+    );
+    const rendered = inspect(c);
+    expect(rendered).not.toContain('api-key=secret');
+    expect(rendered).toContain('***');
+    // Redaction is display-only: the real value stays readable on the object itself.
+    expect(c.otelExporterOtlpHeaders).toBe('api-key=secret');
   });
 });
 

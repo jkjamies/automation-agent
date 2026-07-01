@@ -1,9 +1,12 @@
 // Tests for the Cloud Tasks execution transport (task-building, exercised against a fake
 // submitter so no live gRPC client is needed).
 import { protos } from '@google-cloud/tasks';
-import { describe, expect, it } from 'vitest';
+import { context, propagation, trace } from '@opentelemetry/api';
+import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { decode, encode, type Envelope, Kind, newEnvelope } from '../ingest/envelope';
+import { TracesExporter, install } from '../obs/obs';
 import { CloudTasks, MAX_TASK_BYTES, type Submitter } from './cloudtasks';
 
 type ICreateTaskRequest = protos.google.cloud.tasks.v2.ICreateTaskRequest;
@@ -116,5 +119,39 @@ describe('CloudTasks', () => {
     const f = new FakeSubmitter();
     await newCT(f, '').close();
     expect(f.closed).toBe(true);
+  });
+});
+
+describe('CloudTasks trace propagation', () => {
+  afterEach(() => {
+    trace.disable();
+    propagation.disable();
+    context.disable();
+  });
+
+  it('injects a W3C traceparent header when tracing is enabled', async () => {
+    const shutdown = install(new InMemorySpanExporter(), {
+      exporter: TracesExporter.Console,
+      serviceName: 'automation-agent',
+    });
+    try {
+      const f = new FakeSubmitter();
+      const ct = newCT(f, 'sekret');
+      // Enqueue under an active span (the ingress request), so the task continues that trace.
+      const span = trace.getTracer('t').startSpan('ingress');
+      await context.with(trace.setSpan(context.active(), span), () => ct.enqueue(env(Kind.CI, '{}')));
+      span.end();
+      expect(f.request!.task!.httpRequest!.headers!.traceparent).toBeTruthy();
+    } finally {
+      await shutdown();
+    }
+  });
+
+  it('adds no traceparent when tracing is disabled', async () => {
+    // With tracing off (no provider registered), inject is a no-op — no traceparent leaks onto the
+    // task.
+    const f = new FakeSubmitter();
+    await newCT(f, 'sekret').enqueue(env(Kind.CI, '{}'));
+    expect(f.request!.task!.httpRequest!.headers!.traceparent).toBeUndefined();
   });
 });
