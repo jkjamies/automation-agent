@@ -284,15 +284,22 @@ async def run() -> None:
         await server.serve()
     finally:
         log.info("shutting down")
-        # Close the transport after the server stops accepting: the in-process backend drains
-        # in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done
-        # before the park-store close so any draining dispatch still has its store.
-        await transport.close()
+        # Attempt each cleanup independently so one failure cannot strand the others. The
+        # transport closes first (the in-process backend drains in-flight dispatches; the Cloud
+        # Tasks backend closes its client) so a draining dispatch still has its park store.
+        try:
+            await transport.close()
+        except Exception:
+            log.exception("transport close failed during shutdown")
         # Release a durable park store's backing connection (no-op for the memory backend).
-        await park_store.close()
+        try:
+            await park_store.close()
+        except Exception:
+            log.exception("park store close failed during shutdown")
         # Force-flush and release the tracer provider last, so spans from the draining
-        # dispatches and shutdown path are exported before the process exits (no-op when
-        # tracing is disabled).
+        # dispatches and shutdown path are exported before the process exits — even if a close
+        # above failed, which is exactly when those spans are most useful (no-op when tracing
+        # is disabled).
         shutdown_tracing()
 
 

@@ -60,8 +60,8 @@ def test_only_config_reads_otel_env(archlib) -> None:
     struct, never ``os.environ.get("OTEL_...")``. A stray read elsewhere would fork
     configuration away from the single source of truth (and out of the masked-secret repr).
     Enforced by source scan: the literal ``"OTEL_`` outside ``config`` flags a direct env
-    reference. (The scan covers ``automation_agent/`` only; ``cmd/`` entrypoints may default an
-    exporter from the environment, mirroring config's own env reads.)"""
+    reference. (The scan covers ``automation_agent/``; the ``cmd/`` entrypoints likewise take
+    the exporter from loaded config, not the environment.)"""
     base = archlib.repo_root() / "automation_agent"
     config_dir = base / "config"
     errors = []

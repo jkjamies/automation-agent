@@ -179,6 +179,11 @@ class Config:
     # specs/20260630-otel-observability.md.
     # otel_traces_exporter selects the sink: none | console | otlp | gcp.
     otel_traces_exporter: str = OTEL_EXPORTER_NONE
+    # otel_traces_exporter_set records whether OTEL_TRACES_EXPORTER was explicitly provided in
+    # the environment (vs. defaulted to none). The playground uses this to default to the
+    # console exporter unless an operator opted into a specific sink — deriving that decision
+    # from loaded config rather than reading os.environ itself (config is the only env reader).
+    otel_traces_exporter_set: bool = False
     # otel_service_name is the resource service.name on every span (OTEL_SERVICE_NAME).
     otel_service_name: str = "automation-agent"
     # otel_exporter_otlp_endpoint / otel_exporter_otlp_headers configure the otlp exporter
@@ -432,6 +437,7 @@ def load_from(get: Lookup) -> Config:
             _get_or(get, "TASKS_DISPATCH_DEADLINE", "30m"), "TASKS_DISPATCH_DEADLINE"
         ),
         otel_traces_exporter=_get_or(get, "OTEL_TRACES_EXPORTER", OTEL_EXPORTER_NONE),
+        otel_traces_exporter_set=bool((get("OTEL_TRACES_EXPORTER") or "").strip()),
         otel_service_name=_get_or(get, "OTEL_SERVICE_NAME", "automation-agent"),
         otel_exporter_otlp_endpoint=_get_or(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
         otel_exporter_otlp_headers=_get_or(get, "OTEL_EXPORTER_OTLP_HEADERS", ""),

@@ -8,7 +8,6 @@ drive the real workflows interactively.
 from __future__ import annotations
 
 import atexit
-import os
 
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
@@ -22,12 +21,11 @@ load_dotenv()  # so you don't need to `source .env` first
 _cfg = load()
 
 # Default the playground to the console exporter so a developer sees the span tree on stdout
-# with no backend to stand up — but respect an explicit OTEL_TRACES_EXPORTER. Registered at
+# with no backend to stand up — but respect an explicit OTEL_TRACES_EXPORTER (config records
+# whether one was provided, so this module never reads the environment itself). Registered at
 # import because `adk web` loads this module and drives root_agent (there is no run() to defer
 # to); atexit force-flushes the buffered spans when the dev process ends.
-_exporter = _cfg.otel_traces_exporter
-if "OTEL_TRACES_EXPORTER" not in os.environ:
-    _exporter = OTEL_EXPORTER_CONSOLE
+_exporter = _cfg.otel_traces_exporter if _cfg.otel_traces_exporter_set else OTEL_EXPORTER_CONSOLE
 _shutdown_tracing = init_tracing(
     ObsConfig(
         exporter=_exporter,

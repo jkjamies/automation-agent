@@ -228,6 +228,7 @@ def test_otel_defaults() -> None:
     # message-content capture off.
     c = load_from(map_lookup({}))
     assert c.otel_traces_exporter == "none"
+    assert c.otel_traces_exporter_set is False
     assert c.otel_service_name == "automation-agent"
     assert c.otel_exporter_otlp_endpoint == ""
     assert c.otel_exporter_otlp_headers == ""
@@ -239,6 +240,9 @@ def test_otel_console_and_gcp_need_no_endpoint() -> None:
     for exporter in ("console", "gcp"):
         c = load_from(map_lookup({"OTEL_TRACES_EXPORTER": exporter}))
         assert c.otel_traces_exporter == exporter
+        # An explicitly provided exporter is recorded as set (the playground uses this to
+        # decide whether to override with its console default).
+        assert c.otel_traces_exporter_set is True
 
 
 def test_otel_otlp_requires_endpoint() -> None:

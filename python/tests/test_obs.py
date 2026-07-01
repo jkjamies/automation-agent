@@ -108,11 +108,14 @@ def test_init_otlp_with_endpoint_builds(reset_otel) -> None:
 
 def test_init_gcp_without_credentials(reset_otel) -> None:
     # The Cloud Trace exporter needs Application Default Credentials. In a unit environment
-    # there may be none, so init can surface a build error; if ADC happens to be present it
-    # builds. Accept both, exercising the branch.
+    # there may be none, so init can surface a missing-credentials error; if ADC happens to be
+    # present it builds. Accept only that specific failure — an import error or any other
+    # regression must still fail the test rather than be swallowed.
+    from google.auth.exceptions import DefaultCredentialsError
+
     try:
         shutdown = obs.init(Config(exporter=obs.EXPORTER_GCP, service_name="automation-agent"))
-    except Exception:  # noqa: BLE001 - a missing-ADC build error is an acceptable outcome
+    except DefaultCredentialsError:
         return
     shutdown()
 
