@@ -184,7 +184,45 @@ type Config struct {
 	// cancelled mid-run and retried, duplicating side effects. Cloud Tasks caps this at 30m,
 	// which is therefore the default and the ceiling. Used only in cloudtasks mode.
 	TasksDispatchDeadline time.Duration
+
+	// Observability (OpenTelemetry tracing). All off by default: with OTELTracesExporter
+	// "none" the obs package installs nothing, so tracing changes nothing until an
+	// environment opts in. The agent framework emits a native GenAI span tree; obs registers
+	// the provider/exporter and propagates context. See
+	// specs/20260630-otel-observability.md and .agents/standards/observability.md.
+	//
+	// OTELTracesExporter selects the sink: none (no-op) | console (stdout) | otlp (any
+	// OTLP-native backend or a Collector) | gcp (Cloud Trace via ADC). The app names no
+	// vendor — an OTLP backend is endpoint + headers, not code.
+	OTELTracesExporter string
+	// OTELServiceName is the resource service.name on every span (OTEL_SERVICE_NAME).
+	OTELServiceName string
+	// OTELExporterOTLPEndpoint / OTELExporterOTLPHeaders configure the otlp exporter
+	// (standard OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS). The endpoint is
+	// required when the exporter is otlp; the headers carry auth (e.g. a vendor API key,
+	// sourced from Secret Manager in production).
+	OTELExporterOTLPEndpoint string
+	OTELExporterOTLPHeaders  string
+	// OTELTracesSampler is a standard OTEL_TRACES_SAMPLER value; the default
+	// parentbased_always_on records every webhook-rooted trace and honors an upstream
+	// sampling decision (trace volume is low — the cost is spans-per-trace, not trace rate).
+	OTELTracesSampler string
+	// OTELCaptureMessageContent gates whether prompt/response bodies are captured as span
+	// attributes (OTEL_CAPTURE_MESSAGE_CONTENT). Off by default — bodies are reviewed source
+	// code. Model/token/tool/latency attributes are captured free and always on, so "off"
+	// still yields rich, cost-aware traces. The body-capture wiring itself is a follow-up
+	// (spec out-of-scope); the flag is surfaced now for parity and that future use.
+	OTELCaptureMessageContent bool
 }
+
+// Trace exporter values for OTELTracesExporter. The app speaks exactly these four sinks
+// and never names a vendor; obs.Exporter* mirror them on the consuming side.
+const (
+	OTELExporterNone    = "none"
+	OTELExporterConsole = "console"
+	OTELExporterOTLP    = "otlp"
+	OTELExporterGCP     = "gcp"
+)
 
 // GitHubApp holds the GitHub App installation-token credentials, resolved at load
 // time. It is populated only in App mode (production); in PAT mode it is the zero
@@ -214,6 +252,8 @@ func (c Config) String() string {
 	p.InternalToken = redactSecret(c.InternalToken)
 	p.SlackWebhookURL = redactSecret(c.SlackWebhookURL)
 	p.TeamsWebhookURL = redactSecret(c.TeamsWebhookURL)
+	// OTLP headers commonly carry a vendor API key (OTEL_EXPORTER_OTLP_HEADERS).
+	p.OTELExporterOTLPHeaders = redactSecret(c.OTELExporterOTLPHeaders)
 	// The nested GitHubApp prints through its own String, which masks the key.
 	return fmt.Sprintf("%+v", p)
 }
@@ -304,6 +344,12 @@ func loadFrom(get lookup) (Config, error) {
 		TasksLocation:        getOr(get, "TASKS_LOCATION", ""),
 		TasksQueue:           getOr(get, "TASKS_QUEUE", ""),
 		DispatchURL:          getOr(get, "DISPATCH_URL", ""),
+
+		OTELTracesExporter:       getOr(get, "OTEL_TRACES_EXPORTER", OTELExporterNone),
+		OTELServiceName:          getOr(get, "OTEL_SERVICE_NAME", "automation-agent"),
+		OTELExporterOTLPEndpoint: getOr(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELExporterOTLPHeaders:  getOr(get, "OTEL_EXPORTER_OTLP_HEADERS", ""),
+		OTELTracesSampler:        getOr(get, "OTEL_TRACES_SAMPLER", "parentbased_always_on"),
 	}
 
 	var err error
@@ -348,6 +394,9 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.TasksDispatchDeadline, err = time.ParseDuration(getOr(get, "TASKS_DISPATCH_DEADLINE", "30m")); err != nil {
 		return Config{}, fmt.Errorf("TASKS_DISPATCH_DEADLINE: %w", err)
+	}
+	if c.OTELCaptureMessageContent, err = getBool(get, "OTEL_CAPTURE_MESSAGE_CONTENT", false); err != nil {
+		return Config{}, err
 	}
 
 	// Code models default to the base models when unset.
@@ -445,6 +494,18 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("invalid TASKS_BACKEND %q (want inprocess|cloudtasks)", c.TasksBackend)
+	}
+	// Tracing exporter selection: reject an unknown value, and require an endpoint for otlp
+	// (an otlp exporter with no target would silently export nowhere). The other exporters
+	// need no extra config — console writes to stdout, gcp authenticates via ADC.
+	switch c.OTELTracesExporter {
+	case OTELExporterNone, OTELExporterConsole, OTELExporterGCP:
+	case OTELExporterOTLP:
+		if strings.TrimSpace(c.OTELExporterOTLPEndpoint) == "" {
+			return errors.New("OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT")
+		}
+	default:
+		return fmt.Errorf("invalid OTEL_TRACES_EXPORTER %q (want none|console|otlp|gcp)", c.OTELTracesExporter)
 	}
 	if c.MaxIterations < 1 {
 		return fmt.Errorf("MAX_ITERATIONS must be >= 1, got %d", c.MaxIterations)

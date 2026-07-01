@@ -36,6 +36,7 @@ import (
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/config"
+	"automation-agent/internal/obs"
 )
 
 func main() {
@@ -46,6 +47,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+
+	// Default the playground to the console exporter so a developer sees the span tree on
+	// stdout with no backend to stand up — but respect an explicit OTEL_TRACES_EXPORTER.
+	exporter := cfg.OTELTracesExporter
+	if _, set := os.LookupEnv("OTEL_TRACES_EXPORTER"); !set {
+		exporter = config.OTELExporterConsole
+	}
+	shutdownTracing, err := obs.Init(ctx, obs.Config{
+		Exporter:     exporter,
+		ServiceName:  cfg.OTELServiceName,
+		OTLPEndpoint: cfg.OTELExporterOTLPEndpoint,
+		OTLPHeaders:  cfg.OTELExporterOTLPHeaders,
+		Sampler:      cfg.OTELTracesSampler,
+	})
+	if err != nil {
+		log.Fatalf("init observability: %v", err)
+	}
+	defer func() { _ = shutdownTracing(ctx) }()
+
 	llm, err := setup.BuildLLM(ctx, cfg)
 	if err != nil {
 		log.Fatalf("build llm: %v", err)

@@ -139,6 +139,7 @@ vars that matter specifically for a **cloud** deploy:
 | `GITHUB_TOKEN`, notifier URLs | notifier URLs **set** — from Secret Manager. `GITHUB_TOKEN` is the local-dev fallback only; in App mode it is unused |
 | `REPOS` | the kickoff allowlist — **required** in App mode (empty is rejected) |
 | `FIRESTORE_PROJECT` / `FIRESTORE_COLLECTION` | blank = detect from ADC / default `automation_agent` |
+| `OTEL_TRACES_EXPORTER` | tracing sink — `none` (default, off) or, to enable: `gcp` (Cloud Trace via ADC; grant `roles/cloudtrace.agent`) / `otlp` (a vendor or a Collector — see [Observability](#observability-tracing--optional-collector-fan-out)) |
 
 ### GitHub App setup (production auth)
 
@@ -249,6 +250,33 @@ double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
 
 GitHub Actions builds/pushes the image and deploys to Cloud Run. (IaC is
 [planned hardening](#planned-hardening); the setup steps above are manual today.)
+
+### Observability (tracing) — optional Collector fan-out
+
+Tracing is off by default (`OTEL_TRACES_EXPORTER=none`); enable it per environment. Two
+deployment shapes:
+
+- **Direct export.** Point the app straight at a sink: `gcp` (Cloud Trace via the service
+  account's ADC — needs `roles/cloudtrace.agent`) or `otlp` at a vendor
+  (`OTEL_EXPORTER_OTLP_ENDPOINT` + an API key in `OTEL_EXPORTER_OTLP_HEADERS`, from Secret
+  Manager). Simplest; the backend is baked into the app's env.
+
+- **Collector fan-out (recommended for multi-vendor flexibility).** The app always exports
+  `otlp` to a **local OpenTelemetry Collector** (sidecar or a small always-on service); the
+  Collector fans out to Cloud Trace / Datadog / New Relic / etc. Then switching or adding a
+  backend is a **Collector config change with no app redeploy**, and the app never holds a
+  vendor API key.
+
+  ```
+  Cloud Run (app, OTEL_TRACES_EXPORTER=otlp) ─OTLP─► OpenTelemetry Collector ─┬─► Cloud Trace
+                                                                              ├─► Datadog / New Relic
+                                                                              └─► …
+  ```
+
+  This is an **ops topology**, out of app scope — the app's only job is to emit clean OTLP. The
+  span-export flush constraint (see [`observability.md`](observability.md)) is independent of
+  which shape you pick: the app force-flushes in-request either way, so scale-to-zero never
+  drops the trailing batch.
 
 ### Planned hardening
 

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"automation-agent/internal/ingest"
+	"automation-agent/internal/obs"
 )
 
 // MaxTaskBytes is the Cloud Tasks size limit for an HTTP-target task (1 MiB; verify
@@ -83,6 +84,12 @@ func (c *CloudTasks) Enqueue(ctx context.Context, e ingest.Envelope, opts ...Opt
 	headers := map[string]string{"Content-Type": "application/json"}
 	if c.token != "" {
 		headers["Authorization"] = "Bearer " + c.token
+	}
+	// Carry the trace context across the queue hop as a W3C traceparent header (not inside
+	// the envelope JSON), so the dispatch that runs this task continues the ingress trace.
+	// A no-op when tracing is disabled or ctx has no span — Inject then returns nothing.
+	for k, v := range obs.Inject(ctx) {
+		headers[k] = v
 	}
 	task := &taskspb.Task{
 		MessageType: &taskspb.Task_HttpRequest{HttpRequest: &taskspb.HttpRequest{

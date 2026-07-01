@@ -79,12 +79,16 @@ func (p *InProcess) Enqueue(ctx context.Context, e ingest.Envelope, _ ...Option)
 	}
 	p.wg.Add(1)
 	p.mu.Unlock()
+	// Carry the trace context (and any other request values) onto the dispatch, but strip
+	// cancellation: the originating webhook request has already returned, so the dispatch
+	// must not be cancelled when that request's context is. This is the inprocess half of
+	// the backend-aware propagation contract — the span rides the Go context directly, with
+	// no HTTP carrier (the cloudtasks backend injects a traceparent header instead).
+	dispatchCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer p.wg.Done()
 		defer func() { <-p.sem }()
-		// A fresh context: the originating webhook request has already returned, so the
-		// dispatch must not be cancelled when that request's context is cancelled.
-		if err := p.dispatch(context.Background(), e); err != nil {
+		if err := p.dispatch(dispatchCtx, e); err != nil {
 			p.log.Error("dispatch failed", "kind", e.Kind, "source", e.Source, "err", err)
 		}
 	}()

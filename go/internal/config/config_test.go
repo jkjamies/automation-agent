@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,72 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.TasksBackend != TasksInProcess {
 		t.Errorf("TasksBackend = %q, want inprocess", c.TasksBackend)
+	}
+	// Observability defaults: off by default, fixed service name, always-on sampler. These
+	// defaults must match across all four ports (parity rule #3).
+	if c.OTELTracesExporter != OTELExporterNone {
+		t.Errorf("OTELTracesExporter = %q, want none", c.OTELTracesExporter)
+	}
+	if c.OTELServiceName != "automation-agent" {
+		t.Errorf("OTELServiceName = %q, want automation-agent", c.OTELServiceName)
+	}
+	if c.OTELTracesSampler != "parentbased_always_on" {
+		t.Errorf("OTELTracesSampler = %q, want parentbased_always_on", c.OTELTracesSampler)
+	}
+	if c.OTELCaptureMessageContent {
+		t.Error("OTELCaptureMessageContent = true, want false by default")
+	}
+}
+
+func TestOTELTracesExporterValues(t *testing.T) {
+	// none/console/gcp need no extra config; otlp requires an endpoint.
+	for _, exp := range []string{"none", "console", "gcp"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"OTEL_TRACES_EXPORTER": exp})); err != nil {
+			t.Errorf("OTEL_TRACES_EXPORTER=%s should be valid, got %v", exp, err)
+		}
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{
+		"OTEL_TRACES_EXPORTER":        "otlp",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
+	})); err != nil {
+		t.Errorf("OTEL_TRACES_EXPORTER=otlp with an endpoint should be valid, got %v", err)
+	}
+}
+
+func TestOTELTracesExporterInvalid(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"OTEL_TRACES_EXPORTER": "jaeger"})); err == nil {
+		t.Fatal("expected error for an unknown OTEL_TRACES_EXPORTER")
+	}
+}
+
+func TestOTELOTLPRequiresEndpoint(t *testing.T) {
+	if _, err := loadFrom(mapLookup(map[string]string{"OTEL_TRACES_EXPORTER": "otlp"})); err == nil {
+		t.Fatal("expected error for OTEL_TRACES_EXPORTER=otlp without an endpoint")
+	}
+}
+
+func TestOTELOverrides(t *testing.T) {
+	c, err := loadFrom(mapLookup(map[string]string{
+		"OTEL_SERVICE_NAME":            "custom-name",
+		"OTEL_TRACES_SAMPLER":          "always_on",
+		"OTEL_CAPTURE_MESSAGE_CONTENT": "true",
+		"OTEL_EXPORTER_OTLP_HEADERS":   "api-key=secret",
+	}))
+	if err != nil {
+		t.Fatalf("loadFrom: %v", err)
+	}
+	if c.OTELServiceName != "custom-name" {
+		t.Errorf("OTELServiceName = %q, want custom-name", c.OTELServiceName)
+	}
+	if c.OTELTracesSampler != "always_on" {
+		t.Errorf("OTELTracesSampler = %q, want always_on", c.OTELTracesSampler)
+	}
+	if !c.OTELCaptureMessageContent {
+		t.Error("OTELCaptureMessageContent = false, want true")
+	}
+	// The OTLP headers can carry a secret and must be masked in the String() view.
+	if got := c.String(); strings.Contains(got, "secret") {
+		t.Errorf("Config.String leaked OTLP headers: %s", got)
 	}
 }
 

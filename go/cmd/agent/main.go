@@ -31,12 +31,16 @@ import (
 	"automation-agent/internal/githubapi"
 	"automation-agent/internal/ingest"
 	"automation-agent/internal/notify"
+	"automation-agent/internal/obs"
 	"automation-agent/internal/tasks"
 	"automation-agent/internal/webhook"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	// Wrap the base handler so log records emitted under an active span carry
+	// trace_id/span_id (log<->trace correlation). A no-op when tracing is disabled or a
+	// log call has no span on its context.
+	logger := slog.New(obs.NewLogHandler(slog.NewTextHandler(os.Stdout, nil)))
 	if err := run(logger); err != nil {
 		logger.Error("fatal", "err", err)
 		os.Exit(1)
@@ -56,6 +60,29 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Register the OTel tracer provider so the agent framework's native span tree is
+	// exported. No-op by default (OTEL_TRACES_EXPORTER=none) — merging changes nothing in
+	// prod until an environment opts in. Shutdown force-flushes buffered spans at exit (the
+	// scale-to-zero span-loss guard, mirrored per-request by the HTTP middleware).
+	shutdownTracing, err := obs.Init(sigCtx, obs.Config{
+		Exporter:     cfg.OTELTracesExporter,
+		ServiceName:  cfg.OTELServiceName,
+		OTLPEndpoint: cfg.OTELExporterOTLPEndpoint,
+		OTLPHeaders:  cfg.OTELExporterOTLPHeaders,
+		Sampler:      cfg.OTELTracesSampler,
+	})
+	if err != nil {
+		return fmt.Errorf("init observability: %w", err)
+	}
+	defer func() {
+		// Fresh, bounded context: sigCtx is already cancelled by the time this runs.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			logger.Error("tracing shutdown", "err", err)
+		}
+	}()
 
 	llm, err := setup.BuildLLM(sigCtx, cfg)
 	if err != nil {
@@ -206,8 +233,11 @@ func run(logger *slog.Logger) error {
 		}))
 
 	httpServer := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           srv.Handler(),
+		Addr: ":" + cfg.Port,
+		// obs.HTTPMiddleware adds a server span per request (the trace root on ingress,
+		// continued from the task's traceparent header on /internal/dispatch) and
+		// force-flushes spans before each response returns. No-op when tracing is disabled.
+		Handler:           obs.HTTPMiddleware(srv.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

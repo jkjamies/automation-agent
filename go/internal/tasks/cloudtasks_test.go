@@ -9,6 +9,9 @@ import (
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	gax "github.com/googleapis/gax-go/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -175,6 +178,46 @@ func TestCloudTasksTreatsAlreadyExistsAsCoalesce(t *testing.T) {
 	err := ct.Enqueue(context.Background(), ingest.New(ingest.KindReview, "s", nil, time.Unix(0, 0)), WithName("review-x-7-1700000000"))
 	if err != nil {
 		t.Fatalf("Enqueue with duplicate name = %v, want nil (coalesce)", err)
+	}
+}
+
+// When a trace is active and the W3C propagator is registered, Enqueue injects the trace
+// context as a traceparent header so the dispatch that runs the task continues the ingress
+// trace (propagation is via the task HTTP headers, not inside the envelope JSON).
+func TestCloudTasksInjectsTraceparent(t *testing.T) {
+	prev := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(prev) })
+
+	tid, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	sid, _ := trace.SpanIDFromHex("0123456789abcdef")
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid, TraceFlags: trace.FlagsSampled, Remote: true})
+	ctx := trace.ContextWithSpanContext(context.Background(), sc)
+
+	f := &fakeSubmitter{}
+	ct := newTestCloudTasks(f, "")
+	if err := ct.Enqueue(ctx, ingest.New(ingest.KindReview, "s", nil, time.Unix(0, 0))); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	tp := httpReq(t, f.req.Task).Headers["traceparent"]
+	if tp == "" {
+		t.Fatal("no traceparent header injected while a trace was active")
+	}
+	if !strings.Contains(tp, tid.String()) {
+		t.Errorf("traceparent %q does not carry the active trace id %s", tp, tid)
+	}
+}
+
+// With tracing disabled (the default no-op propagator) no traceparent header is attached —
+// the feature leaks nothing onto tasks when off.
+func TestCloudTasksNoTraceparentWhenDisabled(t *testing.T) {
+	f := &fakeSubmitter{}
+	ct := newTestCloudTasks(f, "")
+	if err := ct.Enqueue(context.Background(), ingest.New(ingest.KindCI, "s", nil, time.Unix(0, 0))); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, ok := httpReq(t, f.req.Task).Headers["traceparent"]; ok {
+		t.Error("traceparent header set with tracing disabled")
 	}
 }
 
