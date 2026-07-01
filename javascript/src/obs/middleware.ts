@@ -63,6 +63,7 @@ export function httpMiddleware(): RequestHandler {
     // End the span and force-flush once the response is done, whichever event fires first. The
     // flush runs after the response is written but while the request is still being handled, so
     // buffered spans ship before the instance can be reclaimed (the scale-to-zero guard).
+    let hadException = false;
     let finished = false;
     const finalize = (): void => {
       if (finished) {
@@ -72,8 +73,9 @@ export function httpMiddleware(): RequestHandler {
       span.setAttribute('http.response.status_code', res.statusCode);
       // A 5xx is the server-error signal in this app: the handlers catch their own failures and map
       // them to a 500 rather than throwing, so the status code — not a thrown exception — is what
-      // marks a request as failed on the trace.
-      if (res.statusCode >= 500) {
+      // marks a request as failed on the trace. Skip it when the throw path already set a
+      // message-bearing ERROR status, so the exception message is not overwritten with a bare one.
+      if (res.statusCode >= 500 && !hadException) {
         span.setStatus({ code: SpanStatusCode.ERROR });
       }
       span.end();
@@ -89,6 +91,7 @@ export function httpMiddleware(): RequestHandler {
       try {
         next();
       } catch (err) {
+        hadException = true;
         // A synchronous throw from the handler chain: record it on the span, then re-raise so the
         // framework's own error handling is unchanged. Do not finalize here — the eventual
         // finish/close event completes the span with the real response status the framework sets.

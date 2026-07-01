@@ -145,6 +145,9 @@ describe('obs httpMiddleware', () => {
 
       const span = findSpan(exporter, 'POST /webhooks/lint');
       expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      // The exception message survives to the top-level status — the 5xx branch must not overwrite
+      // it with a bare ERROR.
+      expect(span.status.message).toBe('boom');
       expect(span.events.some((e) => e.name === 'exception')).toBe(true);
     } finally {
       await shutdown();
