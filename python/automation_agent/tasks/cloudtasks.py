@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from google.cloud import tasks_v2
 
 from automation_agent.ingest import Envelope, encode
+from automation_agent.obs import inject as inject_trace
 
 # MAX_TASK_BYTES is the Cloud Tasks size limit for an HTTP-target task (1 MiB; verify against
 # current quota docs). enqueue refuses an envelope whose encoded body exceeds it rather than
@@ -77,6 +78,11 @@ class CloudTasks:
         headers = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = "Bearer " + self._token
+        # Inject the active trace context as a W3C traceparent header so the /internal/dispatch
+        # request that runs this task continues the ingress trace (the dispatch span becomes a
+        # child of the ingress span). A no-op when tracing is disabled or no span is active —
+        # no header is added, so the task wire format is unchanged.
+        headers.update(inject_trace())
         task = tasks_v2.Task(
             http_request=tasks_v2.HttpRequest(
                 http_method=tasks_v2.HttpMethod.POST,

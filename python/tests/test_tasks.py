@@ -274,6 +274,39 @@ async def test_cloudtasks_surfaces_submit_error() -> None:
         await ct.enqueue(_env(Kind.CI, b""))
 
 
+async def test_cloudtasks_injects_traceparent(otel_recording: Any) -> None:
+    # With tracing on and a span active, enqueue injects the trace context as a W3C
+    # traceparent header so the /internal/dispatch request continues the ingress trace.
+    from opentelemetry import context as context_api
+    from opentelemetry import trace
+
+    f = FakeSubmitter()
+    ct = _new_cloudtasks(f, "sekret")
+    span = trace.get_tracer("obs-test").start_span("ingress")
+    token = context_api.attach(trace.set_span_in_context(span))
+    try:
+        await ct.enqueue(_env(Kind.CI, b"{}"))
+    finally:
+        context_api.detach(token)
+        span.end()
+
+    headers = _http_request(f.request.task).headers
+    assert "traceparent" in headers
+    # The injected traceparent carries the active span's trace id (32 lowercase hex chars).
+    trace_id = trace.format_trace_id(span.get_span_context().trace_id)
+    assert trace_id in headers["traceparent"]
+    # Injection is additive: the existing auth/content headers are untouched.
+    assert headers["Authorization"] == "Bearer sekret"
+
+
+async def test_cloudtasks_no_traceparent_when_disabled() -> None:
+    # With tracing disabled (no provider/span), no traceparent header leaks onto the task.
+    f = FakeSubmitter()
+    ct = _new_cloudtasks(f, "")
+    await ct.enqueue(_env(Kind.CI, b"{}"))
+    assert "traceparent" not in _http_request(f.request.task).headers
+
+
 async def test_cloudtasks_close() -> None:
     # Close releases the underlying client, and is a no-op when none is set.
     closed = asyncio.Event()
