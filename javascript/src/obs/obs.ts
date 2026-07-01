@@ -11,7 +11,7 @@
  *
  * Deterministic tooling — it imports no agent modules, and only `config` reads the `OTEL_*`
  * environment (this package takes a typed {@link Config}). See
- * `.agents/standards/observability.md` and `specs/20260630-otel-observability.md`.
+ * `.agents/standards/observability.md`.
  */
 
 import { context, propagation, trace } from '@opentelemetry/api';

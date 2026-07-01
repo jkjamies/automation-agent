@@ -121,6 +121,13 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `PORT` | `8080` | HTTP port |
 | `MAX_ITERATIONS` | `3` | fix attempts before "needs review" |
 | `CI_TIMEOUT` | `90m` | how long a parked run waits before the sweep/timer frees it |
+| **Observability (tracing)** | | |
+| `OTEL_TRACES_EXPORTER` | `none` | `none` (off) \| `console` (stdout) \| `otlp` \| `gcp` (Cloud Trace via ADC). The playground defaults to `console` when this is unset. |
+| `OTEL_SERVICE_NAME` | `automation-agent` | resource `service.name` on every span |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP/HTTP endpoint; **required** for `otlp` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | OTLP headers as `k=v,...` (often a vendor API key — secret, masked in the config log view) |
+| `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | standard sampler value |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | opt-in capture of prompt/response bodies (sensitive); the standard GenAI-semconv var the framework reads natively |
 
 ### What each feature needs to actually do something
 

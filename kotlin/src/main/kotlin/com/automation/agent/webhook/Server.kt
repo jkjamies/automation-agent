@@ -212,6 +212,9 @@ fun webhookServer(
     sweep: SweepFunc? = null,
     dispatch: DispatchFunc? = null,
     log: System.Logger = DEFAULT_LOG,
+    // An entrypoint hook applied to the [Application] before the routes are installed, e.g. to add
+    // the tracing interceptor. Kept as an injected block so this package stays free of that concern.
+    configure: Application.() -> Unit = {},
 ): EmbeddedServer<*, *> {
     val bindPort = port
     return embeddedServer(
@@ -220,6 +223,9 @@ fun webhookServer(
             connectors.add(EngineConnectorBuilder().apply { this.port = bindPort })
             connectionIdleTimeoutSeconds = CONNECTION_IDLE_TIMEOUT_SECONDS
         },
-        module = { webhookRoutes(ingest, secret, now, internalToken, sweep, dispatch, log) },
+        module = {
+            configure()
+            webhookRoutes(ingest, secret, now, internalToken, sweep, dispatch, log)
+        },
     )
 }

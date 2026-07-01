@@ -14,7 +14,7 @@ Ingest (cron / webhook / future hooks) → `ingest.Envelope` → **root agent** 
 
 ## Import boundaries (enforced by `ARCH/`)
 
-1. **Tooling must not import agents.** `internal/{githubapi,gitrepo,webhook,notify}`
+1. **Tooling must not import agents.** `internal/{githubapi,gitrepo,webhook,notify,tasks,obs}`
    may not import `internal/agent/...`. Tooling is
    deterministic and reusable; agents depend on tooling, never the reverse.
 2. **Provider SDKs are confined to `internal/agent/setup`.** Only `setup` may

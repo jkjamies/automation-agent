@@ -2,6 +2,7 @@ package com.automation.agent.tasks
 
 import com.automation.agent.ingest.Envelope
 import com.automation.agent.ingest.encode
+import com.automation.agent.obs.inject as injectTrace
 import com.google.cloud.tasks.v2.CloudTasksClient
 import com.google.cloud.tasks.v2.CreateTaskRequest
 import com.google.cloud.tasks.v2.HttpMethod
@@ -78,6 +79,12 @@ class CloudTasks(
             .setBody(ByteString.copyFrom(body))
         if (token.isNotEmpty()) {
             http.putHeaders("Authorization", "Bearer $token")
+        }
+        // Attach the active trace context as a W3C traceparent header so /internal/dispatch continues
+        // the ingress trace. The header goes on the task, never in the envelope body (a versioned wire
+        // contract); a no-op that adds nothing when tracing is disabled.
+        for ((key, value) in injectTrace()) {
+            http.putHeaders(key, value)
         }
 
         val task = Task.newBuilder().setHttpRequest(http.build())

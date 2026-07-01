@@ -39,7 +39,7 @@ make playground           # local ADK web UI at http://localhost:8080 (dev only)
 | `cmd/agent` | service entrypoint |
 | `cmd/playground` | local ADK web UI (dev only; never deployed) |
 | `src/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `src/{githubapi,gitrepo,webhook,notify,tasks}` | deterministic tooling (`tasks` = execution transport: in-process \| Cloud Tasks) |
+| `src/{githubapi,gitrepo,webhook,notify,tasks,obs}` | deterministic tooling (`tasks` = execution transport: in-process \| Cloud Tasks; `obs` = distributed tracing, off by default) |
 | `src/{config,ingest}` | configuration + normalized event envelope |
 | `arch/` | architecture-conformance tests |
 

@@ -117,7 +117,7 @@ Inside `go/` (mirrored by each port):
 | `go/cmd/agent` | service entrypoint |
 | `go/cmd/playground` | local ADK web UI (dev only; never deployed) |
 | `go/internal/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
-| `go/internal/{githubapi,gitrepo,webhook,notify}` | deterministic tooling |
+| `go/internal/{githubapi,gitrepo,webhook,notify,tasks,obs}` | deterministic tooling (`tasks` = execution transport; `obs` = distributed tracing, off by default) |
 | `go/internal/{config,ingest}` | configuration + normalized event envelope |
 | `go/ARCH/` | architecture-conformance tests |
 

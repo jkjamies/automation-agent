@@ -189,7 +189,7 @@ type Config struct {
 	// "none" the obs package installs nothing, so tracing changes nothing until an
 	// environment opts in. The agent framework emits a native GenAI span tree; obs registers
 	// the provider/exporter and propagates context. See
-	// specs/20260630-otel-observability.md and .agents/standards/observability.md.
+	// .agents/standards/observability.md.
 	//
 	// OTELTracesExporter selects the sink: none (no-op) | console (stdout) | otlp (any
 	// OTLP-native backend or a Collector) | gcp (Cloud Trace via ADC). The app names no

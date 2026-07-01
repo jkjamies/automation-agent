@@ -3,8 +3,7 @@
 How the automation-agent is traced, stated language-neutrally. The **Go** port (`go/internal/obs`)
 is the reference implementation; the Python, TypeScript, and Kotlin ports mirror this contract
 with their native SDKs (parity is at the **data** level — same span names/attributes — not the
-registration code). Rationale and the full decision log live in
-`specs/20260630-otel-observability.md`.
+registration code). This document is the design record: the rationale and decisions live here.
 
 > **Scope: traces only.** Metrics and a log-bridge signal are deferred. This document covers the
 > trace pipeline: provider registration, exporters, propagation, the flush constraint, config, and
@@ -116,10 +115,12 @@ cost-aware traces. (Body-capture wiring itself is a follow-up; the flag is surfa
 
 ## Log ↔ trace correlation
 
-The existing injected structured logger is wrapped so records emitted while a span is active also
-carry `trace_id` / `span_id`, letting a backend pivot from a log line to its trace (and on the
-`gcp` path, the cloud console auto-links them). It reads the active span from the log call's
-context, so it is zero-cost when no span is active or tracing is off.
+The existing injected logger is wrapped so records emitted while a span is active also carry
+`trace_id` / `span_id`, letting a backend pivot from a log line to its trace (and on the `gcp` path,
+the cloud console auto-links them). It reads the active span from the log call's context, so it is
+zero-cost when no span is active or tracing is off. Where a port's logger is structured, the ids are
+attached as fields; where it is a plain sink, they are appended to the record — same data, whichever
+shape the port's logger takes.
 
 ## Testing contract (deterministic — no live network, no LLM)
 

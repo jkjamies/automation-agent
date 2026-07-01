@@ -16,6 +16,15 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
+/*
+ * Trace-exporter values for [Config.otelTracesExporter]. The app speaks exactly these four sinks and
+ * never names a vendor; obs mirrors them. See obs and .agents/standards/observability.md.
+ */
+const val OTEL_EXPORTER_NONE = "none"
+const val OTEL_EXPORTER_CONSOLE = "console"
+const val OTEL_EXPORTER_OTLP = "otlp"
+const val OTEL_EXPORTER_GCP = "gcp"
+
 /** Provider selects which LLM backend agents use. */
 enum class Provider(val value: String) {
     OLLAMA("ollama"),
@@ -161,6 +170,31 @@ data class Config(
     // default is only 10m, far short of a multi-minute workflow. Cloud Tasks caps it at 30m, which
     // is therefore the default and the ceiling. Used only in cloudtasks mode.
     val tasksDispatchDeadline: Duration,
+    // Observability (distributed tracing). Everything is additive and off by default: with
+    // otelTracesExporter=none nothing is registered and the service is unchanged. The agent
+    // framework emits the spans natively; obs only wires the provider. These are read here (the
+    // single place that reads OTEL_*) and handed to obs as a typed struct. See obs and
+    // .agents/standards/observability.md.
+    // otelTracesExporter selects the sink: none | console | otlp | gcp.
+    val otelTracesExporter: String,
+    // otelTracesExporterSet records whether OTEL_TRACES_EXPORTER was explicitly provided, so the
+    // playground can default to console for local dev without overriding an explicit choice.
+    val otelTracesExporterSet: Boolean,
+    // otelServiceName is the resource service.name on every span (OTEL_SERVICE_NAME).
+    val otelServiceName: String,
+    // otelExporterOtlpEndpoint / otelExporterOtlpHeaders configure the otlp exporter (standard
+    // OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS). The endpoint is required for otlp;
+    // the headers commonly carry a vendor API key and are masked in the config log view.
+    val otelExporterOtlpEndpoint: String,
+    val otelExporterOtlpHeaders: String,
+    // otelTracesSampler is a standard OTEL_TRACES_SAMPLER value; the default parentbased_always_on
+    // records every locally-started trace and honors an upstream decision.
+    val otelTracesSampler: String,
+    // otelCaptureMessageContent gates whether prompt/response bodies are captured as span content
+    // (sensitive; off by default). The agent framework reads the standard
+    // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT natively — surfacing it here keeps it under
+    // config's single-reader ownership and documents the switch.
+    val otelCaptureMessageContent: Boolean,
 ) {
     /**
      * Checks invariants that the type system alone cannot guarantee. Provider and notify
@@ -181,6 +215,24 @@ data class Config(
             "REPOS must be set in GitHub App mode (empty REPOS = all repos is rejected to avoid acting on every installed repo)"
         }
         validateTasks()
+        validateOtel()
+    }
+
+    /**
+     * Checks the OTEL_* settings: the exporter must be one of the four known sinks, and the otlp
+     * exporter needs an endpoint (it would otherwise silently export nowhere). The other sinks need
+     * nothing extra.
+     */
+    private fun validateOtel() {
+        when (otelTracesExporter) {
+            OTEL_EXPORTER_NONE, OTEL_EXPORTER_CONSOLE, OTEL_EXPORTER_GCP -> Unit
+            OTEL_EXPORTER_OTLP -> require(otelExporterOtlpEndpoint.isNotBlank()) {
+                "OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT"
+            }
+            else -> throw IllegalArgumentException(
+                "invalid OTEL_TRACES_EXPORTER \"$otelTracesExporter\" (want none|console|otlp|gcp)",
+            )
+        }
     }
 
     /**
@@ -245,7 +297,11 @@ data class Config(
             "sessionBackend=$sessionBackend, sqliteDsn=$sqliteDsn, firestoreProject=$firestoreProject, " +
             "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)}, " +
             "tasksBackend=$tasksBackend, tasksProject=$tasksProject, tasksLocation=$tasksLocation, " +
-            "tasksQueue=$tasksQueue, dispatchUrl=$dispatchUrl, tasksDispatchDeadline=$tasksDispatchDeadline)"
+            "tasksQueue=$tasksQueue, dispatchUrl=$dispatchUrl, tasksDispatchDeadline=$tasksDispatchDeadline, " +
+            "otelTracesExporter=$otelTracesExporter, otelServiceName=$otelServiceName, " +
+            "otelExporterOtlpEndpoint=$otelExporterOtlpEndpoint, " +
+            "otelExporterOtlpHeaders=${redactSecret(otelExporterOtlpHeaders)}, " +
+            "otelTracesSampler=$otelTracesSampler, otelCaptureMessageContent=$otelCaptureMessageContent)"
 
     companion object {
         /** A function that resolves an environment key to its value, or null if unset. */
@@ -342,6 +398,15 @@ data class Config(
                 tasksQueue = getOr(get, "TASKS_QUEUE", ""),
                 dispatchUrl = getOr(get, "DISPATCH_URL", ""),
                 tasksDispatchDeadline = tasksDispatchDeadline,
+                otelTracesExporter = getOr(get, "OTEL_TRACES_EXPORTER", OTEL_EXPORTER_NONE),
+                // Blank/unset means not explicitly chosen; an explicit "none" still counts as set.
+                otelTracesExporterSet = !get("OTEL_TRACES_EXPORTER").isNullOrBlank(),
+                otelServiceName = getOr(get, "OTEL_SERVICE_NAME", "automation-agent"),
+                otelExporterOtlpEndpoint = getOr(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+                otelExporterOtlpHeaders = getOr(get, "OTEL_EXPORTER_OTLP_HEADERS", ""),
+                otelTracesSampler = getOr(get, "OTEL_TRACES_SAMPLER", "parentbased_always_on"),
+                otelCaptureMessageContent =
+                    getBool(get, "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", false),
             )
             c.validate()
             return c
@@ -358,6 +423,18 @@ private fun redactSecret(s: String): String = if (s.isEmpty()) "\"\"" else "***"
 private fun getOr(get: Config.Companion.Lookup, key: String, def: String): String {
     val v = get(key)?.trim()
     return if (!v.isNullOrEmpty()) v else def
+}
+
+// Parses a boolean flag, tolerating the common spellings; a blank/unset or unrecognized value
+// yields [def] so a typo never flips a sensitive default on.
+private fun getBool(get: Config.Companion.Lookup, key: String, def: Boolean): Boolean {
+    val v = get(key)?.trim()?.lowercase()
+    if (v.isNullOrEmpty()) return def
+    return when (v) {
+        "1", "true", "t", "yes", "on" -> true
+        "0", "false", "f", "no", "off" -> false
+        else -> def
+    }
 }
 
 /**
