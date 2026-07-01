@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,5 +50,29 @@ func TestHTTPMiddlewareExcludesHealth(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("health status = %d, want 200", rec.Code)
+	}
+}
+
+// A health probe must not trigger a flush: it is polled constantly, so flushing on it would
+// be pure overhead and would ship other requests' buffered batches early.
+func TestHTTPMiddlewareHealthDoesNotFlush(t *testing.T) {
+	exp := installRecording(t)
+	// Buffer spans outside any request (BatchSpanProcessor holds them until a flush).
+	emitFakeAgentTree(context.Background())
+
+	h := HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// The health probe must leave the buffered spans un-exported.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, healthPath, nil))
+	if got := len(exp.GetSpans()); got != 0 {
+		t.Fatalf("health probe flushed %d buffered spans, want 0 (it must skip the flush)", got)
+	}
+
+	// A traced request does flush them (its own server span plus the buffered ones).
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhooks/lint", nil))
+	if got := len(exp.GetSpans()); got == 0 {
+		t.Fatal("a traced request did not flush the buffered spans")
 	}
 }

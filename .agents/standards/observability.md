@@ -107,7 +107,7 @@ each port's `config` layer — the **only** place that reads `OTEL_*`; `obs` tak
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP target; required for `otlp` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | — | OTLP auth headers (`k=v,...`); a secret → masked in the config log view |
 | `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | standard sampler value |
-| `OTEL_CAPTURE_MESSAGE_CONTENT` | `false` | opt-in capture of prompt/response **bodies** (sensitive) |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | opt-in capture of prompt/response **bodies** (sensitive); the standard GenAI-semconv var the framework reads natively |
 
 **Message content is off by default.** The flag gates only message **bodies** (prompts/responses =
 reviewed source code). The *useful* GenAI attributes — model, prompt/completion token counts, tool

@@ -208,10 +208,12 @@ type Config struct {
 	// sampling decision (trace volume is low — the cost is spans-per-trace, not trace rate).
 	OTELTracesSampler string
 	// OTELCaptureMessageContent gates whether prompt/response bodies are captured as span
-	// attributes (OTEL_CAPTURE_MESSAGE_CONTENT). Off by default — bodies are reviewed source
-	// code. Model/token/tool/latency attributes are captured free and always on, so "off"
-	// still yields rich, cost-aware traces. The body-capture wiring itself is a follow-up
-	// (spec out-of-scope); the flag is surfaced now for parity and that future use.
+	// attributes. It uses the standard GenAI-semconv variable name the agent framework reads
+	// natively — OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT — so surfacing it here
+	// validates + documents the one switch that actually controls capture rather than a
+	// parallel name. Off by default — bodies are reviewed source code. Model/token/tool/
+	// latency attributes are captured free and always on, so "off" still yields rich,
+	// cost-aware traces.
 	OTELCaptureMessageContent bool
 }
 
@@ -395,7 +397,7 @@ func loadFrom(get lookup) (Config, error) {
 	if c.TasksDispatchDeadline, err = time.ParseDuration(getOr(get, "TASKS_DISPATCH_DEADLINE", "30m")); err != nil {
 		return Config{}, fmt.Errorf("TASKS_DISPATCH_DEADLINE: %w", err)
 	}
-	if c.OTELCaptureMessageContent, err = getBool(get, "OTEL_CAPTURE_MESSAGE_CONTENT", false); err != nil {
+	if c.OTELCaptureMessageContent, err = getBool(get, "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", false); err != nil {
 		return Config{}, err
 	}
 

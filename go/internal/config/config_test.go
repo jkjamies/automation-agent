@@ -90,10 +90,10 @@ func TestOTELOTLPRequiresEndpoint(t *testing.T) {
 
 func TestOTELOverrides(t *testing.T) {
 	c, err := loadFrom(mapLookup(map[string]string{
-		"OTEL_SERVICE_NAME":            "custom-name",
-		"OTEL_TRACES_SAMPLER":          "always_on",
-		"OTEL_CAPTURE_MESSAGE_CONTENT": "true",
-		"OTEL_EXPORTER_OTLP_HEADERS":   "api-key=secret",
+		"OTEL_SERVICE_NAME":   "custom-name",
+		"OTEL_TRACES_SAMPLER": "always_on",
+		"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+		"OTEL_EXPORTER_OTLP_HEADERS":                         "api-key=secret",
 	}))
 	if err != nil {
 		t.Fatalf("loadFrom: %v", err)

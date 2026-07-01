@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 
@@ -40,12 +41,21 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run wires the playground and blocks on the launcher. It returns errors rather than
+// calling log.Fatalf directly so that deferred cleanup — notably the tracing shutdown flush
+// — runs on every exit path (os.Exit, which log.Fatal calls, skips defers).
+func run() error {
 	ctx := context.Background()
 	_ = godotenv.Load()
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	// Default the playground to the console exporter so a developer sees the span tree on
@@ -62,13 +72,15 @@ func main() {
 		Sampler:      cfg.OTELTracesSampler,
 	})
 	if err != nil {
-		log.Fatalf("init observability: %v", err)
+		return fmt.Errorf("init observability: %w", err)
 	}
+	// Flushes buffered spans on the way out — reached on the normal return and every error
+	// return below, which is why those paths return rather than log.Fatalf.
 	defer func() { _ = shutdownTracing(ctx) }()
 
 	llm, err := setup.BuildLLM(ctx, cfg)
 	if err != nil {
-		log.Fatalf("build llm: %v", err)
+		return fmt.Errorf("build llm: %w", err)
 	}
 
 	// A simple chat agent over the configured model. Swap in summary/lintfixer
@@ -80,11 +92,12 @@ func main() {
 		Instruction: "You are the automation-agent local playground, backed by the configured model. Help the developer test prompts. Be concise.",
 	})
 	if err != nil {
-		log.Fatalf("build agent: %v", err)
+		return fmt.Errorf("build agent: %w", err)
 	}
 
 	l := full.NewLauncher()
 	if err := l.Execute(ctx, &launcher.Config{AgentLoader: agent.NewSingleLoader(chat)}, os.Args[1:]); err != nil {
-		log.Fatalf("playground failed: %v\n\n%s", err, l.CommandLineSyntax())
+		return fmt.Errorf("playground failed: %w\n\n%s", err, l.CommandLineSyntax())
 	}
+	return nil
 }

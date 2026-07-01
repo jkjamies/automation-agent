@@ -712,7 +712,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP target URL; **required** when exporter=`otlp` (an otlp exporter with no target is rejected) | — |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers (comma-separated `k=v`), e.g. a vendor API key (secret → Secret Manager); masked in the config log view | — |
 | `OTEL_TRACES_SAMPLER` | standard OTel sampler; trace volume is one-per-webhook, so always-on is correct (cost is spans-per-trace, not trace rate) | `parentbased_always_on` |
-| `OTEL_CAPTURE_MESSAGE_CONTENT` | opt-in capture of prompt/response **bodies** as span attributes (sensitive — reviewed source code); model/token/tool/latency attributes are captured free regardless | `false` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | opt-in capture of prompt/response **bodies** as span attributes (sensitive — reviewed source code); the standard GenAI-semconv var the framework reads natively; model/token/tool/latency attributes are captured free regardless | `false` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
 [`DEPLOYMENT.md`](../../DEPLOYMENT.md).

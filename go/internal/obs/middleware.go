@@ -46,6 +46,13 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		instrumented.ServeHTTP(w, r)
+		if r.URL.Path == healthPath {
+			// The health probe is excluded from tracing (WithFilter above), so it creates no
+			// span and has nothing of its own to flush — and it is polled constantly, so a
+			// ForceFlush here would be pure overhead on the hottest path (and would ship other
+			// requests' batches early, defeating batching). Skip it.
+			return
+		}
 		// Export buffered spans while CPU is still allocated for this request. Detach from
 		// the request context first: a client that disconnects the instant the response is
 		// written would otherwise cancel r.Context() and abort the flush — defeating the
