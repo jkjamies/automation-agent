@@ -28,6 +28,10 @@ dependencies = [
     # /internal/dispatch, so the workflow runs in-request on allocated CPU. See
     # specs/20260626-workflow-execution-transport.md.
     "google-cloud-tasks>=2.16.0",
+    "opentelemetry-api>=1.42.0",
+    "opentelemetry-sdk>=1.42.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.0",
+    "opentelemetry-exporter-gcp-trace>=1.9.0",
 ]
 
 [build-system]

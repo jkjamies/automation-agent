@@ -29,6 +29,9 @@ from automation_agent.config import Config, TasksBackend, load
 from automation_agent.githubapi import Client
 from automation_agent.ingest import Envelope
 from automation_agent.notify import Notifier, new_notifier
+from automation_agent.obs import Config as ObsConfig
+from automation_agent.obs import TracingMiddleware, install_log_correlation
+from automation_agent.obs import init as init_tracing
 from automation_agent.tasks import DispatchFunc, InProcess, Transport, new_cloud_tasks
 from automation_agent.webhook import Server
 
@@ -138,6 +141,22 @@ async def run() -> None:
     load_dotenv()  # load .env if present; real environment still wins
     cfg = load()
 
+    # Register the OTel tracer provider so the agent framework's native span tree is exported.
+    # No-op by default (OTEL_TRACES_EXPORTER=none) — merging changes nothing in prod until an
+    # environment opts in. shutdown_tracing force-flushes buffered spans at exit (the
+    # scale-to-zero span-loss guard, mirrored per-request by the HTTP middleware). Correlation
+    # then stamps trace_id/span_id onto every log record emitted under a span.
+    shutdown_tracing = init_tracing(
+        ObsConfig(
+            exporter=cfg.otel_traces_exporter,
+            service_name=cfg.otel_service_name,
+            otlp_endpoint=cfg.otel_exporter_otlp_endpoint,
+            otlp_headers=cfg.otel_exporter_otlp_headers,
+            sampler=cfg.otel_traces_sampler,
+        )
+    )
+    install_log_correlation()
+
     llm = agent_setup.build_llm(cfg)
     code_llm = agent_setup.build_code_llm(cfg)
     provider = build_token_provider(cfg)
@@ -245,8 +264,12 @@ async def run() -> None:
         log=log,
     )
 
+    # TracingMiddleware adds a server span per request (the trace root on ingress, continued
+    # from the task's traceparent header on /internal/dispatch) and force-flushes spans before
+    # each response returns. No-op when tracing is disabled, so the wrapped app is unchanged.
+    app = TracingMiddleware(srv.app)
     server = uvicorn.Server(
-        uvicorn.Config(srv.app, host="0.0.0.0", port=int(cfg.port), log_level="info")
+        uvicorn.Config(app, host="0.0.0.0", port=int(cfg.port), log_level="info")
     )
 
     log.info(
@@ -261,12 +284,23 @@ async def run() -> None:
         await server.serve()
     finally:
         log.info("shutting down")
-        # Close the transport after the server stops accepting: the in-process backend drains
-        # in-flight dispatches (bounded), the Cloud Tasks backend closes its client. Done
-        # before the park-store close so any draining dispatch still has its store.
-        await transport.close()
+        # Attempt each cleanup independently so one failure cannot strand the others. The
+        # transport closes first (the in-process backend drains in-flight dispatches; the Cloud
+        # Tasks backend closes its client) so a draining dispatch still has its park store.
+        try:
+            await transport.close()
+        except Exception:
+            log.exception("transport close failed during shutdown")
         # Release a durable park store's backing connection (no-op for the memory backend).
-        await park_store.close()
+        try:
+            await park_store.close()
+        except Exception:
+            log.exception("park store close failed during shutdown")
+        # Force-flush and release the tracer provider last, so spans from the draining
+        # dispatches and shutdown path are exported before the process exits — even if a close
+        # above failed, which is exactly when those spans are most useful (no-op when tracing
+        # is disabled).
+        shutdown_tracing()
 
 
 def main() -> None:

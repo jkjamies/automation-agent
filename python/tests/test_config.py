@@ -218,3 +218,76 @@ def test_tasks_project_falls_back_to_google_cloud_project() -> None:
     env["GOOGLE_CLOUD_PROJECT"] = "ambient"
     c = load_from(map_lookup(env))
     assert c.tasks_project == "ambient"
+
+
+# --- Observability (OTEL_*) --------------------------------------------------
+
+
+def test_otel_defaults() -> None:
+    # Off by default: the no-op exporter, the service name, and always-on sampling, with
+    # message-content capture off.
+    c = load_from(map_lookup({}))
+    assert c.otel_traces_exporter == "none"
+    assert c.otel_traces_exporter_set is False
+    assert c.otel_service_name == "automation-agent"
+    assert c.otel_exporter_otlp_endpoint == ""
+    assert c.otel_exporter_otlp_headers == ""
+    assert c.otel_traces_sampler == "parentbased_always_on"
+    assert c.otel_capture_message_content is False
+
+
+def test_otel_console_and_gcp_need_no_endpoint() -> None:
+    for exporter in ("console", "gcp"):
+        c = load_from(map_lookup({"OTEL_TRACES_EXPORTER": exporter}))
+        assert c.otel_traces_exporter == exporter
+        # An explicitly provided exporter is recorded as set (the playground uses this to
+        # decide whether to override with its console default).
+        assert c.otel_traces_exporter_set is True
+
+
+def test_otel_otlp_requires_endpoint() -> None:
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_OTLP_ENDPOINT"):
+        load_from(map_lookup({"OTEL_TRACES_EXPORTER": "otlp"}))
+
+
+def test_otel_otlp_full() -> None:
+    c = load_from(
+        map_lookup(
+            {
+                "OTEL_TRACES_EXPORTER": "otlp",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
+                "OTEL_EXPORTER_OTLP_HEADERS": "api-key=secret",
+                "OTEL_SERVICE_NAME": "my-agent",
+            }
+        )
+    )
+    assert c.otel_traces_exporter == "otlp"
+    assert c.otel_exporter_otlp_endpoint == "https://otlp.example.com"
+    assert c.otel_service_name == "my-agent"
+
+
+def test_otel_unknown_exporter_rejected() -> None:
+    with pytest.raises(ValueError, match="invalid OTEL_TRACES_EXPORTER"):
+        load_from(map_lookup({"OTEL_TRACES_EXPORTER": "jaeger"}))
+
+
+def test_otel_capture_message_content_parsed() -> None:
+    c = load_from(map_lookup({"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true"}))
+    assert c.otel_capture_message_content is True
+
+
+def test_otel_headers_masked_in_repr() -> None:
+    # The OTLP headers can carry a vendor API key, so the repr must mask them like every
+    # other secret (never dump a credential to a startup log).
+    c = load_from(
+        map_lookup(
+            {
+                "OTEL_TRACES_EXPORTER": "otlp",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
+                "OTEL_EXPORTER_OTLP_HEADERS": "api-key=secret",
+            }
+        )
+    )
+    text = repr(c)
+    assert "api-key=secret" not in text
+    assert "otel_exporter_otlp_headers='***'" in text

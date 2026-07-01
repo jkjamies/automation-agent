@@ -60,6 +60,14 @@ class TasksBackend(StrEnum):
     CLOUDTASKS = "cloudtasks"
 
 
+# Trace exporter values for otel_traces_exporter. The app speaks exactly these four sinks and
+# never names a vendor; any OTLP-native backend is otlp + an endpoint. See obs and
+# .agents/standards/observability.md.
+OTEL_EXPORTER_NONE = "none"
+OTEL_EXPORTER_CONSOLE = "console"
+OTEL_EXPORTER_OTLP = "otlp"
+OTEL_EXPORTER_GCP = "gcp"
+
 # Fields whose value is a credential and must never appear in repr/logs.
 _SECRET_FIELDS = frozenset(
     {
@@ -69,6 +77,8 @@ _SECRET_FIELDS = frozenset(
         "slack_webhook_url",
         "teams_webhook_url",
         "github_app_private_key_pem",
+        # OTLP headers commonly carry a vendor API key (OTEL_EXPORTER_OTLP_HEADERS).
+        "otel_exporter_otlp_headers",
     }
 )
 
@@ -162,6 +172,35 @@ class Config:
     # therefore the default and the ceiling. Used only in cloudtasks mode.
     tasks_dispatch_deadline: timedelta = timedelta(minutes=30)
 
+    # Observability (OpenTelemetry tracing). All off by default: with
+    # otel_traces_exporter=none nothing is registered and the service is unchanged. The agent
+    # framework already emits a native span tree; setting an exporter turns it on. Owned here
+    # (the single place that reads OTEL_*) and handed to obs as a typed struct. See obs and
+    # specs/20260630-otel-observability.md.
+    # otel_traces_exporter selects the sink: none | console | otlp | gcp.
+    otel_traces_exporter: str = OTEL_EXPORTER_NONE
+    # otel_traces_exporter_set records whether OTEL_TRACES_EXPORTER was explicitly provided in
+    # the environment (vs. defaulted to none). The playground uses this to default to the
+    # console exporter unless an operator opted into a specific sink — deriving that decision
+    # from loaded config rather than reading os.environ itself (config is the only env reader).
+    otel_traces_exporter_set: bool = False
+    # otel_service_name is the resource service.name on every span (OTEL_SERVICE_NAME).
+    otel_service_name: str = "automation-agent"
+    # otel_exporter_otlp_endpoint / otel_exporter_otlp_headers configure the otlp exporter
+    # (standard OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS). The endpoint is
+    # required for the otlp exporter; the headers are a secret (masked in repr).
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers: str = ""
+    # otel_traces_sampler is a standard OTEL_TRACES_SAMPLER value; the default
+    # parentbased_always_on is correct here (trace volume is one-per-webhook).
+    otel_traces_sampler: str = "parentbased_always_on"
+    # otel_capture_message_content gates whether prompt/response bodies are captured as span
+    # attributes (sensitive: they are reviewed source code). Off by default. The agent
+    # framework reads this standard GenAI-semconv var natively —
+    # OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT — so surfacing it here keeps it under
+    # the single config source. Model/token/tool/latency attributes are captured regardless.
+    otel_capture_message_content: bool = False
+
     def app_mode(self) -> bool:
         """Whether GitHub App authentication is configured (production path). False means
         the static PAT fallback (``github_token``) is used."""
@@ -230,6 +269,31 @@ class Config:
                 "REPOS must be set in GitHub App mode (empty REPOS = all repos is "
                 "rejected to avoid acting on every installed repo)"
             )
+        self._validate_observability()
+
+    def _validate_observability(self) -> None:
+        """Check the OTEL_* settings: the exporter must be one of the four known sinks, and
+        the otlp exporter needs an endpoint (else it would silently export nowhere).
+
+        Raises:
+            ValueError: on an unknown exporter or otlp with no endpoint.
+        """
+        if self.otel_traces_exporter in (
+            OTEL_EXPORTER_NONE,
+            OTEL_EXPORTER_CONSOLE,
+            OTEL_EXPORTER_GCP,
+        ):
+            return
+        if self.otel_traces_exporter == OTEL_EXPORTER_OTLP:
+            if not self.otel_exporter_otlp_endpoint.strip():
+                raise ValueError(
+                    "OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT"
+                )
+            return
+        raise ValueError(
+            f"invalid OTEL_TRACES_EXPORTER {self.otel_traces_exporter!r} "
+            "(want none|console|otlp|gcp)"
+        )
 
     def _validate_cloudtasks(self) -> None:
         """Check the cloudtasks-backend requirements: the queue coordinates and worker URL,
@@ -372,6 +436,15 @@ def load_from(get: Lookup) -> Config:
         tasks_dispatch_deadline=_parse_duration(
             _get_or(get, "TASKS_DISPATCH_DEADLINE", "30m"), "TASKS_DISPATCH_DEADLINE"
         ),
+        otel_traces_exporter=_get_or(get, "OTEL_TRACES_EXPORTER", OTEL_EXPORTER_NONE),
+        otel_traces_exporter_set=bool((get("OTEL_TRACES_EXPORTER") or "").strip()),
+        otel_service_name=_get_or(get, "OTEL_SERVICE_NAME", "automation-agent"),
+        otel_exporter_otlp_endpoint=_get_or(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+        otel_exporter_otlp_headers=_get_or(get, "OTEL_EXPORTER_OTLP_HEADERS", ""),
+        otel_traces_sampler=_get_or(get, "OTEL_TRACES_SAMPLER", "parentbased_always_on"),
+        otel_capture_message_content=_get_bool(
+            get, "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", False
+        ),
     )
 
     # Code models default to the base models when unset.
@@ -400,6 +473,24 @@ def _get_or(get: Lookup, key: str, default: str) -> str:
         v = v.strip()
         if v:
             return v
+    return default
+
+
+def _get_bool(get: Lookup, key: str, default: bool) -> bool:
+    """Parse a boolean env var. Accepts the common truthy/falsy spellings
+    (1/true/yes/on and 0/false/no/off, case-insensitively); an unset or blank value uses
+    ``default``. An unrecognized value falls back to ``default`` rather than failing — the
+    flag is advisory."""
+    v = get(key)
+    if v is None:
+        return default
+    v = v.strip().lower()
+    if v == "":
+        return default
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
     return default
 
 
