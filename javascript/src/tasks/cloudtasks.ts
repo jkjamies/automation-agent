@@ -3,6 +3,7 @@
 import { CloudTasksClient, protos } from '@google-cloud/tasks';
 
 import { type Envelope, encode } from '../ingest/envelope';
+import { inject } from '../obs/propagation';
 import { type EnqueueOptions, type Transport } from './transport';
 
 type ICreateTaskRequest = protos.google.cloud.tasks.v2.ICreateTaskRequest;
@@ -83,6 +84,10 @@ export class CloudTasks implements Transport {
     if (this.token !== '') {
       headers.Authorization = 'Bearer ' + this.token;
     }
+    // Inject the W3C trace context so the /internal/dispatch worker continues the ingress trace
+    // (a `traceparent` header on the task, not in the envelope JSON — that is a versioned wire
+    // contract). A no-op when tracing is disabled, so no header is added.
+    inject(headers);
     const task: ITask = {
       httpRequest: { httpMethod: 'POST', url: this.dispatchUrl, headers, body },
     };

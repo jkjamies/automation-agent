@@ -4,7 +4,7 @@ All non-entrypoint code. Two families:
 
 - **Agents** (`agent/`) — the LLM-driven workflow agents and their shared `setup`
   utilities.
-- **Tooling** (`config`, `ingest`, `githubapi`, `gitrepo`, `webhook`, `notify`, `tasks`) —
+- **Tooling** (`config`, `ingest`, `githubapi`, `gitrepo`, `webhook`, `notify`, `tasks`, `obs`) —
   deterministic, unit-testable, **agent-free**. These must not import
   `agent/...` (enforced by `arch/`).
 
@@ -27,6 +27,7 @@ flowchart LR
         webhook
         notify
         tasks
+        obs
     end
     agents -->|"may import"| tooling
     tooling -.->|"must NOT import (arch)"| agents

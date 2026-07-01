@@ -56,6 +56,24 @@ export const TasksBackend = {
 } as const;
 export type TasksBackend = (typeof TasksBackend)[keyof typeof TasksBackend];
 
+/**
+ * Selects the OpenTelemetry trace sink. The app speaks exactly these four and never names a
+ * vendor: any OTLP-native backend is reached with `otlp` + an endpoint. See
+ * .agents/standards/observability.md.
+ *
+ * - `none` (default): tracing is off; nothing is registered and the service is unchanged.
+ * - `console`: spans as text on stdout (local dev, the playground).
+ * - `otlp`: OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` (any OTLP backend or a Collector).
+ * - `gcp`: Google Cloud Trace via Application Default Credentials.
+ */
+export const TracesExporter = {
+  None: 'none',
+  Console: 'console',
+  Otlp: 'otlp',
+  Gcp: 'gcp',
+} as const;
+export type TracesExporter = (typeof TracesExporter)[keyof typeof TracesExporter];
+
 /** All runtime settings. */
 export interface Config {
   // LLM
@@ -142,6 +160,31 @@ export interface Config {
   // only 10m, so a long workflow would be cancelled mid-run and retried, duplicating side
   // effects. Cloud Tasks caps this at 30m, which is therefore the default and the ceiling.
   tasksDispatchDeadlineMs: number;
+
+  // Observability (OpenTelemetry tracing). Off by default (otelTracesExporter=none): nothing is
+  // registered and the service is unchanged. config is the single place that reads OTEL_*; the obs
+  // package takes these as a typed struct. See obs and specs/20260630-otel-observability.md.
+  // otelTracesExporter selects the sink: none | console | otlp | gcp.
+  otelTracesExporter: TracesExporter;
+  // otelTracesExporterSet records whether OTEL_TRACES_EXPORTER was explicitly provided in the
+  // environment (vs. defaulted). The playground uses it to decide whether to override with its
+  // console default without itself reading the environment.
+  otelTracesExporterSet: boolean;
+  // otelServiceName is the resource service.name on every span (OTEL_SERVICE_NAME).
+  otelServiceName: string;
+  // otelExporterOtlpEndpoint / otelExporterOtlpHeaders configure the otlp exporter (standard
+  // OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS). The endpoint is required for the otlp
+  // exporter; the headers are a secret (masked in the config log view).
+  otelExporterOtlpEndpoint: string;
+  otelExporterOtlpHeaders: string;
+  // otelTracesSampler is a standard OTEL_TRACES_SAMPLER value; the default parentbased_always_on
+  // records every locally-started trace and honors an upstream decision.
+  otelTracesSampler: string;
+  // otelCaptureMessageContent gates whether prompt/response bodies are captured as span content —
+  // sensitive (reviewed source code), so off by default. Its name is the standard GenAI-semconv var
+  // (OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT) the framework reads natively, so surfacing
+  // it here keeps it under one config surface. (Body-capture wiring itself is a follow-up.)
+  otelCaptureMessageContent: boolean;
 }
 
 /** Config fields whose value is a credential and must never appear in a log. */
@@ -152,6 +195,8 @@ const SECRET_KEYS = [
   'slackWebhookUrl',
   'teamsWebhookUrl',
   'githubAppPrivateKeyPem',
+  // OTLP headers commonly carry a vendor API key (OTEL_EXPORTER_OTLP_HEADERS).
+  'otelExporterOtlpHeaders',
 ] as const satisfies readonly (keyof Config)[];
 
 /**
@@ -258,6 +303,15 @@ export function loadFrom(get: Lookup): Config {
       getOr(get, 'TASKS_DISPATCH_DEADLINE', '30m'),
       'TASKS_DISPATCH_DEADLINE',
     ),
+    otelTracesExporter: getOr(get, 'OTEL_TRACES_EXPORTER', TracesExporter.None) as TracesExporter,
+    // Whether OTEL_TRACES_EXPORTER was explicitly provided (a non-blank value), so the playground
+    // can override the default without reading the environment itself.
+    otelTracesExporterSet: (get('OTEL_TRACES_EXPORTER') ?? '').trim() !== '',
+    otelServiceName: getOr(get, 'OTEL_SERVICE_NAME', 'automation-agent'),
+    otelExporterOtlpEndpoint: getOr(get, 'OTEL_EXPORTER_OTLP_ENDPOINT', ''),
+    otelExporterOtlpHeaders: getOr(get, 'OTEL_EXPORTER_OTLP_HEADERS', ''),
+    otelTracesSampler: getOr(get, 'OTEL_TRACES_SAMPLER', 'parentbased_always_on'),
+    otelCaptureMessageContent: getBool(get, 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', false),
   };
 
   // Code models default to the base models when unset.
@@ -435,6 +489,32 @@ export function validate(c: Config): void {
     );
   }
   validateTasks(c);
+  validateOtel(c);
+}
+
+/**
+ * Validate the observability settings: the exporter must be one of the four known sinks, and the
+ * `otlp` exporter needs an endpoint (else it would silently export nowhere).
+ *
+ * @throws Error on an unknown exporter or `otlp` with no endpoint.
+ */
+function validateOtel(c: Config): void {
+  if (
+    c.otelTracesExporter === TracesExporter.None ||
+    c.otelTracesExporter === TracesExporter.Console ||
+    c.otelTracesExporter === TracesExporter.Gcp
+  ) {
+    return;
+  }
+  if (c.otelTracesExporter === TracesExporter.Otlp) {
+    if (c.otelExporterOtlpEndpoint.trim() === '') {
+      throw new Error('OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT');
+    }
+    return;
+  }
+  throw new Error(
+    `invalid OTEL_TRACES_EXPORTER ${JSON.stringify(c.otelTracesExporter)} (want none|console|otlp|gcp)`,
+  );
 }
 
 /**
@@ -510,6 +590,25 @@ function getOr(get: Lookup, key: string, def: string): string {
   const v = get(key)?.trim();
   if (v !== undefined && v !== '') {
     return v;
+  }
+  return def;
+}
+
+/**
+ * Parse a boolean env var. Accepts the common truthy/falsy spellings (1/true/yes/on and
+ * 0/false/no/off, case-insensitively); an unset, blank, or unrecognized value uses `def` — the
+ * flag is advisory, so an unrecognized value falls back rather than failing.
+ */
+function getBool(get: Lookup, key: string, def: boolean): boolean {
+  const v = get(key)?.trim().toLowerCase();
+  if (v === undefined || v === '') {
+    return def;
+  }
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') {
+    return true;
+  }
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') {
+    return false;
   }
   return def;
 }

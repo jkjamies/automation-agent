@@ -9,11 +9,21 @@ import { describe, expect, it } from 'vitest';
 
 import { collectImports, rel, repoRoot, tsFiles, under } from './helpers';
 
-const TOOLING = ['src/auth', 'src/githubapi', 'src/gitrepo', 'src/webhook', 'src/notify', 'src/tasks'];
+const TOOLING = ['src/auth', 'src/githubapi', 'src/gitrepo', 'src/webhook', 'src/notify', 'src/tasks', 'src/obs'];
 
 // process.env may be read only here; every other module receives config via injection.
 const CONFIG_FILE = 'src/config/config.ts';
 const ENV_READ_RE = /\bprocess\s*\.\s*env\b/;
+// Only config may reference an OTEL_* env var literal; the rest of the package takes tracing
+// settings as a typed struct. Match every JS quote style (single, double, backtick) so a stray
+// read in any spelling is caught. Comments are stripped first, since JSDoc legitimately mentions
+// `OTEL_*` in prose (markdown backticks) — only code references are a violation.
+const OTEL_READ_RE = /['"`]OTEL_/;
+
+/** Remove line and block comments so a scan sees only code, not prose that mentions env vars. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
 
 describe('import boundaries', () => {
   it('tooling does not import agents', () => {
@@ -57,6 +67,19 @@ describe('import boundaries', () => {
       }
       if (ENV_READ_RE.test(readFileSync(file, 'utf-8'))) {
         errors.push(`${rel(file)} reads process.env — only ${CONFIG_FILE} may`);
+      }
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it('only config reads the OTEL_* environment', () => {
+    const errors: string[] = [];
+    for (const file of tsFiles(join(repoRoot(), 'src'))) {
+      if (under(file, 'src/config')) {
+        continue;
+      }
+      if (OTEL_READ_RE.test(stripComments(readFileSync(file, 'utf-8')))) {
+        errors.push(`${rel(file)} references an OTEL_ env var literal — only ${CONFIG_FILE} may read OTEL_*`);
       }
     }
     expect(errors).toEqual([]);
