@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 
@@ -36,19 +37,50 @@ import (
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/config"
+	"automation-agent/internal/obs"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run wires the playground and blocks on the launcher. It returns errors rather than
+// calling log.Fatalf directly so that deferred cleanup — notably the tracing shutdown flush
+// — runs on every exit path (os.Exit, which log.Fatal calls, skips defers).
+func run() error {
 	ctx := context.Background()
 	_ = godotenv.Load()
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Default the playground to the console exporter so a developer sees the span tree on
+	// stdout with no backend to stand up — but respect an explicit OTEL_TRACES_EXPORTER.
+	exporter := cfg.OTELTracesExporter
+	if _, set := os.LookupEnv("OTEL_TRACES_EXPORTER"); !set {
+		exporter = config.OTELExporterConsole
+	}
+	shutdownTracing, err := obs.Init(ctx, obs.Config{
+		Exporter:     exporter,
+		ServiceName:  cfg.OTELServiceName,
+		OTLPEndpoint: cfg.OTELExporterOTLPEndpoint,
+		OTLPHeaders:  cfg.OTELExporterOTLPHeaders,
+		Sampler:      cfg.OTELTracesSampler,
+	})
+	if err != nil {
+		return fmt.Errorf("init observability: %w", err)
+	}
+	// Flushes buffered spans on the way out — reached on the normal return and every error
+	// return below, which is why those paths return rather than log.Fatalf.
+	defer func() { _ = shutdownTracing(ctx) }()
+
 	llm, err := setup.BuildLLM(ctx, cfg)
 	if err != nil {
-		log.Fatalf("build llm: %v", err)
+		return fmt.Errorf("build llm: %w", err)
 	}
 
 	// A simple chat agent over the configured model. Swap in summary/lintfixer
@@ -60,11 +92,12 @@ func main() {
 		Instruction: "You are the automation-agent local playground, backed by the configured model. Help the developer test prompts. Be concise.",
 	})
 	if err != nil {
-		log.Fatalf("build agent: %v", err)
+		return fmt.Errorf("build agent: %w", err)
 	}
 
 	l := full.NewLauncher()
 	if err := l.Execute(ctx, &launcher.Config{AgentLoader: agent.NewSingleLoader(chat)}, os.Args[1:]); err != nil {
-		log.Fatalf("playground failed: %v\n\n%s", err, l.CommandLineSyntax())
+		return fmt.Errorf("playground failed: %w\n\n%s", err, l.CommandLineSyntax())
 	}
+	return nil
 }

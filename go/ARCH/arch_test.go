@@ -106,7 +106,7 @@ func rel(root, p string) string {
 func TestToolingDoesNotImportAgents(t *testing.T) {
 	root := repoRoot(t)
 	agentPrefix := modulePath(t) + "/internal/agent"
-	tooling := []string{"githubapi", "gitrepo", "webhook", "notify", "tasks"}
+	tooling := []string{"githubapi", "gitrepo", "webhook", "notify", "tasks", "obs"}
 	for _, fi := range goFiles(t, filepath.Join(root, "internal")) {
 		if !under(root, filepath.Dir(fi.path), tooling...) {
 			continue
@@ -135,6 +135,45 @@ func TestProviderSDKsOnlyInSetup(t *testing.T) {
 				t.Errorf("%s imports provider SDK %s outside internal/agent/setup", rel(root, fi.path), imp)
 			}
 		}
+	}
+}
+
+// Only internal/config may read the OTEL_* environment. Tracing config flows through the
+// typed Config like every other setting; obs and the rest of the tree take it as a struct,
+// never os.Getenv("OTEL_..."). A stray read elsewhere would fork configuration away from the
+// single source of truth (and out of the masked-secret String view). Enforced by source
+// scan: the literal "OTEL_" outside internal/config flags a direct env reference.
+func TestOnlyConfigReadsOTELEnv(t *testing.T) {
+	root := repoRoot(t)
+	configDir := filepath.Join(root, "internal", "config")
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		dir := filepath.Dir(p)
+		if dir == configDir || strings.HasPrefix(dir, configDir+string(filepath.Separator)) {
+			return nil // config owns the OTEL_* env vars
+		}
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), `"OTEL_`) {
+			t.Errorf("%s references an OTEL_ env var literal — only internal/config may read OTEL_*", rel(root, p))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal: %v", err)
 	}
 }
 

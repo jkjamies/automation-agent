@@ -707,6 +707,12 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
 | `REVIEW_STANDARDS_GLOBS` | comma-separated discovery globs matched against the reviewed repo's tree (`AGENTS.md`, `.cursor/rules/**`, `CLAUDE.md`, …); blank uses the built-in default set | (built-in set) |
 | `REVIEW_STANDARDS_MAX_BYTES` | cap on total convention-doc bytes fed to the distiller; must be positive | `262144` (256 KiB) |
 | `REVIEW_UNCITED_MODE` | how a conformance finding citing no real repo rule is handled: `nitpick` (demote) or `drop` | `nitpick` |
+| `OTEL_TRACES_EXPORTER` | tracing sink / kill switch: `none` (no-op — merging changes nothing) · `console` (stdout) · `otlp` (any OTLP-native backend or a Collector) · `gcp` (Cloud Trace via ADC). The app names no vendor | `none` |
+| `OTEL_SERVICE_NAME` | resource `service.name` on every span | `automation-agent` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP target URL; **required** when exporter=`otlp` (an otlp exporter with no target is rejected) | — |
+| `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers (comma-separated `k=v`), e.g. a vendor API key (secret → Secret Manager); masked in the config log view | — |
+| `OTEL_TRACES_SAMPLER` | standard OTel sampler; trace volume is one-per-webhook, so always-on is correct (cost is spans-per-trace, not trace rate) | `parentbased_always_on` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | opt-in capture of prompt/response **bodies** as span attributes (sensitive — reviewed source code); the standard GenAI-semconv var the framework reads natively; model/token/tool/latency attributes are captured free regardless | `false` |
 
 The full env reference (including SDK-owned Vertex/AI-Studio vars) lives in
 [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
@@ -749,6 +755,16 @@ the firestore emulator for local tests, and the pending-work list — lives in
   limiting. `inprocess` (local/default) reproduces the in-process worker pool. **Scale-to-zero is
   preserved** (no `min-instances`). Orthogonal to the fixers' durable CI wait (that offloads *waiting*;
   this fixes *computing*). See `specs/20260626-workflow-execution-transport.md`.
+- **Observability (`OTEL_TRACES_EXPORTER`).** The agent framework already emits a native
+  span tree per run (`invoke_agent` → `call_llm` → `execute_tool`, GenAI semantic
+  conventions); the `internal/obs` package registers the tracer provider + exporter that
+  turns it on, propagates the trace across the Cloud Tasks boundary (a `traceparent` header
+  on the task; a `context` passthrough for the in-process backend), and **force-flushes
+  spans before each traced handler returns** — load-bearing on scale-to-zero, the same CPU
+  throttling that made the execution transport run in-request also starves the async span
+  export, so the buffered batch must be pushed out while CPU is still allocated. Off by
+  default (`none`); enable per-environment (`gcp` for Cloud Trace, or `otlp` at any backend /
+  a Collector). Design in [`observability.md`](observability.md).
 - **Prod (scale-to-zero): Cloud Run + `SESSION_BACKEND=firestore`.** Because firestore makes
   parked runs durable, the instance no longer has to stay warm to avoid stranding work — it can
   scale toward zero and rehydrate a parked run when CI reports. ADC gives the service account

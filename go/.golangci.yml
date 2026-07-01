@@ -28,6 +28,8 @@ linters-settings:
           - "**/internal/webhook/**"
           - "**/internal/notify/**"
           - "**/internal/reconcile/**"
+          - "**/internal/obs/**"
+          - "**/internal/tasks/**"
         deny:
           - pkg: "automation-agent/internal/agent"
             desc: "tooling must not import agent packages"
