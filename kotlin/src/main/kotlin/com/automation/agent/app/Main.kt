@@ -30,6 +30,10 @@ import com.automation.agent.githubapi.Client
 import com.automation.agent.githubapi.PrInput
 import com.automation.agent.notify.Notifier
 import com.automation.agent.notify.newNotifier
+import com.automation.agent.obs.Config as ObsConfig
+import com.automation.agent.obs.init as initTracing
+import com.automation.agent.obs.installObsTracing
+import com.automation.agent.obs.newLogHandler
 import com.automation.agent.config.TasksBackend
 import com.automation.agent.tasks.DEFAULT_MAX_CONCURRENT
 import com.automation.agent.tasks.DispatchFunc
@@ -61,6 +65,21 @@ fun main() {
 
 private fun run() {
     val cfg = Config.load()
+
+    // Turn on distributed tracing (off by default). init runs once, right after config load and
+    // before any agent runs, so the agent framework's native spans resolve our provider. shutdownTracing
+    // force-flushes buffered spans at exit (the scale-to-zero span-loss guard). rlog wraps the injected
+    // logger so records emitted under a span carry trace_id / span_id.
+    val shutdownTracing = initTracing(
+        ObsConfig(
+            exporter = cfg.otelTracesExporter,
+            serviceName = cfg.otelServiceName,
+            otlpEndpoint = cfg.otelExporterOtlpEndpoint,
+            otlpHeaders = cfg.otelExporterOtlpHeaders,
+            sampler = cfg.otelTracesSampler,
+        ),
+    )
+    val rlog = newLogHandler(log)
 
     val llm = buildLLM(cfg)
     val codeLlm = buildCodeLLM(cfg)
@@ -145,7 +164,7 @@ private fun run() {
                 lintKickoff = payloadHandler { lintEngine.kickoff(it) },
                 coverageKickoff = payloadHandler { coverageEngine.kickoff(it) },
                 ciResume = ciResumeHandler(engines),
-                log = log,
+                log = rlog,
             ),
         )
 
@@ -153,7 +172,7 @@ private fun run() {
     // drained on SIGTERM, or — in production — via Cloud Tasks, which delivers each envelope to
     // /internal/dispatch so the compute runs in-request (CPU stays allocated) with durable retry.
     // See specs/20260626-workflow-execution-transport.md.
-    val transport = buildTransport(cfg) { envelope -> dispatcher.dispatch(envelope) }
+    val transport = buildTransport(cfg, rlog) { envelope -> dispatcher.dispatch(envelope) }
 
     if (cfg.githubWebhookSecret.isEmpty()) {
         log.log(
@@ -172,7 +191,11 @@ private fun run() {
             internalToken = cfg.internalToken,
             sweep = sweep,
             dispatch = { envelope -> dispatcher.dispatch(envelope) },
-            log = log,
+            log = rlog,
+            // A server span per request (the trace root on ingress, continued from the task's
+            // traceparent on /internal/dispatch), force-flushed before the response returns. A no-op
+            // when tracing is disabled.
+            configure = { installObsTracing() },
         )
 
     // Graceful shutdown: stop accepting requests, then drain in-flight dispatches before exiting.
@@ -188,6 +211,10 @@ private fun run() {
             runBlocking { transport.close() }
             // Release a durable park store's backing connection (a no-op for the memory backend).
             runCatching { parkStore.close() }
+            // Flush and release the tracer provider last, so any span from a draining dispatch or the
+            // shutdown path itself is exported before the process exits. Isolated so a store-close
+            // failure above cannot skip it, and its own failure cannot mask the rest.
+            runCatching { shutdownTracing() }
         },
     )
 
@@ -218,7 +245,7 @@ private fun buildTokenProvider(cfg: Config): TokenProvider =
  * envelope to /internal/dispatch, which the webhook wires to the same dispatcher.
  * See specs/20260626-workflow-execution-transport.md.
  */
-private fun buildTransport(cfg: Config, dispatch: DispatchFunc): Transport {
+private fun buildTransport(cfg: Config, log: System.Logger, dispatch: DispatchFunc): Transport {
     if (cfg.tasksBackend == TasksBackend.CLOUDTASKS) {
         log.log(
             Level.INFO,

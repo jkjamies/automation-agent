@@ -176,7 +176,7 @@ class Config:
     # otel_traces_exporter=none nothing is registered and the service is unchanged. The agent
     # framework already emits a native span tree; setting an exporter turns it on. Owned here
     # (the single place that reads OTEL_*) and handed to obs as a typed struct. See obs and
-    # specs/20260630-otel-observability.md.
+    # .agents/standards/observability.md.
     # otel_traces_exporter selects the sink: none | console | otlp | gcp.
     otel_traces_exporter: str = OTEL_EXPORTER_NONE
     # otel_traces_exporter_set records whether OTEL_TRACES_EXPORTER was explicitly provided in

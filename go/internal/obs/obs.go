@@ -8,7 +8,7 @@
 //
 // Deterministic tooling — it imports no agent packages, and only internal/config reads
 // the OTEL_* environment (this package takes a typed Config). See
-// .agents/standards/observability.md and specs/20260630-otel-observability.md.
+// .agents/standards/observability.md.
 package obs
 
 import (

@@ -163,7 +163,7 @@ export interface Config {
 
   // Observability (OpenTelemetry tracing). Off by default (otelTracesExporter=none): nothing is
   // registered and the service is unchanged. config is the single place that reads OTEL_*; the obs
-  // package takes these as a typed struct. See obs and specs/20260630-otel-observability.md.
+  // package takes these as a typed struct. See obs and .agents/standards/observability.md.
   // otelTracesExporter selects the sink: none | console | otlp | gcp.
   otelTracesExporter: TracesExporter;
   // otelTracesExporterSet records whether OTEL_TRACES_EXPORTER was explicitly provided in the

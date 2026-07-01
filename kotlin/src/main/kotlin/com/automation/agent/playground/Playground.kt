@@ -13,9 +13,28 @@ import com.google.adk.kt.agents.LlmAgent
 import com.google.adk.kt.runners.ReplRunner
 import com.automation.agent.agent.setup.buildLLM
 import com.automation.agent.config.Config
+import com.automation.agent.config.OTEL_EXPORTER_CONSOLE
+import com.automation.agent.obs.Config as ObsConfig
+import com.automation.agent.obs.init as initTracing
 
 fun main() {
     val cfg = Config.load()
+
+    // Local dev defaults to console tracing (spans to stdout) unless an exporter is explicitly set,
+    // so a developer sees the span tree without extra config. The set flag comes from config — this
+    // entrypoint reads no environment. Flush + release at exit so the last spans are exported.
+    val exporter = if (cfg.otelTracesExporterSet) cfg.otelTracesExporter else OTEL_EXPORTER_CONSOLE
+    val shutdownTracing = initTracing(
+        ObsConfig(
+            exporter = exporter,
+            serviceName = cfg.otelServiceName,
+            otlpEndpoint = cfg.otelExporterOtlpEndpoint,
+            otlpHeaders = cfg.otelExporterOtlpHeaders,
+            sampler = cfg.otelTracesSampler,
+        ),
+    )
+    Runtime.getRuntime().addShutdownHook(Thread { runCatching { shutdownTracing() } })
+
     val llm = buildLLM(cfg)
 
     // A simple chat agent over the configured model.

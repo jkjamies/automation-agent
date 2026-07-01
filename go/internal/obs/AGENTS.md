@@ -6,7 +6,7 @@ emits but throws away. The framework builds a native span tree — `invoke_agent
 spans go nowhere until a process registers a tracer provider + exporter once at startup.
 This package is that registration, plus the propagation and flush plumbing that stitches
 the trace across the Cloud Tasks boundary. See `.agents/standards/observability.md` for the
-language-neutral design and `specs/20260630-otel-observability.md` for the decisions.
+language-neutral design and decisions.
 
 ## Off by default
 

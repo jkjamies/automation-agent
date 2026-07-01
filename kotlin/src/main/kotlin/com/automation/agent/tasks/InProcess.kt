@@ -1,6 +1,7 @@
 package com.automation.agent.tasks
 
 import com.automation.agent.ingest.Envelope
+import com.automation.agent.obs.currentTraceContextElement
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +79,10 @@ class InProcess(
      */
     override suspend fun enqueue(e: Envelope, opts: EnqueueOptions) {
         if (closed) throw TransportClosedException()
+        // Capture the active trace context now, while the ingress span is current, so the detached
+        // dispatch coroutine below continues the ingress trace (the in-process analogue of the Cloud
+        // Tasks traceparent header). EmptyCoroutineContext when tracing is disabled.
+        val traceContext = currentTraceContextElement()
         // trySend takes a slot immediately when the pool has room. Only when it is full does the
         // caller park — surface that so sustained saturation is observable rather than a silently
         // delayed webhook ACK, then wait for a slot but race the close signal so a parked caller
@@ -106,7 +111,7 @@ class InProcess(
             // and be abandoned on exit. Done under the same lock close() snapshots the children with.
             mutex.withLock {
                 if (closed) throw TransportClosedException()
-                scope.launch {
+                scope.launch(traceContext) {
                     try {
                         dispatch(e)
                     } catch (ce: CancellationException) {

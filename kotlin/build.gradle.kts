@@ -18,6 +18,7 @@ group = "com.automation"
 version = "0.1.0"
 
 val ktorVersion = "3.5.0"
+val otelVersion = "1.62.0"
 
 repositories {
     mavenCentral()
@@ -72,9 +73,24 @@ dependencies {
     implementation("io.ktor:ktor-server-core:$ktorVersion")
     implementation("io.ktor:ktor-server-cio:$ktorVersion")
 
+    // OpenTelemetry — the obs tracing package builds and globally registers an SdkTracerProvider so
+    // the ADK span tree (which resolves GlobalOpenTelemetry) is exported instead of discarded. The
+    // BOM aligns api/sdk/exporter/extension versions; the extension-kotlin bridge carries the OTel
+    // Context across coroutine suspension (span parenting + the in-process trace passthrough). See
+    // obs/AGENTS.md and .agents/standards/observability.md.
+    implementation(platform("io.opentelemetry:opentelemetry-bom:$otelVersion"))
+    implementation("io.opentelemetry:opentelemetry-api")
+    implementation("io.opentelemetry:opentelemetry-sdk")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp") // OTLP/HTTP span exporter (otlp)
+    implementation("io.opentelemetry:opentelemetry-exporter-logging") // stdout span exporter (console)
+    implementation("io.opentelemetry:opentelemetry-extension-kotlin") // Context <-> coroutine bridge
+    // Google Cloud Trace span exporter (gcp) — the one convenience path (Cloud Trace via ADC).
+    implementation("com.google.cloud.opentelemetry:exporter-trace:0.33.0")
+
     // Kotest — the test framework for all ports' Kotlin tests (BehaviorSpec, Given/When/Then).
     testImplementation("io.kotest:kotest-runner-junit5:6.1.11")
     testImplementation("io.kotest:kotest-assertions-core:6.1.11")
+    testImplementation("io.opentelemetry:opentelemetry-sdk-testing") // InMemorySpanExporter for obs tests
     testImplementation("io.ktor:ktor-client-mock:$ktorVersion") // client tests (githubapi)
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion") // server tests (webhook)
 

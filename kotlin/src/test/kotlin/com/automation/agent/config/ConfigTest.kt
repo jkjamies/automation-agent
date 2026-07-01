@@ -505,4 +505,81 @@ class ConfigTest : BehaviorSpec({
             }
         }
     }
+
+    Given("the observability (OTEL_*) settings") {
+        When("nothing is set") {
+            Then("tracing is off by default with the standard defaults") {
+                val c = Config.loadFrom(lookupOf(emptyMap()))
+                c.otelTracesExporter shouldBe OTEL_EXPORTER_NONE
+                c.otelTracesExporterSet shouldBe false
+                c.otelServiceName shouldBe "automation-agent"
+                c.otelTracesSampler shouldBe "parentbased_always_on"
+                c.otelCaptureMessageContent shouldBe false
+            }
+        }
+
+        When("the exporter is explicitly set") {
+            Then("the set flag is recorded and the value parsed") {
+                val c = Config.loadFrom(lookupOf(mapOf("OTEL_TRACES_EXPORTER" to "console")))
+                c.otelTracesExporter shouldBe OTEL_EXPORTER_CONSOLE
+                c.otelTracesExporterSet shouldBe true
+            }
+        }
+
+        When("the otlp exporter has an endpoint") {
+            Then("it loads") {
+                val c = Config.loadFrom(
+                    lookupOf(
+                        mapOf(
+                            "OTEL_TRACES_EXPORTER" to "otlp",
+                            "OTEL_EXPORTER_OTLP_ENDPOINT" to "http://localhost:4318",
+                        ),
+                    ),
+                )
+                c.otelTracesExporter shouldBe OTEL_EXPORTER_OTLP
+                c.otelExporterOtlpEndpoint shouldBe "http://localhost:4318"
+            }
+        }
+
+        When("the otlp exporter has no endpoint") {
+            Then("it fails fast") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("OTEL_TRACES_EXPORTER" to "otlp")))
+                }
+            }
+        }
+
+        When("the exporter is unknown") {
+            Then("it fails fast") {
+                shouldThrow<IllegalArgumentException> {
+                    Config.loadFrom(lookupOf(mapOf("OTEL_TRACES_EXPORTER" to "jaeger")))
+                }
+            }
+        }
+
+        When("the capture-message-content flag is set true") {
+            Then("it parses to true") {
+                val c = Config.loadFrom(
+                    lookupOf(mapOf("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" to "true")),
+                )
+                c.otelCaptureMessageContent shouldBe true
+            }
+        }
+
+        When("OTLP headers carry a secret") {
+            Then("toString masks them") {
+                val c = Config.loadFrom(
+                    lookupOf(
+                        mapOf(
+                            "OTEL_TRACES_EXPORTER" to "otlp",
+                            "OTEL_EXPORTER_OTLP_ENDPOINT" to "http://localhost:4318",
+                            "OTEL_EXPORTER_OTLP_HEADERS" to "api-key=supersecret",
+                        ),
+                    ),
+                )
+                c.toString() shouldContain "otelExporterOtlpHeaders=***"
+                c.toString() shouldNotContain "supersecret"
+            }
+        }
+    }
 })

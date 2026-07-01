@@ -29,7 +29,7 @@ class ArchitectureTest : BehaviorSpec({
     }
 
     Given("the deterministic tooling packages") {
-        val tooling = listOf("auth", "githubapi", "gitrepo", "webhook", "notify", "tasks")
+        val tooling = listOf("auth", "githubapi", "gitrepo", "webhook", "notify", "tasks", "obs")
         When("inspecting every tooling file's imports") {
             val violations = files
                 .filter { f -> tooling.any { pkg -> f.packagee?.name?.endsWith(".$pkg") == true } }
@@ -65,6 +65,25 @@ class ArchitectureTest : BehaviorSpec({
         }
     }
 
+    Given("every main source file outside the config package") {
+        // Only config may reference an OTEL_* env-var literal; the rest of the service takes tracing
+        // settings as a typed struct (config is the single environment reader). Comments are stripped
+        // first so a KDoc that names `OTEL_*` in prose is not a violation — only a string literal that
+        // begins with OTEL_ (an env-var read like get("OTEL_...")) counts.
+        val otelReadRe = Regex("[\"']OTEL_")
+        When("scanning for OTEL_ env-var literals") {
+            val violations = files
+                .filter { it.path.contains("/src/main/") }
+                .filter { it.packagee?.name?.endsWith(".config") != true }
+                .filter { otelReadRe.containsMatchIn(stripComments(it.text)) }
+                .map { "${it.path} references an OTEL_ env-var literal — only config may read OTEL_*" }
+                .sorted()
+            Then("only config reads the OTEL_* environment") {
+                violations shouldBe emptyList()
+            }
+        }
+    }
+
     Given("every source file outside the app entrypoint package") {
         When("inspecting imports of the app package") {
             val violations = files
@@ -78,3 +97,9 @@ class ArchitectureTest : BehaviorSpec({
         }
     }
 })
+
+/** Strips block and line comments so a comment that names OTEL_* in prose is not mistaken for a read. */
+private fun stripComments(src: String): String =
+    src
+        .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(Regex("//[^\n]*"), "")

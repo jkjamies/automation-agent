@@ -119,8 +119,16 @@ When you add a fixer (e.g. a `format` or `typecheck` fixer):
 4. Add a CI-author example to [`ci-integration.md`](ci-integration.md).
 5. Confirm the new check name collides with no existing one (see the rules above).
 
+## Tracing
+
+When tracing is enabled, an inbound `/webhooks/*` request is the **server-span / trace root**, and
+`/internal/dispatch` (the Cloud Tasks worker) continues that trace from the task's `traceparent`
+header — so a webhook and the workflow it triggers share one trace. `/healthz` is excluded. This is
+transparent to the routing contract above; see [`observability.md`](observability.md).
+
 ## See also
 
 - [`ci-integration.md`](ci-integration.md) — CI-author how-to: workflow YAML, kickoff signing, per-stack examples, the resume verify-check workflows.
 - [`architecture-design.md`](architecture-design.md) §8 — why a dedicated, branch-gated agent check exists and how the suspend/resume loop works.
+- [`observability.md`](observability.md) — how the ingress span roots the trace and the flush-before-return constraint.
 - [`language-parity.md`](language-parity.md) — routes and check names as a cross-port external contract.

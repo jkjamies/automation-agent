@@ -24,6 +24,7 @@ Package root: `com.automation.agent` under `src/main/kotlin/...`.
 | `gitrepo` | `internal/gitrepo` | git working-tree tooling |
 | `webhook` | `internal/webhook` | HTTP ingress |
 | `tasks` | `internal/tasks` | execution transport (in-process \| Cloud Tasks → `/internal/dispatch`) |
+| `obs` | `internal/obs` | distributed tracing (OpenTelemetry); off by default |
 | `agent.setup` | `internal/agent/setup` | LLM builder, Ollama adapter, prompt loader, runner |
 | `agent.root` | `internal/agent/root` | dispatcher |
 | `agent.summary` | `internal/agent/summary` | commit-digest workflow |
@@ -36,9 +37,9 @@ Package root: `com.automation.agent` under `src/main/kotlin/...`.
 - **Every package directory has an `AGENTS.md`.**
 - **Build-agent pattern:** pure wiring (a `build<Name>Agent` function) is split from
   testable logic. See `../.agents/standards/agent-build-pattern.md`.
-- **Import boundaries:** tooling (`githubapi`, `gitrepo`, `notify`, `webhook`)
+- **Import boundaries:** tooling (`githubapi`, `gitrepo`, `notify`, `webhook`, `tasks`, `obs`)
   must not import `agent.*`; provider SDKs (Ollama/Gemini) only in `agent.setup`; `config`
-  is the only environment reader.
+  is the only environment reader (including `OTEL_*`).
 - **Prompts are markdown** under `src/main/resources/prompts/<agent>/`, loaded from the
   classpath (the `embed.FS` equivalent).
 - **Testing:** [Kotest](https://kotest.io) `BehaviorSpec` with `Given`/`When`/`Then` blocks
