@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 
+import pytest
 from fastapi.testclient import TestClient
 
 from automation_agent.config import load_from
@@ -101,8 +102,5 @@ def test_review_config_overrides_and_validation() -> None:
         {"REVIEW_MIN_CONFIDENCE": "1.5"},
         {"REVIEW_UNCITED_MODE": "bogus"},
     ):
-        try:
+        with pytest.raises(ValueError):
             load_from(bad.get)
-            raise AssertionError(f"expected validation error for {bad}")
-        except ValueError:
-            pass
