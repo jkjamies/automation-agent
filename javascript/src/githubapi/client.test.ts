@@ -21,6 +21,9 @@ interface FakeOpts {
   onePull?: unknown; // pulls.get response body
   reviewComments?: unknown[];
   tree?: { tree: unknown[]; truncated: boolean };
+  issueComments?: unknown[]; // for upsertMarkerComment
+  updateError?: { status?: number; message?: string }; // updateComment failure
+  graphqlError?: Error; // minimizeComment failure
 }
 
 interface Seen {
@@ -32,9 +35,17 @@ interface Seen {
   checkFilterSeen?: string;
   contentsRef?: string | undefined;
   compareBaseHead?: string;
+  review?: Record<string, unknown>; // pulls.createReview params
+  checkCreated?: Record<string, unknown>; // checks.create params
+  createdComment?: { issue_number: number; body: string };
+  updatedComment?: { comment_id: number; body: string };
+  graphqlVars?: Record<string, unknown>; // minimize mutation variables
 }
 
-function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
+function makeClient(
+  opts: FakeOpts,
+  clientOpts: { authoredLogin?: string; appAuthored?: boolean } = {},
+): { client: Client; seen: Seen } {
   const seen: Seen = {};
 
   // The real Octokit.paginate(fn, params) dispatches by the passed method
@@ -64,6 +75,10 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
     get: async () => ({ data: opts.onePull ?? {} }),
     listFiles: tag('prFiles', async () => ({ data: opts.prFiles ?? [] })),
     listReviewComments: tag('reviewComments', async () => ({ data: opts.reviewComments ?? [] })),
+    createReview: async (params: Record<string, unknown>) => {
+      seen.review = params;
+      return {};
+    },
   };
   const git = {
     getTree: async () => ({ data: opts.tree ?? { tree: [], truncated: false } }),
@@ -73,6 +88,20 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       seen.labeled = { number: params.issue_number, labels: params.labels };
       return {};
     },
+    listComments: tag('issueComments', async () => ({ data: opts.issueComments ?? [] })),
+    createComment: async (params: { issue_number: number; body: string }) => {
+      seen.createdComment = { issue_number: params.issue_number, body: params.body };
+      return {};
+    },
+    updateComment: async (params: { comment_id: number; body: string }) => {
+      if (opts.updateError) {
+        throw Object.assign(new Error(opts.updateError.message ?? 'update failed'), {
+          status: opts.updateError.status,
+        });
+      }
+      seen.updatedComment = { comment_id: params.comment_id, body: params.body };
+      return {};
+    },
   };
   const checks = {
     listForRef: async (params: { ref: string; check_name: string; filter: string }) => {
@@ -80,6 +109,10 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       seen.checkFilterSeen = params.filter;
       const runs = opts.checkRunsByRef?.[params.ref] ?? [];
       return { data: { total_count: runs.length, check_runs: runs } };
+    },
+    create: async (params: Record<string, unknown>) => {
+      seen.checkCreated = params;
+      return {};
     },
   };
 
@@ -91,9 +124,16 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       const res = await (fn as (p: unknown) => Promise<{ data: unknown[] }>)(params);
       return res.data;
     },
+    graphql: async (_query: string, variables?: Record<string, unknown>) => {
+      if (opts.graphqlError) {
+        throw opts.graphqlError;
+      }
+      seen.graphqlVars = variables;
+      return {};
+    },
   };
 
-  return { client: Client.withOctokit(gh), seen };
+  return { client: Client.withOctokit(gh, clientOpts), seen };
 }
 
 /** Attach a tag so a no-op (kept for symmetry with octokit's dispatch). */
@@ -399,6 +439,128 @@ describe('listReviewComments', () => {
   });
 });
 
+// --- reviewer write methods --------------------------------------------------
+
+describe('createReview', () => {
+  it('posts an advisory COMMENT review with inline comments, omitting an empty body', async () => {
+    const { client, seen } = makeClient({});
+    await client.createReview('o', 'r', 7, {
+      body: 'summary',
+      comments: [{ path: 'a.ts', line: 3, side: 'RIGHT', body: 'inline' }],
+    });
+    expect(seen.review).toMatchObject({
+      owner: 'o',
+      repo: 'r',
+      pull_number: 7,
+      event: 'COMMENT',
+      body: 'summary',
+      comments: [{ path: 'a.ts', line: 3, side: 'RIGHT', body: 'inline' }],
+    });
+
+    const { client: c2, seen: s2 } = makeClient({});
+    await c2.createReview('o', 'r', 7, { body: '', comments: [] });
+    expect('body' in (s2.review ?? {})).toBe(false); // empty body is omitted
+  });
+});
+
+describe('createCheckRun', () => {
+  it('creates a completed advisory check', async () => {
+    const { client, seen } = makeClient({});
+    await client.createCheckRun('o', 'r', {
+      name: 'agent-review',
+      headSha: 'sha',
+      conclusion: 'neutral',
+      title: 't',
+      summary: 's',
+    });
+    expect(seen.checkCreated).toMatchObject({
+      name: 'agent-review',
+      head_sha: 'sha',
+      status: 'completed',
+      conclusion: 'neutral',
+      output: { title: 't', summary: 's' },
+    });
+  });
+
+  it('rejects a non-advisory conclusion at the API boundary', async () => {
+    const { client } = makeClient({});
+    await expect(
+      client.createCheckRun('o', 'r', { name: 'agent-review', headSha: 'sha', conclusion: 'failure', title: '', summary: '' }),
+    ).rejects.toThrow(/must be success or neutral/);
+  });
+});
+
+describe('minimizeComment', () => {
+  it('posts the OUTDATED minimize mutation with the node id', async () => {
+    const { client, seen } = makeClient({});
+    await client.minimizeComment('NODE1');
+    expect(seen.graphqlVars).toEqual({ id: 'NODE1' });
+  });
+
+  it('wraps a GraphQL error', async () => {
+    const { client } = makeClient({ graphqlError: new Error('boom') });
+    await expect(client.minimizeComment('NODE1')).rejects.toThrow(/minimize comment NODE1: boom/);
+  });
+});
+
+describe('upsertMarkerComment', () => {
+  const marker = '<!-- automation-agent:review:o/r#7 -->';
+  const body = `${marker}\nsummary`;
+
+  it('rejects an empty marker or a body missing the marker', async () => {
+    const { client } = makeClient({});
+    await expect(client.upsertMarkerComment('o', 'r', 7, '', body)).rejects.toThrow(/empty marker/);
+    await expect(client.upsertMarkerComment('o', 'r', 7, marker, 'no marker here')).rejects.toThrow(
+      /must contain the marker/,
+    );
+  });
+
+  it('creates a fresh comment when none carries the marker', async () => {
+    const { client, seen } = makeClient({ issueComments: [{ id: 1, body: 'unrelated', user: { login: 'x' } }] });
+    await client.upsertMarkerComment('o', 'r', 7, marker, body);
+    expect(seen.createdComment).toEqual({ issue_number: 7, body });
+    expect(seen.updatedComment).toBeUndefined();
+  });
+
+  it('edits its own marker comment (authoritative login match)', async () => {
+    const { client, seen } = makeClient(
+      { issueComments: [{ id: 42, body: `${marker}\nold`, user: { login: 'agent[bot]', type: 'Bot' } }] },
+      { authoredLogin: 'agent[bot]' },
+    );
+    await client.upsertMarkerComment('o', 'r', 7, marker, body);
+    expect(seen.updatedComment).toEqual({ comment_id: 42, body });
+    expect(seen.createdComment).toBeUndefined();
+  });
+
+  it('skips a foreign marker comment when the login is known, creating a fresh one', async () => {
+    const { client, seen } = makeClient(
+      { issueComments: [{ id: 42, body: `${marker}\nold`, user: { login: 'someone-else' } }] },
+      { authoredLogin: 'agent[bot]' },
+    );
+    await client.upsertMarkerComment('o', 'r', 7, marker, body);
+    expect(seen.updatedComment).toBeUndefined();
+    expect(seen.createdComment).toEqual({ issue_number: 7, body });
+  });
+
+  it('App fallback trusts only bot-authored comments when the login is unresolved', async () => {
+    const { client, seen } = makeClient(
+      { issueComments: [{ id: 42, body: `${marker}\nold`, user: { type: 'Bot' } }] },
+      { appAuthored: true },
+    );
+    await client.upsertMarkerComment('o', 'r', 7, marker, body);
+    expect(seen.updatedComment).toEqual({ comment_id: 42, body });
+  });
+
+  it('on the weak fallback, a 403/404 edit is skipped and a fresh comment is created', async () => {
+    const { client, seen } = makeClient(
+      { issueComments: [{ id: 42, body: `${marker}\nold`, user: { type: 'Bot' } }], updateError: { status: 403 } },
+      { appAuthored: true }, // authoredLogin unresolved → weak fallback
+    );
+    await client.upsertMarkerComment('o', 'r', 7, marker, body);
+    expect(seen.createdComment).toEqual({ issue_number: 7, body });
+  });
+});
+
 // --- error wrapping ----------------------------------------------------------
 
 describe('error wrapping', () => {
@@ -410,6 +572,7 @@ describe('error wrapping', () => {
       paginate: async () => {
         throw new Error('network down');
       },
+      graphql: async () => ({}),
     };
     const client = Client.withOctokit(gh);
     await expect(client.listCommitsSince('o', 'r', new Date())).rejects.toThrow(

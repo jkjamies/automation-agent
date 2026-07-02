@@ -9,19 +9,32 @@
  *
  * The flow per pull_request event: parse it, apply the trigger and skip rules, fetch the changed
  * files via the REST API, filter generated/vendored churn, and apply the two-dimensional size gate
- * to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass and
- * scores the findings (count-based scorecard). Publishing the scored review to the PR is a
- * follow-up.
+ * to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass,
+ * scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
+ * inline comments, a marker-updated summary comment, and an advisory agent-review check —
+ * reconciled against the PR's existing comments and steered off the reviewed repo's own standards
+ * when present. Deny publishes the "too large, please split" summary + a neutral check.
  */
 
 import type { BaseLlm } from '@google/adk';
 
-import { type PRFile, type PullRequestEvent, parsePullRequestEvent } from '../../githubapi/client';
+import {
+  type CheckResult,
+  type CheckRunInput,
+  type PRFile,
+  type PullRequestEvent,
+  type ReviewCommentRef,
+  type ReviewInput,
+  type TreeEntry,
+  parsePullRequestEvent,
+} from '../../githubapi/client';
 import { FileFilter } from './filter';
 import { clampThreshold } from './findings';
+import { type PublishMeta, publish, publishDeny } from './publish';
 import { runReview } from './review';
 import { levelGlyph } from './scorecard';
 import { oversize } from './sizegate';
+import { StandardsCache, discoverStandards } from './standards';
 
 /**
  * Marks branches the fixers create (they push to automation-agent/...). The reviewer skips PRs from
@@ -41,13 +54,28 @@ export interface Logger {
 const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {} };
 
 /**
- * The slice of `githubapi.Client` the reviewer needs to detect and analyze a PR: read the changed
- * files (with patches) and read the head SHA (to detect a task superseded by a newer push). A local
- * interface keeps the engine testable with a fake.
+ * The slice of `githubapi.Client` the reviewer needs: read the changed files (with patches), read
+ * the head SHA and repo tree, and publish the review (an advisory review with inline comments, the
+ * marker-updated summary comment, and the advisory agent-review check). A local interface keeps the
+ * engine testable with a fake.
  */
 export interface GitHubClient {
   listPRFiles(owner: string, repo: string, num: number): Promise<PRFile[]>;
+  createReview(owner: string, repo: string, num: number, input: ReviewInput): Promise<void>;
+  upsertMarkerComment(
+    owner: string,
+    repo: string,
+    num: number,
+    marker: string,
+    body: string,
+  ): Promise<void>;
+  createCheckRun(owner: string, repo: string, input: CheckRunInput): Promise<void>;
+  listReviewComments(owner: string, repo: string, num: number): Promise<ReviewCommentRef[]>;
+  minimizeComment(subjectId: string): Promise<void>;
+  agentCheck(owner: string, repo: string, ref: string, checkName: string): Promise<CheckResult>;
   pullRequestHeadSha(owner: string, repo: string, num: number): Promise<string>;
+  tree(owner: string, repo: string, ref: string): Promise<{ entries: TreeEntry[]; truncated: boolean }>;
+  getFileContent(owner: string, repo: string, path: string, ref?: string): Promise<string>;
 }
 
 /** Wires the reviewer engine. */
@@ -112,9 +140,10 @@ export interface Decision {
 export class Engine {
   readonly enabled: boolean;
   // gh / baseLlm / codeLlm are required for real work; kickoff guards each with a controlled error
-  // before any use (disabled/skip/deny paths never touch the missing one), so the collaborators can
-  // treat them as always-present.
-  private readonly gh: GitHubClient | null;
+  // before any use (disabled/skip/deny paths never touch the missing one), so the collaborators
+  // (publish, standards) can treat them as always-present. gh is public so those sibling modules
+  // reach it as `engine.gh`.
+  readonly gh: GitHubClient | null;
   readonly baseLlm: BaseLlm | null;
   readonly codeLlm: BaseLlm | null;
   readonly minConfidence: number;
@@ -126,6 +155,7 @@ export class Engine {
   readonly standardsGlobs: string[];
   readonly standardsMaxBytes: number;
   readonly uncitedDrop: boolean;
+  readonly standardsCache: StandardsCache;
   readonly log: Logger;
 
   constructor(d: Deps) {
@@ -142,6 +172,7 @@ export class Engine {
     this.standardsGlobs = d.standardsGlobs ?? [];
     this.standardsMaxBytes = d.standardsMaxBytes ?? 0;
     this.uncitedDrop = d.uncitedDrop ?? false;
+    this.standardsCache = new StandardsCache();
     this.log = d.log ?? NOOP_LOGGER;
   }
 
@@ -173,20 +204,29 @@ export class Engine {
     }
     const d = await this.decide(ev);
     const pr = `${ev.repoFullName}#${ev.number}`;
-    // decide() already validated the full name before reaching a deny/review decision, so a
-    // malformed name here means skip.
+    // owner/repo are only used by the publish paths; decide() already validated the full name before
+    // reaching a deny/review decision, so a malformed name here means skip.
     const { owner, repo } = splitFullName(ev.repoFullName);
     // Coalesce-to-latest: a deny/review acts on the event's SHA, so if a newer push has superseded
-    // it, skip rather than produce a stale review. A skip produced nothing.
+    // it, skip rather than post a stale review. A skip produced nothing.
     if (d.kind !== DecisionKind.Skip && (await this.superseded(owner, repo, ev))) {
       this.log.info('stale review skipped (superseded by a newer push)', { pr, eventSha: ev.headSha });
       return;
     }
+    const meta: PublishMeta = {
+      owner,
+      repo,
+      number: ev.number,
+      headSha: ev.headSha,
+      files: d.files,
+      tiers: 'code-reasoning + base',
+      standards: [],
+    };
     if (d.kind === DecisionKind.Skip) {
       this.log.info('review skipped', { pr, action: ev.action, reason: d.reason });
     } else if (d.kind === DecisionKind.Deny) {
-      // Too large to review: it is denied, not degraded. Publishing the "please split" notice is a
-      // follow-up.
+      // Too large to review: post the "please split" summary + a neutral check, no model call.
+      await publishDeny(this, meta, d.reason, d.files.length, d.diffBytes);
       this.log.info('review denied', {
         pr,
         files: d.files.length,
@@ -198,9 +238,13 @@ export class Engine {
       if (this.baseLlm === null || this.codeLlm === null) {
         throw new Error('reviewer: enabled but review models not configured');
       }
-      const { card } = await runReview(this, d.files);
-      // Publishing the scored review to the PR is a follow-up.
-      this.log.info('review scored', {
+      // Steer the lenses off the reviewed repo's own conventions; null when disabled or none found,
+      // in which case the lenses review generically.
+      const std = await discoverStandards(this, owner, repo, ev.headSha, d.files);
+      meta.standards = std !== null ? std.sourceList() : [];
+      const { card, findings } = await runReview(this, d.files, std);
+      await publish(this, card, findings, meta);
+      this.log.info('review published', {
         pr,
         files: d.files.length,
         overall: levelGlyph(card.overall),

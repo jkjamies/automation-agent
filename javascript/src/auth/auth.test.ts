@@ -42,6 +42,7 @@ function decodeJwt(jwt: string): { header: Record<string, unknown>; payload: Rec
  */
 class Stub {
   expiresAt = FAR_FUTURE;
+  slug = 'octoapp';
   requests: Array<{ path: string; auth: string }> = [];
   private readonly server: Server;
 
@@ -53,7 +54,14 @@ class Stub {
       });
       req.on('end', () => {
         void body;
-        this.requests.push({ path: req.url ?? '', auth: req.headers.authorization ?? '' });
+        const path = req.url ?? '';
+        this.requests.push({ path, auth: req.headers.authorization ?? '' });
+        // GET /app resolves the App's own identity (its slug) via the App JWT.
+        if (path === '/app') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ slug: this.slug }));
+          return;
+        }
         const payload = JSON.stringify({
           token: TOKEN,
           expires_at: this.expiresAt,
@@ -64,6 +72,10 @@ class Stub {
         res.end(payload);
       });
     });
+  }
+
+  get appRequests(): Array<{ path: string; auth: string }> {
+    return this.requests.filter((r) => r.path === '/app');
   }
 
   listen(): Promise<void> {
@@ -98,6 +110,17 @@ describe('StaticProvider', () => {
     const p = new StaticProvider('');
     expect(await p.token('acme/api')).toBe('');
     expect(p.github()).toBeDefined();
+  });
+
+  it('authoredLogin resolves the PAT user login, but is "" for an empty token', async () => {
+    expect(await new StaticProvider('').authoredLogin()).toBe(''); // anonymous, no identity
+
+    const p = new StaticProvider('pat-123');
+    // Redirect the private client at a fake GET /user without a real network call.
+    (p as unknown as { gh: { rest: { users: { getAuthenticated: () => Promise<{ data: { login: string } }> } } } }).gh = {
+      rest: { users: { getAuthenticated: () => Promise.resolve({ data: { login: 'pat-user' } }) } },
+    };
+    expect(await p.authoredLogin()).toBe('pat-user');
   });
 });
 
@@ -162,5 +185,20 @@ describe('AppProvider', () => {
   it('shares one Octokit client between REST and git', () => {
     const p = newAppProvider(42, 99, PEM, stub.baseUrl);
     expect(p.github()).toBe(p.github());
+  });
+
+  it('resolves and caches the "<slug>[bot]" authored login via a JWT GET /app', async () => {
+    const p = newAppProvider(42, 99, PEM, stub.baseUrl);
+    expect(await p.authoredLogin()).toBe('octoapp[bot]');
+    expect(await p.authoredLogin()).toBe('octoapp[bot]'); // cached — no second lookup
+    expect(stub.appRequests).toHaveLength(1);
+    // GET /app authenticates as the App with an RS256 JWT (bearer), not the installation token.
+    expect(stub.appRequests[0]!.auth).toMatch(/^bearer /i);
+  });
+
+  it('throws when the app identity response has no slug', async () => {
+    stub.slug = '';
+    const p = newAppProvider(42, 99, PEM, stub.baseUrl);
+    await expect(p.authoredLogin()).rejects.toThrow(/no slug/);
   });
 });

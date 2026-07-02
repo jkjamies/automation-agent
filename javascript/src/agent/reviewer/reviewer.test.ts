@@ -4,7 +4,15 @@
 // LLM output — only orchestration and deterministic logic.
 import { describe, expect, it } from 'vitest';
 
-import type { PRFile, PullRequestEvent } from '../../githubapi/client';
+import type {
+  CheckResult,
+  CheckRunInput,
+  PRFile,
+  PullRequestEvent,
+  ReviewCommentRef,
+  ReviewInput,
+  TreeEntry,
+} from '../../githubapi/client';
 import { FakeLlm } from '../../testutil/fakes';
 import {
   type Deps,
@@ -19,13 +27,34 @@ import { DecisionKind } from './reviewer';
 import { Tier } from './categories';
 import { formatDiff, maxBacktickRun, modelForTier, runReview } from './review';
 import { Level } from './scorecard';
+import { discoverStandards } from './standards';
 
-/** A stub GitHub client: returns canned files (or throws) and a canned head SHA. */
+interface FakeOpts {
+  listError?: Error;
+  headSha?: string;
+  headShaError?: Error;
+  existingComments?: ReviewCommentRef[];
+  agentCheckFound?: boolean;
+  minimizeError?: Error;
+  treeEntries?: TreeEntry[];
+  treeTruncated?: boolean;
+  fileContents?: Record<string, string>;
+}
+
+/**
+ * A stub GitHub client: returns canned files/head SHA and captures the publish-stage REST writes
+ * (reviews, checks, marker upserts, minimizes) so tests assert orchestration, never LLM output.
+ */
 class FakeGH implements GitHubClient {
   calls = 0;
+  readonly reviews: ReviewInput[] = [];
+  readonly checkRuns: CheckRunInput[] = [];
+  readonly upserts: Array<{ marker: string; body: string }> = [];
+  readonly minimized: string[] = [];
+
   constructor(
     private readonly files: PRFile[] = [],
-    private readonly opts: { listError?: Error; headSha?: string; headShaError?: Error } = {},
+    private readonly opts: FakeOpts = {},
   ) {}
 
   async listPRFiles(): Promise<PRFile[]> {
@@ -41,6 +70,56 @@ class FakeGH implements GitHubClient {
       throw this.opts.headShaError;
     }
     return this.opts.headSha ?? '';
+  }
+
+  createReview(_o: string, _r: string, _n: number, input: ReviewInput): Promise<void> {
+    this.reviews.push(input);
+    return Promise.resolve();
+  }
+
+  upsertMarkerComment(_o: string, _r: string, _n: number, marker: string, body: string): Promise<void> {
+    this.upserts.push({ marker, body });
+    return Promise.resolve();
+  }
+
+  createCheckRun(_o: string, _r: string, input: CheckRunInput): Promise<void> {
+    this.checkRuns.push(input);
+    return Promise.resolve();
+  }
+
+  listReviewComments(): Promise<ReviewCommentRef[]> {
+    return Promise.resolve(this.opts.existingComments ?? []);
+  }
+
+  minimizeComment(subjectId: string): Promise<void> {
+    if (this.opts.minimizeError) {
+      return Promise.reject(this.opts.minimizeError);
+    }
+    this.minimized.push(subjectId);
+    return Promise.resolve();
+  }
+
+  agentCheck(): Promise<CheckResult> {
+    return Promise.resolve({
+      found: this.opts.agentCheckFound ?? false,
+      name: '',
+      status: '',
+      conclusion: '',
+      outputText: '',
+      startedAt: null,
+      completedAt: null,
+    });
+  }
+
+  tree(): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
+    return Promise.resolve({
+      entries: this.opts.treeEntries ?? [],
+      truncated: this.opts.treeTruncated ?? false,
+    });
+  }
+
+  getFileContent(_o: string, _r: string, path: string): Promise<string> {
+    return Promise.resolve(this.opts.fileContents?.[path] ?? '');
   }
 }
 
@@ -179,13 +258,33 @@ describe('kickoff', () => {
 
   it('runs the review path to a scorecard', async () => {
     const canned = '[{"file":"main.go","line":1,"dimension":"performance","severity":"medium","message":"slow","confidence":0.9}]';
-    const gh = new FakeGH([prFile({ path: 'main.go', patch: '@@\n+x', status: 'modified' })]);
+    const gh = new FakeGH([prFile({ path: 'main.go', patch: '@@ -1 +1 @@\n+x', status: 'modified' })]);
     const log = new CaptureLog();
     const e = engine(gh, canned, { log });
     const body = '{"action":"opened","pull_request":{"number":7,"head":{"ref":"feature/x"},"base":{"ref":"main"}},"repository":{"full_name":"o/r"}}';
     await e.kickoff(body);
     expect(gh.calls).toBe(1);
-    expect(log.infos).toContain('review scored');
+    expect(log.infos).toContain('review published');
+    // Publish stage: the in-diff finding posts inline, the summary comment upserts, and exactly one
+    // advisory check is created — success|neutral, never failure.
+    expect(gh.reviews).toHaveLength(1);
+    expect(gh.reviews[0]!.comments[0]!.body).toContain('<!-- ar-fp:');
+    expect(gh.upserts).toHaveLength(1);
+    expect(gh.upserts[0]!.marker).toBe('<!-- automation-agent:review:o/r#7 -->');
+    expect(gh.checkRuns).toHaveLength(1);
+    expect(gh.checkRuns[0]!.name).toBe('agent-review');
+    expect(['success', 'neutral']).toContain(gh.checkRuns[0]!.conclusion);
+  });
+
+  it('skips re-posting when the head SHA was already published', async () => {
+    const canned = '[{"file":"main.go","line":1,"dimension":"performance","severity":"medium","message":"slow","confidence":0.9}]';
+    const gh = new FakeGH([prFile({ path: 'main.go', patch: '@@\n+x', status: 'modified' })], {
+      agentCheckFound: true,
+    });
+    const body = '{"action":"opened","pull_request":{"number":7,"head":{"ref":"feature/x","sha":"s"},"base":{"ref":"main"}},"repository":{"full_name":"o/r"}}';
+    await engine(gh, canned).kickoff(body);
+    expect(gh.checkRuns).toHaveLength(0); // already-published guard short-circuits the writes
+    expect(gh.upserts).toHaveLength(0);
   });
 
   it('skips a stale review superseded by a newer push, proceeds on a lookup error', async () => {
@@ -196,15 +295,15 @@ describe('kickoff', () => {
     const stale = new CaptureLog();
     await engine(new FakeGH(real, { headSha: 'newsha' }), '[]', { log: stale }).kickoff(body('oldsha'));
     expect(stale.infos).toContain('stale review skipped (superseded by a newer push)');
-    expect(stale.infos).not.toContain('review scored');
+    expect(stale.infos).not.toContain('review published');
 
     const current = new CaptureLog();
     await engine(new FakeGH(real, { headSha: 'samesha' }), '[]', { log: current }).kickoff(body('samesha'));
-    expect(current.infos).toContain('review scored');
+    expect(current.infos).toContain('review published');
 
     const errored = new CaptureLog();
     await engine(new FakeGH(real, { headShaError: new Error('boom') }), '[]', { log: errored }).kickoff(body('oldsha'));
-    expect(errored.infos).toContain('review scored'); // best-effort: lookup error proceeds
+    expect(errored.infos).toContain('review published'); // best-effort: lookup error proceeds
   });
 
   it('logs a deny decision without running the model', async () => {
@@ -214,6 +313,10 @@ describe('kickoff', () => {
     const body = '{"action":"opened","pull_request":{"number":9,"head":{"ref":"feature/x"}},"repository":{"full_name":"o/r"}}';
     await e.kickoff(body);
     expect(log.infos).toContain('review denied');
+    // Deny publishes a "please split" summary + a neutral check, no inline review.
+    expect(gh.reviews).toHaveLength(0);
+    expect(gh.upserts[0]!.body).toContain('too large for automated review');
+    expect(gh.checkRuns[0]!.conclusion).toBe('neutral');
   });
 });
 
@@ -221,7 +324,7 @@ describe('review pipeline (canned findings)', () => {
   it('dedups every lens to one finding and scores it', async () => {
     const canned = '[{"file":"main.go","line":10,"dimension":"runtime_safety","severity":"major","message":"nil deref","confidence":0.9}]';
     const files = [prFile({ path: 'main.go', patch: '@@ -1 +1 @@\n+x', status: 'modified' })];
-    const { card } = await runReview(engine(new FakeGH(), canned), files);
+    const { card } = await runReview(engine(new FakeGH(), canned), files, null);
     expect(card.total).toBe(1);
     expect(card.overall).toBe(Level.Yellow);
   });
@@ -229,12 +332,45 @@ describe('review pipeline (canned findings)', () => {
   it('drops a low-confidence finding and an empty lens', async () => {
     const files = [prFile({ path: 'main.go', patch: '+x' })];
     const low = '[{"file":"main.go","line":10,"dimension":"security","severity":"critical","message":"x","confidence":0.2}]';
-    const dropped = await runReview(engine(new FakeGH(), low), files);
+    const dropped = await runReview(engine(new FakeGH(), low), files, null);
     expect(dropped.card.total).toBe(0);
     expect(dropped.card.overall).toBe(Level.Green);
 
-    const empty = await runReview(engine(new FakeGH(), '[]'), files);
+    const empty = await runReview(engine(new FakeGH(), '[]'), files, null);
     expect(empty.card.total).toBe(0);
+  });
+});
+
+describe('standards discovery', () => {
+  const stdOverrides = { standardsEnabled: true, standardsGlobs: ['AGENTS.md'], standardsMaxBytes: 100_000 };
+
+  it('discovers, distills, and caches the repo standards', async () => {
+    const rules = '[{"id":"R1","dimension":"security","summary":"no secrets","source":"AGENTS.md"}]';
+    const gh = new FakeGH([prFile({ path: 'src/a.ts', patch: '+x' })], {
+      treeEntries: [{ path: 'AGENTS.md', sha: 's1', type: 'blob' }],
+      fileContents: { 'AGENTS.md': '# rules\nNo secrets in code.' },
+    });
+    const e = engine(gh, rules, stdOverrides);
+    const std = await discoverStandards(e, 'o', 'r', 'sha', [prFile({ path: 'src/a.ts' })]);
+    expect(std).not.toBeNull();
+    expect(std!.rules.map((r) => r.id)).toEqual(['R1']);
+    expect(std!.sourceList()).toEqual(['AGENTS.md']);
+    // Cached on the docs SHA: a second call reuses the memoized result (no re-distill).
+    const again = await discoverStandards(e, 'o', 'r', 'sha', [prFile({ path: 'src/a.ts' })]);
+    expect(again).toBe(std);
+  });
+
+  it('degrades to generic (null) on a truncated tree', async () => {
+    const gh = new FakeGH([], {
+      treeEntries: [{ path: 'AGENTS.md', sha: 's1', type: 'blob' }],
+      treeTruncated: true,
+    });
+    expect(await discoverStandards(engine(gh, '[]', stdOverrides), 'o', 'r', 'sha', [])).toBeNull();
+  });
+
+  it('returns null when standards are disabled', async () => {
+    const e = engine(new FakeGH(), '[]', { standardsEnabled: false });
+    expect(await discoverStandards(e, 'o', 'r', 'sha', [])).toBeNull();
   });
 });
 

@@ -1,9 +1,9 @@
 /**
  * The in-house PR code-review workflow (a CodeRabbit-style advisory reviewer).
  *
- * It reacts to GitHub `pull_request` events (routed as {@link Kind.Review}) and produces a
- * count-based scorecard from per-category sub-agent findings. It is comment-only and never opens
- * PRs. Publishing the scored review to the PR is a follow-up.
+ * It reacts to GitHub `pull_request` events (routed as {@link Kind.Review}) and posts per-category
+ * sub-agent findings, a count-based scorecard, inline comments with suggestions, and an advisory
+ * `agent-review` check. Comment-only; it never opens PRs.
  */
 
 export { enqueueOptions } from './enqueue';
