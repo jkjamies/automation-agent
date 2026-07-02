@@ -45,6 +45,55 @@ flowchart TD
     Models -.-> CFK
 ```
 
+## Resume flow (detailed)
+
+The system flow above is kickoff-centric: an event arrives and a workflow *starts*. A
+fixer's **resume** is a separate, later request — the CI check for a parked run reports
+back minutes-to-hours after kickoff and re-enters through the same front door. Only the
+two fixers (lint, coverage) resume; the summary workflow is one-shot. This is the detail
+behind the system flow's `PR -> check_run -> resume` edge, including the durable
+`ParkStore` lookup that reconnects the event to its suspended run.
+
+```mermaid
+flowchart TD
+    CR["GitHub: check_run completed<br/>(agent-*-verify, on the fix branch)"] --> GW["managed API gateway (single ingress)"]
+    GW --> WCI["POST /webhooks/github (check_run)"]
+    WCI -->|"KindCI, check_run body"| Env["ingest.Envelope{Kind, Source, Payload}"]
+    Env --> TX{"execution transport (TASKS_BACKEND)"}
+    TX -->|"inprocess: in-process worker pool (local)"| Disp
+    TX -->|"cloudtasks: Cloud Tasks -> POST /internal/dispatch (in-request)"| Disp
+    Disp["root.Dispatcher.dispatch (by Kind)"] -->|ci| RES["fixer.resume(payload)"]
+
+    RES --> NM{"check name == spec.check_name?"}
+    NM -->|no| NOOP["no-op (another engine owns this check)"]
+    NM -->|yes| CLAIM["park_store.resolve_by_pr_key(owner/repo#pr)<br/>atomic single-winner claim"]
+    CLAIM -->|"late / duplicate / already-claimed / unknown"| NOOP2["no-op (resolved at most once)"]
+
+    subgraph Store["Durable park/session store — SESSION_BACKEND: memory | sqlite | firestore"]
+        PRK["pr_key index: owner/repo#pr -> session id"] --> REC["ParkRecord{session_id, attempts, check_name}"]
+        REC --> SESS["ADK session (suspended run history)"]
+    end
+    CLAIM -->|"pr_key -> session id"| PRK
+
+    CLAIM --> CONC{check_run conclusion}
+    CONC -->|success| OK["status-aware summary (success) + clear:<br/>delete ParkRecord + ADK session"]
+    CONC -->|"failure & attempts >= max_iter"| REV["status-aware summary (needs review) + clear"]
+    CONC -->|"failure & attempts < max_iter"| RT["resume ADK session -> apply_fix again -> re-park (attempts+1)"]
+    RT --> SUS(["suspend (is_long_running; durable — survives restart)"])
+    SUS -.->|"next check_run for this PR"| CR
+
+    TO["per-run CI_TIMEOUT (soft in-memory timer, lost on restart)"] -.->|"CI never reports"| FREE["on_timeout: claim + summary + clear"]
+    SW["/internal/sweep -> sweep_timeouts (durable catch-all)"] -.-> FREE
+
+    OK --> Chat[("Slack / Teams")]
+    REV --> Chat
+    FREE --> Chat
+```
+
+Attempts are counted in the `ParkRecord`, **not** from GitHub commits. Because the claim
+(`resolve_by_pr_key` / `sweep`) is atomic and single-winner, a late or duplicate webhook
+racing the timeout timer or the sweep resolves the run at most once.
+
 ## Mental model
 
 Ingest (Cloud Scheduler / webhook / future hooks) -> **root agent** (dispatcher) -> one of three
