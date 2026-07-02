@@ -102,7 +102,7 @@ flowchart TD
     CLAIM -->|"late / duplicate / already-claimed / unknown"| NOOP2["no-op (resolved at most once)"]
 
     subgraph Store["Durable park/session store — SESSION_BACKEND: memory | sqlite | firestore"]
-        PRK["PRKey index: owner/repo#pr → session id"] --> REC["ParkRecord{sessionID, attempts, checkName}"]
+        PRK["PRKey index: owner/repo#pr → session id"] --> REC["ParkRecord{SessionID, PRKey, CallID, Attempts, Params, ParkedAt}"]
         REC --> SESS["ADK session (suspended run history)"]
     end
     CLAIM -->|"PRKey → session id"| PRK
