@@ -74,6 +74,33 @@ export const TracesExporter = {
 } as const;
 export type TracesExporter = (typeof TracesExporter)[keyof typeof TracesExporter];
 
+// Reviewer intake defaults (pilot-tunable). Held byte-for-byte identical across every port so a
+// review is sized and steered the same way everywhere.
+const DEFAULT_REVIEW_MAX_FILES = 50;
+const DEFAULT_REVIEW_MAX_DIFF_BYTES = 256 * 1024; // 256 KiB
+const DEFAULT_REVIEW_MIN_CONFIDENCE = 0.6;
+const DEFAULT_REVIEW_STANDARDS_MAX_BYTES = 256 * 1024; // 256 KiB
+
+// The paths dropped before sizing/review: lockfiles, generated code, vendored trees, minified
+// bundles, snapshots, and binaries. A pattern with no '/' matches the basename; one with '/'
+// matches the full path ("**" crosses separators).
+const DEFAULT_REVIEW_EXCLUDE_GLOBS =
+  'go.sum,go.work.sum,package-lock.json,yarn.lock,pnpm-lock.yaml,' +
+  'npm-shrinkwrap.json,Cargo.lock,poetry.lock,Pipfile.lock,Gemfile.lock,composer.lock,' +
+  'gradle.lockfile,*.min.js,*.min.css,*.map,*.snap,*.pb.go,*_pb2.py,*.gen.go,*_generated.go,' +
+  'vendor/**,node_modules/**,third_party/**,dist/**,build/**,__snapshots__/**,' +
+  '*.png,*.jpg,*.jpeg,*.gif,*.webp,*.ico,*.pdf,*.woff,*.woff2,*.ttf,*.eot,' +
+  '*.zip,*.gz,*.tar,*.jar,*.bin,*.so,*.dylib,*.dll,*.exe';
+
+// The convention-doc paths discovered in the reviewed repo — format-agnostic across the common
+// AI-assistant and project conventions. A pattern with no '/' matches the basename; one with '/'
+// matches the full path.
+const DEFAULT_REVIEW_STANDARDS_GLOBS =
+  'AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md,' +
+  '.cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md,' +
+  '.windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md,' +
+  '.editorconfig,.golangci.yml,.golangci.yaml';
+
 /** All runtime settings. */
 export interface Config {
   // LLM
@@ -140,6 +167,40 @@ export interface Config {
   // agentPrLabel is the single human-facing label applied to every agent PR on creation
   // (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
   agentPrLabel: string;
+
+  // Reviewer (PR code-review agent). reviewEnabled (REVIEW_ENABLED) is the kill switch: the engine
+  // no-ops unless it is set, so the feature is dark by default and the rollback posture is a single
+  // flag. The other vars tune intake, standards-aware review, and the debounce/coalesce window; all
+  // are held byte-for-byte identical across every port.
+  reviewEnabled: boolean;
+  // reviewSkipDrafts skips draft PRs unless the triggering action is ready_for_review
+  // (REVIEW_SKIP_DRAFTS, default true).
+  reviewSkipDrafts: boolean;
+  // reviewExcludeGlobs drops generated/vendored/lockfile/minified/binary paths before sizing and
+  // review (REVIEW_EXCLUDE_GLOBS). Defaults to DEFAULT_REVIEW_EXCLUDE_GLOBS.
+  reviewExcludeGlobs: string[];
+  // reviewMaxFiles / reviewMaxDiffBytes are the two-dimensional size-gate caps (REVIEW_MAX_FILES,
+  // REVIEW_MAX_DIFF_BYTES): a PR over either cap (measured on the filtered diff) is denied rather
+  // than degraded. A non-positive value disables that dimension.
+  reviewMaxFiles: number;
+  reviewMaxDiffBytes: number;
+  // reviewStandards toggles standards-aware review (REVIEW_STANDARDS, default true): discover the
+  // reviewed repo's own convention docs, distill them, and steer the lenses off them.
+  // reviewStandardsGlobs are the discovery globs (REVIEW_STANDARDS_GLOBS); reviewStandardsMaxBytes
+  // caps the total doc bytes fed to the distiller (REVIEW_STANDARDS_MAX_BYTES). reviewUncitedMode
+  // (REVIEW_UNCITED_MODE, drop|nitpick, default nitpick) is how an uncited conformance finding is
+  // handled.
+  reviewStandards: boolean;
+  reviewStandardsGlobs: string[];
+  reviewStandardsMaxBytes: number;
+  reviewUncitedMode: string;
+  // reviewMinConfidence drops findings below this confidence before scoring (REVIEW_MIN_CONFIDENCE,
+  // the phase-1 verify gate). A non-positive value keeps everything.
+  reviewMinConfidence: number;
+  // reviewDebounceMs coalesces rapid pushes (REVIEW_DEBOUNCE): a synchronize review is enqueued
+  // under a per-PR dedup name with this delay, so a burst of pushes collapses to one review of the
+  // latest SHA. opened/reopened/ready_for_review enqueue immediately.
+  reviewDebounceMs: number;
 
   // Execution transport (webhook → dispatcher). tasksBackend selects in-process (default) or
   // Cloud Tasks; the Cloud Tasks settings locate the queue and the worker endpoint.
@@ -312,6 +373,17 @@ export function loadFrom(get: Lookup): Config {
     otelExporterOtlpHeaders: getOr(get, 'OTEL_EXPORTER_OTLP_HEADERS', ''),
     otelTracesSampler: getOr(get, 'OTEL_TRACES_SAMPLER', 'parentbased_always_on'),
     otelCaptureMessageContent: getBool(get, 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', false),
+    reviewEnabled: getBool(get, 'REVIEW_ENABLED', false),
+    reviewSkipDrafts: getBool(get, 'REVIEW_SKIP_DRAFTS', true),
+    reviewExcludeGlobs: splitList(getOr(get, 'REVIEW_EXCLUDE_GLOBS', DEFAULT_REVIEW_EXCLUDE_GLOBS)),
+    reviewMaxFiles: getInt(get, 'REVIEW_MAX_FILES', DEFAULT_REVIEW_MAX_FILES),
+    reviewMaxDiffBytes: getInt(get, 'REVIEW_MAX_DIFF_BYTES', DEFAULT_REVIEW_MAX_DIFF_BYTES),
+    reviewStandards: getBool(get, 'REVIEW_STANDARDS', true),
+    reviewStandardsGlobs: splitList(getOr(get, 'REVIEW_STANDARDS_GLOBS', DEFAULT_REVIEW_STANDARDS_GLOBS)),
+    reviewStandardsMaxBytes: getInt(get, 'REVIEW_STANDARDS_MAX_BYTES', DEFAULT_REVIEW_STANDARDS_MAX_BYTES),
+    reviewUncitedMode: getOr(get, 'REVIEW_UNCITED_MODE', 'nitpick'),
+    reviewMinConfidence: getFloat(get, 'REVIEW_MIN_CONFIDENCE', DEFAULT_REVIEW_MIN_CONFIDENCE),
+    reviewDebounceMs: parseDuration(getOr(get, 'REVIEW_DEBOUNCE', '30s'), 'REVIEW_DEBOUNCE'),
   };
 
   // Code models default to the base models when unset.
@@ -490,6 +562,27 @@ export function validate(c: Config): void {
   }
   validateTasks(c);
   validateOtel(c);
+  validateReviewer(c);
+}
+
+/**
+ * Check the REVIEW_* settings that defaults alone cannot guarantee: the standards byte cap must be
+ * positive, the confidence gate must be a probability, and the uncited mode must be one of the two
+ * known values.
+ *
+ * @throws Error on a non-positive standards cap, an out-of-range confidence, or an unknown uncited
+ *   mode.
+ */
+function validateReviewer(c: Config): void {
+  if (c.reviewStandardsMaxBytes <= 0) {
+    throw new Error(`REVIEW_STANDARDS_MAX_BYTES: must be positive, got ${c.reviewStandardsMaxBytes}`);
+  }
+  if (!(c.reviewMinConfidence >= 0 && c.reviewMinConfidence <= 1)) {
+    throw new Error(`REVIEW_MIN_CONFIDENCE: must be in [0,1], got ${c.reviewMinConfidence}`);
+  }
+  if (c.reviewUncitedMode !== 'drop' && c.reviewUncitedMode !== 'nitpick') {
+    throw new Error(`invalid REVIEW_UNCITED_MODE ${JSON.stringify(c.reviewUncitedMode)} (want drop|nitpick)`);
+  }
 }
 
 /**
@@ -611,6 +704,39 @@ function getBool(get: Lookup, key: string, def: boolean): boolean {
     return false;
   }
   return def;
+}
+
+/**
+ * Parse an integer env var (REVIEW_MAX_FILES etc.). Unset or blank yields `def`.
+ *
+ * @throws Error on a non-integer value.
+ */
+function getInt(get: Lookup, key: string, def: number): number {
+  const v = get(key)?.trim();
+  if (v === undefined || v === '') {
+    return def;
+  }
+  if (!/^[+-]?\d+$/.test(v)) {
+    throw new Error(`${key}: invalid integer ${JSON.stringify(v)}`);
+  }
+  return Number.parseInt(v, 10);
+}
+
+/**
+ * Parse a float env var (REVIEW_MIN_CONFIDENCE). Unset or blank yields `def`.
+ *
+ * @throws Error on a non-numeric value.
+ */
+function getFloat(get: Lookup, key: string, def: number): number {
+  const v = get(key)?.trim();
+  if (v === undefined || v === '') {
+    return def;
+  }
+  const n = Number(v);
+  if (Number.isNaN(n)) {
+    throw new Error(`${key}: invalid number ${JSON.stringify(v)}`);
+  }
+  return n;
 }
 
 function splitList(s: string): string[] {

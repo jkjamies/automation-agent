@@ -4,10 +4,11 @@ import { DecodeError, decode, encode, Kind, kindValid, newEnvelope } from './env
 
 describe('ingest', () => {
   it('recognizes valid kinds', () => {
-    for (const k of [Kind.CronDaily, Kind.Lint, Kind.Coverage, Kind.CI]) {
+    for (const k of [Kind.CronDaily, Kind.Lint, Kind.Coverage, Kind.CI, Kind.Review]) {
       expect(kindValid(k)).toBe(true);
     }
     expect(kindValid('nope')).toBe(false);
+    expect(Kind.Review).toBe('review'); // external contract
   });
 
   it('constructs an envelope', () => {

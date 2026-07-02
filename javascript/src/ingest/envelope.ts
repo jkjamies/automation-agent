@@ -12,6 +12,7 @@ export const Kind = {
   Lint: 'lint', // agnostic lint payload -> lint-fixer
   Coverage: 'coverage', // agnostic coverage payload -> coverage-fixer
   CI: 'ci', // GitHub check_run -> resume lint/coverage fixer
+  Review: 'review', // GitHub pull_request -> PR code-review agent
 } as const;
 export type Kind = (typeof Kind)[keyof typeof Kind];
 

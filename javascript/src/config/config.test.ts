@@ -423,3 +423,75 @@ describe('config: execution transport (TASKS_BACKEND)', () => {
     expect(c.tasksProject).toBe('ambient');
   });
 });
+
+describe('config reviewer', () => {
+  it('loads the REVIEW_* defaults (dark by default)', () => {
+    const c = loadFrom(mapLookup({}));
+    expect(c.reviewEnabled).toBe(false);
+    expect(c.reviewSkipDrafts).toBe(true);
+    expect(c.reviewMaxFiles).toBe(50);
+    expect(c.reviewMaxDiffBytes).toBe(262144);
+    expect(c.reviewStandards).toBe(true);
+    expect(c.reviewStandardsMaxBytes).toBe(262144);
+    expect(c.reviewUncitedMode).toBe('nitpick');
+    expect(c.reviewMinConfidence).toBe(0.6);
+    expect(c.reviewDebounceMs).toBe(30 * 1000);
+    // The exclude/standards globs default to the shared lists.
+    expect(c.reviewExcludeGlobs).toContain('go.sum');
+    expect(c.reviewExcludeGlobs).toContain('vendor/**');
+    expect(c.reviewExcludeGlobs).toContain('*.min.js');
+    expect(c.reviewStandardsGlobs).toContain('AGENTS.md');
+    expect(c.reviewStandardsGlobs).toContain('.agents/standards/**');
+  });
+
+  it('reads custom REVIEW_* overrides', () => {
+    const c = loadFrom(
+      mapLookup({
+        REVIEW_ENABLED: 'true',
+        REVIEW_SKIP_DRAFTS: 'false',
+        REVIEW_EXCLUDE_GLOBS: 'a.txt, b/**',
+        REVIEW_MAX_FILES: '10',
+        REVIEW_MAX_DIFF_BYTES: '4096',
+        REVIEW_STANDARDS: 'false',
+        REVIEW_STANDARDS_GLOBS: 'DOCS.md',
+        REVIEW_STANDARDS_MAX_BYTES: '2048',
+        REVIEW_UNCITED_MODE: 'drop',
+        REVIEW_MIN_CONFIDENCE: '0.3',
+        REVIEW_DEBOUNCE: '45s',
+      }),
+    );
+    expect(c.reviewEnabled).toBe(true);
+    expect(c.reviewSkipDrafts).toBe(false);
+    expect(c.reviewExcludeGlobs).toEqual(['a.txt', 'b/**']);
+    expect(c.reviewMaxFiles).toBe(10);
+    expect(c.reviewMaxDiffBytes).toBe(4096);
+    expect(c.reviewStandards).toBe(false);
+    expect(c.reviewStandardsGlobs).toEqual(['DOCS.md']);
+    expect(c.reviewStandardsMaxBytes).toBe(2048);
+    expect(c.reviewUncitedMode).toBe('drop');
+    expect(c.reviewMinConfidence).toBe(0.3);
+    expect(c.reviewDebounceMs).toBe(45 * 1000);
+  });
+
+  it('rejects a non-positive standards byte cap', () => {
+    expect(() => loadFrom(mapLookup({ REVIEW_STANDARDS_MAX_BYTES: '0' }))).toThrow(/REVIEW_STANDARDS_MAX_BYTES/);
+  });
+
+  it('rejects an out-of-range confidence', () => {
+    expect(() => loadFrom(mapLookup({ REVIEW_MIN_CONFIDENCE: '1.5' }))).toThrow(/REVIEW_MIN_CONFIDENCE/);
+    expect(() => loadFrom(mapLookup({ REVIEW_MIN_CONFIDENCE: '-0.1' }))).toThrow(/REVIEW_MIN_CONFIDENCE/);
+  });
+
+  it('rejects an unknown uncited mode', () => {
+    expect(() => loadFrom(mapLookup({ REVIEW_UNCITED_MODE: 'shout' }))).toThrow(/REVIEW_UNCITED_MODE/);
+  });
+
+  it('rejects a non-integer max files and a non-numeric confidence', () => {
+    expect(() => loadFrom(mapLookup({ REVIEW_MAX_FILES: 'lots' }))).toThrow(/REVIEW_MAX_FILES/);
+    expect(() => loadFrom(mapLookup({ REVIEW_MIN_CONFIDENCE: 'high' }))).toThrow(/REVIEW_MIN_CONFIDENCE/);
+  });
+
+  it('rejects a malformed debounce duration', () => {
+    expect(() => loadFrom(mapLookup({ REVIEW_DEBOUNCE: 'soon' }))).toThrow(/REVIEW_DEBOUNCE/);
+  });
+});
