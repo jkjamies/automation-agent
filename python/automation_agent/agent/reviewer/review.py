@@ -6,12 +6,13 @@ Returns the scorecard and the gated findings for the publish stage; posts nothin
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from google.adk.agents import BaseAgent, ParallelAgent
 from google.adk.models import BaseLlm
 
 from automation_agent.agent import setup
+from automation_agent.agent.reviewer import standards as standards_mod
 from automation_agent.agent.reviewer.categories import Category, Tier, select_categories
 from automation_agent.agent.reviewer.findings import (
     Finding,
@@ -24,6 +25,7 @@ from automation_agent.agent.reviewer.glue import (
     drop_low_confidence,
 )
 from automation_agent.agent.reviewer.scorecard import Scorecard, score_findings
+from automation_agent.agent.reviewer.standards import Standards
 from automation_agent.githubapi import PRFile
 
 if TYPE_CHECKING:
@@ -35,28 +37,35 @@ REVIEW_TRIGGER = "Review the diff and report findings as the JSON array specifie
 GLUE_TRIGGER = "Synthesize the holistic findings as the JSON array specified."
 
 
-async def run_review(engine: Engine, files: list[PRFile]) -> tuple[Scorecard, list[Finding]]:
+async def run_review(
+    engine: Engine, files: list[PRFile], std: Standards | None
+) -> tuple[Scorecard, list[Finding]]:
     """Run the model-calling stage for a reviewable PR: fan out the category lenses, run the
     holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
     score. Returns the scorecard and the gated findings (the caller publishes them)."""
     diff = format_diff(files)
     cats = select_categories(files)
 
-    category = await run_category_review(engine, diff, cats)
+    category = await run_category_review(engine, diff, cats, std)
     # Glue sees the category findings as "already reported" and skips re-flagging them, so it must
-    # see only the findings that survive the same gate as the final output. Otherwise a finding
-    # the verify gate later drops is suppressed in glue and then dropped here, vanishing from the
-    # review entirely.
-    gated_for_glue = drop_low_confidence(list(category), engine.min_confidence)
-    glue = await run_glue(engine, diff, gated_for_glue)
+    # see only the findings that survive the same gates as the final output. Otherwise a finding
+    # the verify/citation gate later drops is suppressed in glue and then dropped here, vanishing
+    # from the review entirely.
+    gated_for_glue = standards_mod.gate_citations(
+        engine, drop_low_confidence(list(category), engine.min_confidence), std
+    )
+    glue = await run_glue(engine, diff, gated_for_glue, std)
 
     all_findings = category + glue
     all_findings = drop_low_confidence(all_findings, engine.min_confidence)  # phase-1 verify gate
+    all_findings = standards_mod.gate_citations(engine, all_findings, std)  # citation gate
     all_findings = dedupe(all_findings)  # cross-lens dedup
     return score_findings(all_findings), all_findings
 
 
-async def run_category_review(engine: Engine, diff: str, cats: list[Category]) -> list[Finding]:
+async def run_category_review(
+    engine: Engine, diff: str, cats: list[Category], std: Standards | None
+) -> list[Finding]:
     """Build one agent per applicable category, run them in parallel (ADK ParallelAgent —
     genuine concurrency on Vertex, GPU-serialized locally with no code change), and return every
     category's parsed findings. Empty findings is success. The "(other)" catch-all's findings are
@@ -64,7 +73,9 @@ async def run_category_review(engine: Engine, diff: str, cats: list[Category]) -
     # Deferred import breaks the review <-> agents_setup module cycle.
     from automation_agent.agent.reviewer import agents_setup
 
-    agents: list[BaseAgent] = [agents_setup.build_category_agent(engine, c, diff) for c in cats]
+    agents: list[BaseAgent] = [
+        agents_setup.build_category_agent(engine, c, diff, std) for c in cats
+    ]
     parallel = ParallelAgent(
         name="review_all",
         description="Per-category review in parallel",
@@ -89,12 +100,14 @@ async def run_category_review(engine: Engine, diff: str, cats: list[Category]) -
     return out
 
 
-async def run_glue(engine: Engine, diff: str, prior: list[Finding]) -> list[Finding]:
+async def run_glue(
+    engine: Engine, diff: str, prior: list[Finding], std: Standards | None
+) -> list[Finding]:
     """Run the holistic synthesis pass over the diff and the category findings, returning the
     additional architectural/testability/coverage findings it produced. Empty is success."""
     from automation_agent.agent.reviewer import agents_setup
 
-    agent = agents_setup.build_glue_agent(engine, diff, prior)
+    agent = agents_setup.build_glue_agent(engine, diff, prior, std)
     runner = setup.new_runner("reviewer-glue", agent)
     text = await setup.drive_text(runner, "system", "glue", GLUE_TRIGGER)
     return parse_findings(text)
@@ -152,21 +165,42 @@ def model_for_tier(engine: Engine, tier: Tier) -> BaseLlm:
     return engine.code_llm if tier is Tier.CODE else engine.base_llm
 
 
-def build_review_instruction(prompt_body: str, diff: str) -> str:
-    """Compose a category agent's instruction: the lens prompt and the filtered diff (baked in
-    because it is per-event)."""
+def build_review_instruction(prompt_body: str, diff: str, std: Standards | None) -> str:
+    """Compose a category agent's instruction: the lens prompt, the repo's standards rule menu
+    (when any), and the filtered diff (baked in because they are per-event)."""
     parts = [prompt_body]
+    write_standards_menu(parts, std)
     parts.append("\n\n## Diff under review\n\n")
     parts.append(diff)
     return "".join(parts)
 
 
-def build_glue_instruction(prompt_body: str, diff: str, prior: list[Finding]) -> str:
-    """Compose the glue agent's instruction: the glue prompt, the diff, and the findings the
-    category agents already produced (so it reasons holistically without re-flagging them)."""
+def build_glue_instruction(
+    prompt_body: str, diff: str, prior: list[Finding], std: Standards | None
+) -> str:
+    """Compose the glue agent's instruction: the glue prompt, the standards menu, the diff, and
+    the findings the category agents already produced (so it reasons holistically without
+    re-flagging them)."""
     parts = [prompt_body]
+    write_standards_menu(parts, std)
     parts.append("\n\n## Diff under review\n\n")
     parts.append(diff)
     parts.append("\n\n## Findings already reported by other lenses\n\n")
     parts.append(findings_json(prior))
     return "".join(parts)
+
+
+def write_standards_menu(parts: list[str], std: Standards | None) -> None:
+    """Append the repo's compact rule menu and the citation instruction to an agent prompt when
+    standards were discovered. The full text of any rule is available via get_rule."""
+    if standards_mod.is_empty(std):
+        return
+    real = cast("Standards", std)
+    parts.append("\n\n## Repo standards (cite rule_id for conformance findings)\n\n")
+    parts.append(real.menu())
+    parts.append(
+        "\nWhen a finding is a violation of one of these rules, set its dimension to the "
+        "rule's dimension and set \"rule_id\" to the rule's id. Call get_rule(id) to read a "
+        "rule's full text before flagging. Never invent a rule id; a pattern/architecture "
+        "finding with no matching rule is not a standards violation.\n"
+    )

@@ -24,7 +24,12 @@ from automation_agent.agent import covfixer, lintfixer, reviewer, root, summary
 from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
-from automation_agent.auth import StaticProvider, TokenProvider, new_app_provider
+from automation_agent.auth import (
+    IdentityResolver,
+    StaticProvider,
+    TokenProvider,
+    new_app_provider,
+)
 from automation_agent.config import Config, TasksBackend, load
 from automation_agent.githubapi import Client
 from automation_agent.ingest import Envelope
@@ -160,7 +165,21 @@ async def run() -> None:
     llm = agent_setup.build_llm(cfg)
     code_llm = agent_setup.build_code_llm(cfg)
     provider = build_token_provider(cfg)
-    gh = Client(provider)
+    # Resolve the login this service authors comments as (the app's "<slug>[bot]" in App mode, the
+    # PAT user in PAT mode) so the reviewer's marker-comment upsert edits only its own comments.
+    # Best-effort: a lookup failure must not block startup, so warn and let the client fall back to
+    # author-type matching.
+    authored_login = ""
+    if isinstance(provider, IdentityResolver):
+        try:
+            authored_login = provider.authored_login()
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "could not resolve GitHub comment-author identity; marker upsert falls back to "
+                "author-type matching err=%s",
+                exc,
+            )
+    gh = Client(provider, authored_login=authored_login, app_authored=cfg.app_mode())
     # SSH only authenticates the git transport (clone/push). In PAT mode the GitHub REST
     # API — opening and labeling PRs, reading the CI check — still needs a token (or `gh`
     # login). Warn rather than fail so read-only/dry-run flows still work, but PR

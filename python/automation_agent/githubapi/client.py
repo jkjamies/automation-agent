@@ -135,6 +135,39 @@ class TreeEntry:
 
 
 @dataclass
+class ReviewComment:
+    """One inline review comment on the head (RIGHT) side of a file. GitHub rejects an inline
+    comment whose line is outside the PR's diff hunks, so the caller posts only in-diff findings
+    here and lists the rest in the summary comment."""
+
+    path: str
+    line: int
+    side: str  # "RIGHT" (head side)
+    body: str
+
+
+@dataclass
+class ReviewInput:
+    """An advisory pull-request review: a body plus optional inline comments. The reviewer never
+    approves or requests changes, so the event is always COMMENT."""
+
+    body: str = ""
+    comments: list[ReviewComment] = field(default_factory=list)
+
+
+@dataclass
+class CheckRunInput:
+    """Describes the advisory agent-review check run: always completed, conclusion success or
+    neutral — never failure, so it informs without gating merges."""
+
+    name: str
+    head_sha: str
+    conclusion: str  # "success" | "neutral"
+    title: str = ""
+    summary: str = ""
+
+
+@dataclass
 class ReviewCommentRef:
     """Identifies an existing inline review comment for reconciliation: its GraphQL node id (the
     minimize_comment subject) and its body (which carries the hidden fingerprint marker)."""
@@ -339,6 +372,45 @@ class Client:
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"get PR {owner}/{repo}#{number}: {exc}") from exc
 
+    def create_review(self, owner: str, repo: str, number: int, in_: ReviewInput) -> None:
+        """Post an advisory (COMMENT) pull-request review with optional inline comments."""
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            pr = r.get_pull(number)
+            comments = [
+                {"path": rc.path, "body": rc.body, "line": rc.line, "side": rc.side}
+                for rc in in_.comments
+            ]
+            kwargs: dict[str, Any] = {"event": "COMMENT", "comments": comments}
+            if in_.body:
+                kwargs["body"] = in_.body
+            pr.create_review(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"create review {owner}/{repo}#{number}: {exc}") from exc
+
+    def create_check_run(self, owner: str, repo: str, in_: CheckRunInput) -> None:
+        """Post a completed, advisory check run for the head SHA.
+
+        The agent-review check is advisory and must never gate a merge, so the conclusion is
+        constrained here at the API boundary — a "failure"/"cancelled" cannot slip in.
+        """
+        if in_.conclusion not in ("success", "neutral"):
+            raise ValueError(
+                f"create check run {owner}/{repo}: advisory conclusion must be success or "
+                f"neutral, got {in_.conclusion!r}"
+            )
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            r.create_check_run(
+                name=in_.name,
+                head_sha=in_.head_sha,
+                status="completed",
+                conclusion=in_.conclusion,
+                output={"title": in_.title, "summary": in_.summary},
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"create check run {owner}/{repo} @{in_.head_sha}: {exc}") from exc
+
     def list_review_comments(self, owner: str, repo: str, number: int) -> list[ReviewCommentRef]:
         """Return the PR's inline review comments (paginated). Reconciliation parses the
         fingerprint marker from each body to decide what to keep, add, or minimize."""
@@ -351,6 +423,24 @@ class Client:
             ]
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"list review comments {owner}/{repo}#{number}: {exc}") from exc
+
+    def minimize_comment(self, subject_id: str) -> None:
+        """Collapse a comment as OUTDATED via GraphQL (the REST API has no equivalent), so a
+        finding that no longer applies is hidden rather than deleted — the thread is preserved.
+        ``subject_id`` is the comment's GraphQL node id (:attr:`ReviewCommentRef.node_id`).
+
+        The mutation runs over the same authenticated client as REST (the installation token
+        authenticates both); the endpoint derives from the REST base incl. the GitHub
+        Enterprise Server ``/api/v3`` -> ``/api/graphql`` mapping.
+        """
+        mutation = (
+            "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED})"
+            "{minimizedComment{isMinimized}}}"
+        )
+        try:
+            self._gh.requester.graphql_query(mutation, {"id": subject_id})
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"minimize comment {subject_id}: {exc}") from exc
 
     def tree(self, owner: str, repo: str, ref: str) -> tuple[list[TreeEntry], bool]:
         """List the repository's git tree at ``ref`` (a commit SHA, branch, or tag),
@@ -370,6 +460,62 @@ class Client:
             return entries, bool(t.truncated)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"get tree {owner}/{repo}@{ref}: {exc}") from exc
+
+    def upsert_marker_comment(
+        self, owner: str, repo: str, number: int, marker: str, body: str
+    ) -> None:
+        """Edit the single issue comment this client authored whose body contains ``marker``, or
+        create one if none exists. The reviewer's summary comment carries a hidden marker so a
+        re-review updates it in place instead of piling up duplicates. Only a comment the client
+        could have authored is edited (see :meth:`_owns_comment`): GitHub rejects editing a
+        foreign comment, so a comment that merely echoes the marker must not hijack the upsert.
+
+        Raises:
+            ValueError: on an empty marker, a body missing the marker, or an API error.
+        """
+        # An empty marker would match every comment and edit an unrelated one; a body without
+        # the marker could never be found again, piling up duplicates. Both are caller bugs, so
+        # fail fast rather than corrupt the PR's comments.
+        if marker == "":
+            raise ValueError(f"upsert comment {owner}/{repo}#{number}: empty marker")
+        if marker not in body:
+            raise ValueError(
+                f"upsert comment {owner}/{repo}#{number}: body must contain the marker"
+            )
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            issue = r.get_issue(number)
+            for ic in issue.get_comments():
+                if marker not in (ic.body or "") or not self._owns_comment(ic):
+                    continue
+                try:
+                    ic.edit(body)
+                except Exception as exc:  # noqa: BLE001
+                    # With a known login the match is authoritative, so any edit failure is a
+                    # real error. On the weak author-type fallback (identity unresolved) the
+                    # match can be a foreign bot that merely echoes the marker; a 403/404 there
+                    # means "not ours", so skip it and fall through to create.
+                    if self._authored_login == "" and _is_http_status(exc, 403, 404):
+                        continue
+                    raise ValueError(f"edit comment {owner}/{repo}#{number}: {exc}") from exc
+                return
+            issue.create_comment(body)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"upsert comment {owner}/{repo}#{number}: {exc}") from exc
+
+    def _owns_comment(self, ic: Any) -> bool:
+        """Report whether this client authored ``ic`` — the precondition for editing it in place
+        (GitHub rejects editing a comment the client did not author). A known login is the
+        authoritative check (byte-for-byte match); otherwise fall back to author type: App mode
+        trusts only bot-authored comments; PAT/anonymous trusts the marker alone."""
+        user = ic.user
+        if self._authored_login != "":
+            return user is not None and (user.login or "") == self._authored_login
+        if self._app_authored:
+            return user is not None and (user.type or "") == "Bot"
+        return True
 
 
 def parse_pull_request_event(body: bytes) -> PullRequestEvent:
@@ -403,6 +549,13 @@ def parse_pull_request_event(body: bytes) -> PullRequestEvent:
         if name:
             out.labels.append(name)
     return out
+
+
+def _is_http_status(exc: Exception, *codes: int) -> bool:
+    """Report whether ``exc`` is (or carries) a PyGithub API error with one of the given HTTP
+    status codes."""
+    status = getattr(exc, "status", None)
+    return isinstance(status, int) and status in codes
 
 
 def parse_check_run_event(body: bytes) -> CheckEvent:

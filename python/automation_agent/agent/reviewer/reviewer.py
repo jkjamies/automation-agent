@@ -8,9 +8,11 @@ on Cloud Run.
 
 The flow per pull_request event: parse it, apply the trigger and skip rules, fetch the changed
 files via the REST API, filter generated/vendored churn, and apply the two-dimensional size gate
-to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass and
-scores the findings (count-based scorecard). Publishing the scored review to the PR is a
-follow-up.
+to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass,
+scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
+inline comments, a marker-updated summary comment, and an advisory agent-review check —
+reconciled against the PR's existing comments and steered off the reviewed repo's own standards
+when present. Deny publishes the "too large, please split" summary + a neutral check.
 """
 
 from __future__ import annotations
@@ -24,11 +26,18 @@ from google.adk.models import BaseLlm
 
 from automation_agent.agent.reviewer.filter import FileFilter
 from automation_agent.agent.reviewer.findings import Finding, clamp_threshold
+from automation_agent.agent.reviewer.publish import PublishMeta, publish, publish_deny
 from automation_agent.agent.reviewer.review import run_review
 from automation_agent.agent.reviewer.sizegate import oversize
+from automation_agent.agent.reviewer.standards import StandardsCache, discover_standards
 from automation_agent.githubapi import (
+    CheckResult,
+    CheckRunInput,
     PRFile,
     PullRequestEvent,
+    ReviewCommentRef,
+    ReviewInput,
+    TreeEntry,
     parse_pull_request_event,
 )
 
@@ -39,12 +48,25 @@ OWN_BRANCH_PREFIX = "automation-agent/"
 
 
 class GitHubClient(Protocol):
-    """The slice of ``githubapi.Client`` the reviewer needs to detect and analyze a PR: read the
-    changed files (with patches) and read the head SHA (to detect a task superseded by a newer
-    push). A local protocol keeps the engine testable with a fake."""
+    """The slice of ``githubapi.Client`` the reviewer needs: read the changed files (with
+    patches), read the head SHA and repo tree, and publish the review (an advisory review with
+    inline comments, the marker-updated summary comment, and the advisory agent-review check). A
+    local protocol keeps the engine testable with a fake."""
 
     def list_pr_files(self, owner: str, repo: str, number: int) -> list[PRFile]: ...
+    def create_review(self, owner: str, repo: str, number: int, in_: ReviewInput) -> None: ...
+    def upsert_marker_comment(
+        self, owner: str, repo: str, number: int, marker: str, body: str
+    ) -> None: ...
+    def create_check_run(self, owner: str, repo: str, in_: CheckRunInput) -> None: ...
+    def list_review_comments(
+        self, owner: str, repo: str, number: int
+    ) -> list[ReviewCommentRef]: ...
+    def minimize_comment(self, subject_id: str) -> None: ...
+    def agent_check(self, owner: str, repo: str, ref: str, check_name: str) -> CheckResult: ...
     def pull_request_head_sha(self, owner: str, repo: str, number: int) -> str: ...
+    def tree(self, owner: str, repo: str, ref: str) -> tuple[list[TreeEntry], bool]: ...
+    def get_file_content(self, owner: str, repo: str, path: str, ref: str = "") -> str: ...
 
 
 @dataclass
@@ -118,6 +140,7 @@ class Engine:
         self.standards_globs = d.standards_globs
         self.standards_max_bytes = d.standards_max_bytes
         self.uncited_drop = d.uncited_drop
+        self.standards_cache = StandardsCache()
         self.log = d.log if d.log is not None else logging.getLogger("automation_agent")
 
     async def kickoff(self, raw: bytes) -> None:
@@ -144,11 +167,11 @@ class Engine:
             raise ValueError(f"reviewer: {exc}") from exc
         d = self.decide(ev)
         pr = f"{ev.repo_full_name}#{ev.number}"
-        # decide() already validated the full name before reaching a deny/review decision, so a
-        # malformed name here means skip.
+        # owner/repo are only used by the publish paths; decide() already validated the full name
+        # before reaching a deny/review decision, so a malformed name here means skip.
         owner, repo, _ = split_full_name(ev.repo_full_name)
         # Coalesce-to-latest: a deny/review acts on the event's SHA, so if a newer push has
-        # superseded it, skip rather than produce a stale review. A skip produced nothing.
+        # superseded it, skip rather than post a stale review. A skip produced nothing.
         if d.kind is not DecisionKind.SKIP and self._superseded(owner, repo, ev):
             self.log.info(
                 "stale review skipped (superseded by a newer push) pr=%s event_sha=%s",
@@ -156,11 +179,19 @@ class Engine:
                 ev.head_sha,
             )
             return
+        meta = PublishMeta(
+            owner=owner,
+            repo=repo,
+            number=ev.number,
+            head_sha=ev.head_sha,
+            files=d.files,
+            tiers="code-reasoning + base",
+        )
         if d.kind is DecisionKind.SKIP:
             self.log.info("review skipped pr=%s action=%s reason=%s", pr, ev.action, d.reason)
         elif d.kind is DecisionKind.DENY:
-            # Too large to review: it is denied, not degraded. Publishing the "please split"
-            # notice is a follow-up.
+            # Too large to review: post the "please split" summary + a neutral check, no model call.
+            publish_deny(self, meta, d.reason, len(d.files), d.diff_bytes)
             self.log.info(
                 "review denied pr=%s files=%d diff_bytes=%d reason=%s",
                 pr,
@@ -172,10 +203,14 @@ class Engine:
             # Review needs both tier models; the deny branch above does not.
             if self.base_llm is None or self.code_llm is None:
                 raise ValueError("reviewer: enabled but review models not configured")
-            card, findings = await run_review(self, d.files)
-            # Publishing the scored review to the PR is a follow-up.
+            # Steer the lenses off the reviewed repo's own conventions; None when disabled or none
+            # found, in which case the lenses review generically.
+            std = await discover_standards(self, owner, repo, ev.head_sha, d.files)
+            meta.standards = std.source_list() if std is not None else []
+            card, findings = await run_review(self, d.files, std)
+            publish(self, card, findings, meta)
             self.log.info(
-                "review scored pr=%s files=%d overall=%s findings=%d",
+                "review published pr=%s files=%d overall=%s findings=%d",
                 pr,
                 len(d.files),
                 card.overall.glyph(),

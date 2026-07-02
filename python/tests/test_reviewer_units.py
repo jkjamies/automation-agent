@@ -1,6 +1,6 @@
 """Deterministic unit tests for the reviewer's pure modules — findings parsing, filtering, the
-size gate, category selection, the scorecard, and the verify/dedup gates. No assertions on LLM
-output; canned strings only."""
+size gate, category selection, the scorecard, the verify/dedup gates, diff-hunk mapping, and
+reconciliation. No assertions on LLM output; canned strings only."""
 
 from __future__ import annotations
 
@@ -21,9 +21,11 @@ from automation_agent.agent.reviewer.findings import (
     parse_findings,
 )
 from automation_agent.agent.reviewer.glue import dedupe, demote_to_nitpick, drop_low_confidence
+from automation_agent.agent.reviewer.hunks import DiffIndex, commentable_lines
+from automation_agent.agent.reviewer.reconcile import fp_marker, parse_fp_marker, reconcile
 from automation_agent.agent.reviewer.scorecard import Level, score_findings
 from automation_agent.agent.reviewer.sizegate import oversize
-from automation_agent.githubapi import PRFile
+from automation_agent.githubapi import PRFile, ReviewCommentRef
 
 # --- findings ----------------------------------------------------------------
 
@@ -187,3 +189,47 @@ def test_dedupe_keeps_worst_severity() -> None:
 def test_demote_to_nitpick() -> None:
     fs = [Finding(severity=Severity.CRITICAL, message="m")]
     assert demote_to_nitpick(fs)[0].severity is Severity.NITPICK
+
+
+# --- hunks -------------------------------------------------------------------
+
+
+def test_commentable_lines_added_and_context_only() -> None:
+    lines = commentable_lines("@@ -1,2 +1,3 @@\n a\n+b\n+c\n")
+    assert lines == {1, 2, 3}
+    idx = DiffIndex([PRFile(path="a.go", patch="@@ -1,2 +1,3 @@\n a\n+b\n+c\n")])
+    assert idx.in_diff("a.go", 2) and not idx.in_diff("a.go", 99)
+    assert not idx.in_diff("other.go", 1)
+
+
+def test_commentable_lines_malformed_header_empty() -> None:
+    assert commentable_lines("no hunk header\n+x") == set()
+
+
+# --- reconcile ---------------------------------------------------------------
+
+
+def test_reconcile_keep_add_minimize() -> None:
+    keep = Finding(
+        file="a.go",
+        line=1,
+        dimension=Dimension.SECURITY,
+        severity=Severity.CRITICAL,
+        message="sqli",
+    )
+    add = Finding(
+        file="a.go", line=2, dimension=Dimension.SECURITY, severity=Severity.MAJOR, message="new"
+    )
+    existing = [
+        ReviewCommentRef(node_id="keep", body="old " + fp_marker(keep.fingerprint())),
+        ReviewCommentRef(node_id="stale", body="fixed " + fp_marker("a.go:9:obsolete")),
+        ReviewCommentRef(node_id="foreign", body="a human comment with no marker"),
+    ]
+    res = reconcile([keep, add], existing)
+    assert [f.message for f in res.to_post] == ["new"]  # keep not re-posted
+    assert res.to_minimize == ["stale"]  # foreign ignored
+
+
+def test_fp_marker_round_trip() -> None:
+    assert parse_fp_marker("body " + fp_marker("a:1:msg") + " tail") == "a:1:msg"
+    assert parse_fp_marker("no marker") == ""

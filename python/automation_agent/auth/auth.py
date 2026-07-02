@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from github import Auth, Github
+from github import Auth, Github, GithubIntegration
 
 
 @runtime_checkable
@@ -51,6 +51,18 @@ class TokenProvider(Protocol):
 
     def github(self) -> Github:
         """Return the PyGithub REST client this provider authenticates."""
+        ...
+
+
+@runtime_checkable
+class IdentityResolver(Protocol):
+    """A provider that can resolve the GitHub login it authors content as, so the service can
+    recognize the comments it posted (the authoritative ownership signal for marker-comment
+    upserts). Optional: a provider need not implement it, in which case ownership falls back to
+    author-type matching."""
+
+    def authored_login(self) -> str:
+        """Return the login this provider authors as; ``""`` means the identity is unknown."""
         ...
 
 
@@ -71,6 +83,14 @@ class StaticProvider:
     def github(self) -> Github:
         return self._gh
 
+    def authored_login(self) -> str:
+        """Resolve the authenticated user login for the PAT via GET /user, so the service can
+        recognize comments it authored in PAT mode. An empty token yields ``""`` (anonymous —
+        there is no identity to attribute)."""
+        if self._token == "":
+            return ""
+        return self._gh.get_user().login or ""
+
 
 class AppProvider:
     """Mints and caches a short-lived installation token for a single pinned
@@ -88,6 +108,9 @@ class AppProvider:
         base_url: str = "",
     ) -> None:
         app_auth = Auth.AppAuth(app_id, private_key_pem)
+        self._app_auth = app_auth
+        self._base_url = base_url
+        self._login = ""
         self._inst = app_auth.get_installation_auth(installation_id)
         # Constructing the Github wires the requester onto _inst (so _inst.token can mint)
         # AND is the REST client itself: one client, native per-request token refresh.
@@ -106,6 +129,23 @@ class AppProvider:
 
     def github(self) -> Github:
         return self._gh
+
+    def authored_login(self) -> str:
+        """Resolve the ``"<app-slug>[bot]"`` login this App authors content as, via a
+        JWT-authenticated GET /app, so the service can recognize the comments it posted. Resolved
+        once and cached (the slug is immutable for the deployment's lifetime)."""
+        if self._login:
+            return self._login
+        integration = (
+            GithubIntegration(auth=self._app_auth, base_url=self._base_url)
+            if self._base_url
+            else GithubIntegration(auth=self._app_auth)
+        )
+        slug = integration.get_app().slug
+        if not slug:
+            raise RuntimeError("auth: app identity response has no slug")
+        self._login = f"{slug}[bot]"
+        return self._login
 
 
 def new_app_provider(

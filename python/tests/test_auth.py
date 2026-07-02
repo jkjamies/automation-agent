@@ -55,6 +55,10 @@ class _Stub:
     def token_requests(self) -> list[tuple[str, str]]:
         return [r for r in self.requests if "access_tokens" in r[0]]
 
+    @property
+    def app_requests(self) -> list[tuple[str, str]]:
+        return [r for r in self.requests if r[0].endswith("/app")]
+
     def start(self) -> None:
         self._thread.start()
 
@@ -75,6 +79,16 @@ class _Stub:
                     {"token": "ghs_installation_token", "expires_at": stub.expires_at}
                 ).encode()
                 self.send_response(201)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+                # GET /app resolves the App's own identity (its slug) for authored-login.
+                stub.requests.append((self.path, self.headers.get("Authorization", "")))
+                body = json.dumps({"id": 42, "slug": "automation-agent"}).encode()
+                self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -148,3 +162,32 @@ def test_app_provider_shares_one_client(stub) -> None:
 def test_new_app_provider_accepts_pem_bytes(stub) -> None:
     p = new_app_provider(42, 99, _PEM.encode("utf-8"), base_url=stub.base_url)
     assert p.token("acme/api") == "ghs_installation_token"
+
+
+def test_static_provider_empty_authored_login_is_anonymous() -> None:
+    # No token → no identity to attribute, and no network call.
+    assert StaticProvider("").authored_login() == ""
+
+
+def test_static_provider_authored_login_resolves_pat_user(monkeypatch) -> None:
+    # A non-empty token resolves the authenticated user login via GET /user.
+    p = StaticProvider("pat-123")
+
+    class _User:
+        login = "octocat"
+
+    monkeypatch.setattr(p.github(), "get_user", lambda: _User())
+    assert p.authored_login() == "octocat"
+
+
+def test_app_provider_authored_login_resolves_bot_slug(stub) -> None:
+    p = new_app_provider(42, 99, _PEM, base_url=stub.base_url)
+    assert p.authored_login() == "automation-agent[bot]"
+    # The App authenticates the GET /app with an RS256 JWT issued by the app id.
+    assert stub.app_requests
+    _, authorization = stub.app_requests[0]
+    app_jwt = authorization.removeprefix("Bearer ")
+    assert jwt.get_unverified_header(app_jwt)["alg"] == "RS256"
+    # Resolved once and cached: a second call makes no further request.
+    p.authored_login()
+    assert len(stub.app_requests) == 1
