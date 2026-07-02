@@ -22,6 +22,7 @@ class Kind(StrEnum):
     LINT = "lint"  # agnostic lint payload -> lint-fixer
     COVERAGE = "coverage"  # agnostic coverage payload -> coverage-fixer
     CI = "ci"  # GitHub check_run -> resume lint/coverage fixer
+    REVIEW = "review"  # GitHub pull_request -> PR code-review agent
 
     def valid(self) -> bool:
         """Report whether this is a recognized ingest kind."""
@@ -30,6 +31,7 @@ class Kind(StrEnum):
             Kind.LINT,
             Kind.COVERAGE,
             Kind.CI,
+            Kind.REVIEW,
         )
 
 
@@ -123,7 +125,9 @@ def decode(b: bytes) -> Envelope:
     # strictly (like Go's base64.StdEncoding) so trailing junk is rejected rather than
     # silently discarded.
     if not isinstance(payload_raw, str):
-        raise ValueError(f"ingest: decode payload: want a base64 string, got {type(payload_raw).__name__}")
+        raise ValueError(
+            f"ingest: decode payload: want a base64 string, got {type(payload_raw).__name__}"
+        )
     try:
         payload = base64.b64decode(payload_raw, validate=True)
     except (ValueError, binascii.Error) as exc:

@@ -10,8 +10,13 @@ from automation_agent.githubapi.client import (
     Client,
     Commit,
     Comparison,
+    PRFile,
     PRInput,
+    PullRequestEvent,
+    ReviewCommentRef,
+    TreeEntry,
     parse_check_run_event,
+    parse_pull_request_event,
 )
 
 __all__ = [
@@ -22,6 +27,11 @@ __all__ = [
     "Client",
     "Commit",
     "Comparison",
+    "PRFile",
     "PRInput",
+    "PullRequestEvent",
+    "ReviewCommentRef",
+    "TreeEntry",
     "parse_check_run_event",
+    "parse_pull_request_event",
 ]

@@ -12,7 +12,7 @@ from automation_agent.agent.setup.events import (
     text_event,
     user_text,
 )
-from automation_agent.agent.setup.generate import generate_text
+from automation_agent.agent.setup.generate import generate_text, json_config
 from automation_agent.agent.setup.llm import build_code_llm, build_llm
 from automation_agent.agent.setup.longrun import (
     DriveResult,
@@ -53,6 +53,7 @@ __all__ = [
     "drive_collect_state",
     "drive_text",
     "generate_text",
+    "json_config",
     "last_text",
     "new_park_store",
     "new_runner",

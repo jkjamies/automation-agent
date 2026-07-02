@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from google.adk.agents import BaseAgent
 from google.adk.models import BaseLlm
 
-from automation_agent.agent import covfixer, lintfixer, root, summary
+from automation_agent.agent import covfixer, lintfixer, reviewer, root, summary
 from automation_agent.agent import setup as agent_setup
 from automation_agent.agent.fixflow import Deps as FixDeps
 from automation_agent.agent.fixflow import Engine
@@ -213,12 +213,34 @@ async def run() -> None:
     cov_engine = covfixer.new_engine(fix_deps)
     engines = [lint_engine, cov_engine]
 
+    # PR code-review agent (reacts to pull_request → REVIEW). Always registered; the engine
+    # no-ops unless REVIEW_ENABLED is set, so REVIEW_ENABLED is the kill switch.
+    review_engine = reviewer.new_engine(
+        reviewer.Deps(
+            enabled=cfg.review_enabled,
+            gh=gh,
+            base_llm=llm,
+            code_llm=code_llm,
+            min_confidence=cfg.review_min_confidence,
+            skip_drafts=cfg.review_skip_drafts,
+            exclude_globs=cfg.review_exclude_globs,
+            max_files=cfg.review_max_files,
+            max_diff_bytes=cfg.review_max_diff_bytes,
+            standards_enabled=cfg.review_standards,
+            standards_globs=cfg.review_standards_globs,
+            standards_max_bytes=cfg.review_standards_max_bytes,
+            uncited_drop=cfg.review_uncited_mode == "drop",
+            log=log,
+        )
+    )
+
     dispatcher = root.build_root_dispatcher(
         root.Deps(
             summary_daily=summary_daily,
             lint_kickoff=_payload_handler(lint_engine.kickoff),
             coverage_kickoff=_payload_handler(cov_engine.kickoff),
             ci_resume=_ci_resume_handler(engines),
+            review_kickoff=_payload_handler(review_engine.kickoff),
             log=log,
         )
     )
@@ -231,7 +253,9 @@ async def run() -> None:
     transport = build_transport(cfg, dispatcher.dispatch)
 
     async def _ingest(e: Envelope) -> None:
-        await transport.enqueue(e)
+        # Review envelopes carry coalescing hints (debounce + per-PR dedup name) so rapid pushes
+        # collapse to one task on the latest SHA; other kinds enqueue immediately.
+        await transport.enqueue(e, **reviewer.enqueue_options(e, cfg.review_debounce))
 
     # The durable timeout catch-all behind POST /internal/sweep: resolve every engine's
     # parked runs whose CI never reported (Cloud Scheduler drives it on a schedule). One

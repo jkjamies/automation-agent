@@ -85,7 +85,10 @@ def test_github_signature_valid() -> None:
     resp = client.post(
         "/webhooks/github",
         content=body,
-        headers={"X-Hub-Signature-256": sign("topsecret", body)},
+        headers={
+            "X-Hub-Signature-256": sign("topsecret", body),
+            "X-GitHub-Event": "check_run",
+        },
     )
 
     assert resp.status_code == 202
@@ -114,7 +117,7 @@ def test_github_missing_signature() -> None:
 def test_github_no_secret_skips_verification() -> None:
     c = Capture()
     client = TestClient(Server(c.ingest).app)  # no secret
-    resp = client.post("/webhooks/github", content="{}")
+    resp = client.post("/webhooks/github", content="{}", headers={"X-GitHub-Event": "check_run"})
     assert resp.status_code == 202
 
 

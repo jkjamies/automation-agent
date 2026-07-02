@@ -22,7 +22,11 @@ def map_lookup(m: dict[str, str]):
 def _rsa_pem(pkcs1: bool = False) -> str:
     """A throwaway RSA private key in PEM (PKCS#8 by default, PKCS#1 when requested)."""
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    fmt = serialization.PrivateFormat.TraditionalOpenSSL if pkcs1 else serialization.PrivateFormat.PKCS8
+    fmt = (
+        serialization.PrivateFormat.TraditionalOpenSSL
+        if pkcs1
+        else serialization.PrivateFormat.PKCS8
+    )
     return key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=fmt,
@@ -83,9 +87,7 @@ def test_app_mode_key_from_file(tmp_path) -> None:
     key_file.write_text(_PEM)
     c = load_from(
         map_lookup(
-            _app_env(
-                {"GITHUB_APP_PRIVATE_KEY": "", "GITHUB_APP_PRIVATE_KEY_PATH": str(key_file)}
-            )
+            _app_env({"GITHUB_APP_PRIVATE_KEY": "", "GITHUB_APP_PRIVATE_KEY_PATH": str(key_file)})
         )
     )
     assert c.app_mode()
@@ -107,9 +109,7 @@ def test_app_mode_flattened_key_with_trailing_newline_from_file(tmp_path) -> Non
     key_file.write_text(_PEM.replace("\n", "\\n") + "\n")
     c = load_from(
         map_lookup(
-            _app_env(
-                {"GITHUB_APP_PRIVATE_KEY": "", "GITHUB_APP_PRIVATE_KEY_PATH": str(key_file)}
-            )
+            _app_env({"GITHUB_APP_PRIVATE_KEY": "", "GITHUB_APP_PRIVATE_KEY_PATH": str(key_file)})
         )
     )
     assert c.app_mode()
@@ -122,9 +122,7 @@ def test_app_mode_flattened_key_with_trailing_newline_from_file(tmp_path) -> Non
         pytest.param({"GITHUB_APP_ID": ""}, id="missing app id"),
         pytest.param({"GITHUB_APP_INSTALLATION_ID": ""}, id="missing installation"),
         pytest.param({"GITHUB_APP_PRIVATE_KEY": ""}, id="missing key"),
-        pytest.param(
-            {"GITHUB_APP_PRIVATE_KEY_PATH": "/some/key.pem"}, id="both key sources"
-        ),
+        pytest.param({"GITHUB_APP_PRIVATE_KEY_PATH": "/some/key.pem"}, id="both key sources"),
         pytest.param({"GITHUB_APP_ID": "0"}, id="zero app id"),
         pytest.param({"GITHUB_APP_ID": "-1"}, id="negative app id"),
         pytest.param({"GITHUB_APP_ID": "abc"}, id="non-numeric app id"),
@@ -172,7 +170,13 @@ def test_repr_redacts_secrets() -> None:
         )
     )
     rendered = repr(cfg)
-    for leak in ("ghp_supersecretpat", "webhook-shhh", "internal-shhh", "SECRETPATH", "PRIVATE KEY"):
+    for leak in (
+        "ghp_supersecretpat",
+        "webhook-shhh",
+        "internal-shhh",
+        "SECRETPATH",
+        "PRIVATE KEY",
+    ):
         assert leak not in rendered, f"repr leaked {leak!r}: {rendered}"
     assert "***" in rendered
     assert "github_app_id=42" in rendered  # non-secret fields stay visible for debugging
