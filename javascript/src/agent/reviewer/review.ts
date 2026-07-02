@@ -14,6 +14,7 @@ import { type Finding, findingsJson, parseFindings } from './findings';
 import { dedupe, demoteToNitpick, dropLowConfidence } from './glue';
 import type { Engine } from './reviewer';
 import { type Scorecard, scoreFindings } from './scorecard';
+import { type Standards, gateCitations, isEmpty } from './standards';
 
 // The user inputs that start each drive. The real instruction (lens prompt + diff) lives in the
 // agents' system instruction; these just kick generation.
@@ -28,20 +29,26 @@ export const GLUE_TRIGGER = 'Synthesize the holistic findings as the JSON array 
 export async function runReview(
   engine: Engine,
   files: PRFile[],
+  std: Standards | null,
 ): Promise<{ card: Scorecard; findings: Finding[] }> {
   const diff = formatDiff(files);
   const cats = selectCategories(files);
 
-  const category = await runCategoryReview(engine, diff, cats);
+  const category = await runCategoryReview(engine, diff, cats, std);
   // Glue sees the category findings as "already reported" and skips re-flagging them, so it must
-  // see only the findings that survive the same gate as the final output. Otherwise a finding the
-  // verify gate later drops is suppressed in glue and then dropped here, vanishing from the review
-  // entirely.
-  const gatedForGlue = dropLowConfidence([...category], engine.minConfidence);
-  const glue = await runGlue(engine, diff, gatedForGlue);
+  // see only the findings that survive the same gates as the final output. Otherwise a finding the
+  // verify/citation gate later drops is suppressed in glue and then dropped here, vanishing from the
+  // review entirely.
+  const gatedForGlue = gateCitations(
+    engine,
+    dropLowConfidence([...category], engine.minConfidence),
+    std,
+  );
+  const glue = await runGlue(engine, diff, gatedForGlue, std);
 
   let all = [...category, ...glue];
   all = dropLowConfidence(all, engine.minConfidence); // phase-1 verify gate
+  all = gateCitations(engine, all, std); // citation gate
   all = dedupe(all); // cross-lens dedup
   return { card: scoreFindings(all), findings: all };
 }
@@ -56,11 +63,12 @@ export async function runCategoryReview(
   engine: Engine,
   diff: string,
   cats: Category[],
+  std: Standards | null,
 ): Promise<Finding[]> {
   // Deferred import breaks the review <-> agentsSetup module cycle.
   const agentsSetup = await import('./agentsSetup');
 
-  const agents: BaseAgent[] = cats.map((c) => agentsSetup.buildCategoryAgent(engine, c, diff));
+  const agents: BaseAgent[] = cats.map((c) => agentsSetup.buildCategoryAgent(engine, c, diff, std));
   const parallel = new ParallelAgent({
     name: 'review_all',
     description: 'Per-category review in parallel',
@@ -92,10 +100,15 @@ export async function runCategoryReview(
  * Run the holistic synthesis pass over the diff and the category findings, returning the additional
  * architectural/testability/coverage findings it produced. Empty is success.
  */
-export async function runGlue(engine: Engine, diff: string, prior: Finding[]): Promise<Finding[]> {
+export async function runGlue(
+  engine: Engine,
+  diff: string,
+  prior: Finding[],
+  std: Standards | null,
+): Promise<Finding[]> {
   const agentsSetup = await import('./agentsSetup');
 
-  const agent = agentsSetup.buildGlueAgent(engine, diff, prior);
+  const agent = agentsSetup.buildGlueAgent(engine, diff, prior, std);
   const runner = newRunner('reviewer-glue', agent);
   const text = await driveText(runner, 'system', 'glue', GLUE_TRIGGER);
   return parseFindings(text);
@@ -173,23 +186,52 @@ export function modelForTier(engine: Engine, tier: Tier): BaseLlm {
 }
 
 /**
- * Compose a category agent's instruction: the lens prompt and the filtered diff (baked in because
- * it is per-event).
+ * Compose a category agent's instruction: the lens prompt, the repo's standards rule menu (when
+ * any), and the filtered diff (baked in because they are per-event).
  */
-export function buildReviewInstruction(promptBody: string, diff: string): string {
-  return promptBody + '\n\n## Diff under review\n\n' + diff;
+export function buildReviewInstruction(promptBody: string, diff: string, std: Standards | null): string {
+  const parts = [promptBody];
+  writeStandardsMenu(parts, std);
+  parts.push('\n\n## Diff under review\n\n');
+  parts.push(diff);
+  return parts.join('');
 }
 
 /**
- * Compose the glue agent's instruction: the glue prompt, the diff, and the findings the category
- * agents already produced (so it reasons holistically without re-flagging them).
+ * Compose the glue agent's instruction: the glue prompt, the standards menu, the diff, and the
+ * findings the category agents already produced (so it reasons holistically without re-flagging
+ * them).
  */
-export function buildGlueInstruction(promptBody: string, diff: string, prior: Finding[]): string {
-  return (
-    promptBody +
-    '\n\n## Diff under review\n\n' +
-    diff +
-    '\n\n## Findings already reported by other lenses\n\n' +
-    findingsJson(prior)
+export function buildGlueInstruction(
+  promptBody: string,
+  diff: string,
+  prior: Finding[],
+  std: Standards | null,
+): string {
+  const parts = [promptBody];
+  writeStandardsMenu(parts, std);
+  parts.push('\n\n## Diff under review\n\n');
+  parts.push(diff);
+  parts.push('\n\n## Findings already reported by other lenses\n\n');
+  parts.push(findingsJson(prior));
+  return parts.join('');
+}
+
+/**
+ * Append the repo's compact rule menu and the citation instruction to an agent prompt when
+ * standards were discovered. The full text of any rule is available via getRule.
+ */
+export function writeStandardsMenu(parts: string[], std: Standards | null): void {
+  if (isEmpty(std)) {
+    return;
+  }
+  const real = std!;
+  parts.push('\n\n## Repo standards (cite rule_id for conformance findings)\n\n');
+  parts.push(real.menu());
+  parts.push(
+    '\nWhen a finding is a violation of one of these rules, set its dimension to the ' +
+      'rule\'s dimension and set "rule_id" to the rule\'s id. Call get_rule(id) to read a ' +
+      "rule's full text before flagging. Never invent a rule id; a pattern/architecture " +
+      'finding with no matching rule is not a standards violation.\n',
   );
 }

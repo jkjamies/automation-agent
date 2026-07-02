@@ -50,10 +50,29 @@ export interface TokenProvider {
 }
 
 /**
+ * A provider that can resolve the GitHub login it authors content as, so the service can recognize
+ * the comments it posted (the authoritative ownership signal for marker-comment upserts). Optional:
+ * a provider need not implement it, in which case ownership falls back to author-type matching.
+ */
+export interface IdentityResolver {
+  /** Return the login this provider authors as; `""` means the identity is unknown. */
+  authoredLogin(): Promise<string>;
+}
+
+/** Report whether `p` can resolve its authored login (implements {@link IdentityResolver}). */
+export function isIdentityResolver(p: unknown): p is IdentityResolver {
+  return (
+    p !== null &&
+    typeof p === 'object' &&
+    typeof (p as { authoredLogin?: unknown }).authoredLogin === 'function'
+  );
+}
+
+/**
  * Returns the same token for every repo. Backs PAT mode and the empty/anonymous client (an
  * empty token yields an unauthenticated client, fine for public reads and tests).
  */
-export class StaticProvider implements TokenProvider {
+export class StaticProvider implements TokenProvider, IdentityResolver {
   private readonly tok: string;
   private readonly gh: Octokit;
 
@@ -72,6 +91,19 @@ export class StaticProvider implements TokenProvider {
   github(): Octokit {
     return this.gh;
   }
+
+  /**
+   * Resolve the authenticated user login for the PAT via GET /user, so the service can recognize
+   * comments it authored in PAT mode. An empty token yields `""` (anonymous — there is no identity
+   * to attribute).
+   */
+  async authoredLogin(): Promise<string> {
+    if (this.tok === '') {
+      return '';
+    }
+    const { data } = await this.gh.rest.users.getAuthenticated();
+    return data.login ?? '';
+  }
 }
 
 /**
@@ -81,8 +113,11 @@ export class StaticProvider implements TokenProvider {
  * seam. `token()` reads the installation token off the same Octokit auth hook the REST
  * client uses, so both reuse one cached installation token.
  */
-export class AppProvider implements TokenProvider {
+export class AppProvider implements TokenProvider, IdentityResolver {
   private readonly gh: Octokit;
+  // login caches the resolved "<slug>[bot]" identity; only a success is cached, so a transient
+  // lookup failure can be retried on a later call.
+  private login = '';
 
   constructor(appId: number, installationId: number, privateKey: string, baseUrl = '') {
     // The auth-app strategy uses this Octokit's own request (so the configured base URL is
@@ -109,6 +144,25 @@ export class AppProvider implements TokenProvider {
 
   github(): Octokit {
     return this.gh;
+  }
+
+  /**
+   * Resolve the `"<app-slug>[bot]"` login this App authors content as, via a JWT-authenticated GET
+   * /app, so the service can recognize the comments it posted. Resolved once and cached (the slug is
+   * immutable for the deployment's lifetime). The auth-app strategy authenticates GET /app with the
+   * app JWT automatically.
+   */
+  async authoredLogin(): Promise<string> {
+    if (this.login !== '') {
+      return this.login;
+    }
+    const { data } = await this.gh.rest.apps.getAuthenticated();
+    const slug = (data as { slug?: string } | null)?.slug ?? '';
+    if (slug === '') {
+      throw new Error('auth: app identity response has no slug');
+    }
+    this.login = `${slug}[bot]`;
+    return this.login;
   }
 }
 

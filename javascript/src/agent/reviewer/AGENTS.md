@@ -1,17 +1,14 @@
 # agent/reviewer
 
-The in-house **PR code-review** workflow. It reacts to GitHub `pull_request` events and produces a
-count-based scorecard from per-category sub-agent findings. It is **comment-only** and never opens
-PRs.
+The in-house **PR code-review** workflow. It reacts to GitHub `pull_request` events and posts a
+CodeRabbit-style review — per-category sub-agent findings, a count-based scorecard, inline comments
+with ```suggestion blocks, an "🤖 Prompt for AI agents" block, and an **advisory** `agent-review`
+check (never a merge gate). It is **comment-only** and never opens PRs.
 
 Unlike the lint/coverage fixers, the reviewer is **not** a suspend/resume fix loop: it is mostly
 one-shot per `pull_request` event and does not park on `awaitCi`. Its long LLM compute runs
 **in-request** via the execution transport (`Kind.Review` → `/internal/dispatch`), so CPU stays
 allocated on Cloud Run.
-
-Publishing the scored review to the PR — inline comments, the marker summary comment, the advisory
-`agent-review` check, reconciliation, and standards-aware steering — is a **follow-up**. This
-package currently covers detection and analysis through the scorecard.
 
 ## Flow
 
@@ -46,10 +43,14 @@ flowchart TD
     C5 --> GLUE
     C6 --> GLUE
     GLUE["glue synthesis (code tier, always): architecture · testability · coverage"]
-    GLUE --> GATE["verify gate (REVIEW_MIN_CONFIDENCE) + dedupe"]
+    GLUE --> GATE["verify gate (REVIEW_MIN_CONFIDENCE) + citation gate + dedupe"]
     GATE --> SCORE["scorecard: per-dimension level + critical-cap → 🔴/🟡/🟢"]
-    SCORE --> LOG["log the scored result (publish is a follow-up)"]
+    SCORE --> PUB["publish (all REST): inline review + suggestions · marker summary · advisory agent-review check · reconcile against existing comments"]
 ```
+
+Before the fan-out, a **review** decision discovers the reviewed repo's own standards
+(`discoverStandards`) and threads them through every lens; the deny decision skips straight to
+`publishDeny` (the "too large, please split" summary + a neutral check).
 
 ## Trigger — native-event kickoff
 
@@ -73,12 +74,39 @@ Tasks gives no ordering and cannot cancel an in-flight task):
   engine fetches the PR's current head SHA and skips if it no longer matches the event's SHA.
   Best-effort — a lookup error proceeds rather than suppressing a real review.
 
-## Data layer — REST-first
+**Incremental re-review** is intentionally **not** built: GitHub-as-store persists rendered
+comments, not structured findings, so the latest SHA is always reviewed in full and reconciled
+against the existing comments.
 
-The reviewer reads the PR via the GitHub REST API (`githubapi.Client`), over the shared auth
-provider (App installation token in production, PAT locally): changed files + patches
-(`listPRFiles`), the head SHA (`pullRequestHeadSha`), the repo tree (`tree`), and the existing
-review comments (`listReviewComments`).
+## Data layer — REST-first (GraphQL only for minimize)
+
+The reviewer reads the PR and posts its output via the GitHub REST API (`githubapi.Client`), over
+the shared auth provider (App installation token in production, PAT locally):
+
+- **Read:** changed files + patches (`listPRFiles`), file content at the head SHA
+  (`getFileContent`), the repo tree (`tree`), the head SHA (`pullRequestHeadSha`), and the existing
+  review comments (`listReviewComments`).
+- **Write:** the review (`createReview` — inline comments + ```suggestion), the marker summary
+  comment (`upsertMarkerComment`), and the `agent-review` check run (`createCheckRun`).
+- **The `agent-review` check is REST-only** — GraphQL has no check-run mutation. The **only**
+  GraphQL is `minimizeComment` (collapse an outdated comment as `OUTDATED`).
+
+### Reconciliation — GitHub-as-store (no local durable state)
+
+Every inline comment carries a hidden fingerprint marker `<!-- ar-fp:<file:line:normalizedMessage>
+-->`, so GitHub itself holds the per-PR review state. On each publish (`reconcile.ts` +
+`publish.ts`): **keep** a finding already represented by a comment (idempotent), **add** a finding
+with no existing comment, and **minimize** an existing fingerprinted comment whose finding is gone.
+Minimization is best-effort — a single failure logs and continues so the summary and check still
+publish. The `alreadyPublished` head-SHA guard protects the non-comment outputs (summary, check,
+deny) from duplicating on a redelivered task.
+
+### Comment-author identity
+
+`cmd` resolves the login this service authors as (the app's `"<slug>[bot]"` via a JWT `GET /app` in
+App mode, the PAT user via `GET /user`) and injects it into the client, so `upsertMarkerComment`
+edits only its own summary comment. When the identity is unresolved it falls back to author-type
+matching (App mode trusts bot-authored comments; PAT/anonymous trusts the marker alone).
 
 ## Intake pipeline
 
@@ -101,11 +129,32 @@ review):
 (ADK `ParallelAgent`). The consolidated set: Safety + Security + Code quality (code tier),
 Performance + Accessibility (base tier; accessibility only when UI/markup changed) + an `(other)`
 catch-all demoted to nitpick. The **glue/synthesis** pass (code tier, always) adds architectural
-alignment, testability, test coverage. Then the deterministic gates in code (`glue.ts`): drop below
-`REVIEW_MIN_CONFIDENCE`, collapse cross-lens duplicates by fingerprint. The **scorecard**
-(`scorecard.ts`) is a per-dimension severity histogram → level (🔴 any critical or ≥2 major · 🟡 any
-major or ≥3 medium · 🟢 else); overall = critical-cap (any critical in security / runtime safety →
-🔴) combined with the worst dimension.
+alignment, testability, test coverage. Then the deterministic gates in code (`glue.ts`,
+`standards.ts`): drop below `REVIEW_MIN_CONFIDENCE`, apply the standards citation gate, collapse
+cross-lens duplicates by fingerprint. The **scorecard** (`scorecard.ts`) is a per-dimension severity
+histogram → level (🔴 any critical or ≥2 major · 🟡 any major or ≥3 medium · 🟢 else); overall =
+critical-cap (any critical in security / runtime safety → 🔴) combined with the worst dimension.
+
+## Standards-aware review
+
+`standards.ts` steers off the conventions of the repo **under review** — `.agents/standards`,
+`.cursor/rules`, `CLAUDE.md`, whatever that repo has. All API-only (no clone): **discover** the tree
+and match `REVIEW_STANDARDS_GLOBS` (per-module scoping — a per-directory instruction file applies
+only to touched modules), **distill** the docs with the base-tier model into one uniform tagged rule
+list, **cache** per repo + docs SHA, **inject** the compact rule menu into every lens (with a lazy
+`getRule` tool for full text), and **gate citations** (`REVIEW_UNCITED_MODE`): a conformance finding
+that cites no real injected `rule_id` is dropped or demoted to nitpick. A truncated tree, no docs, or
+a distill/fetch error degrades to a **generic** review (uncached).
+
+## Publish stage (CodeRabbit-style, advisory, all REST)
+
+`publish.ts` posts the scored review; nothing here gates a merge. Actionable (critical/major/medium)
+findings on a commentable head-side line (`hunks.ts`) post **inline**; actionable findings outside
+the diff go to the summary's **🔭 Outside diff range** section (never snapped to a wrong line);
+nitpicks collapse into **🧹 Nitpicks**. The summary is marker-updated
+(`<!-- automation-agent:review:<owner>/<repo>#<n> -->`) so a re-review edits it in place. The
+`agent-review` check: green → `success`, yellow/red → `neutral` — **never** `failure`. Deny posts the
+"too large, please split" summary + a neutral check.
 
 ## Structured output
 
@@ -127,12 +176,17 @@ false-positive control.
 - `scorecard.ts` — the count-based `scoreFindings`.
 - `glue.ts` — the deterministic verify gate + cross-lens `dedupe`.
 - `review.ts` — `runReview`: the fan-out drive, glue drive, diff formatting, and instruction
-  composition.
+  composition (incl. the standards rule menu).
+- `hunks.ts` — `commentableLines` / `DiffIndex.inDiff`: which head-side lines take an inline comment.
+- `publish.ts` — `publish` / `publishDeny`: the CodeRabbit-style assembly + REST writes.
+- `reconcile.ts` — the fingerprint marker and the pure `reconcile`.
+- `standards.ts` — discovery, the distiller orchestration + defensive `parseRules`, the per-repo
+  `StandardsCache`, the rule menu / lazy `getRule` tool, and `gateCitations`.
 - `enqueue.ts` — `enqueueOptions`: the debounce/coalesce transport hints.
-- `agentsSetup.ts` — the build-agent split: pure ADK wiring (category + glue LLM agents, the prompt
-  loader, the JSON `generateContentConfig`).
-- `prompts/*.md` — one markdown prompt per category and the glue pass.
+- `agentsSetup.ts` — the build-agent split: pure ADK wiring (category + glue + distiller LLM agents,
+  the prompt loader, the JSON `generateContentConfig`).
+- `prompts/*.md` — one markdown prompt per category, the glue pass, and the standards distiller.
 
 Wiring: `root` registers `Kind.Review` → `Engine.kickoff`; `cmd` builds the engine (via `newEngine`)
-from config and injects the `githubapi` client. Provider SDKs stay out via `setup` helpers. Tests
-are deterministic glue only — no assertions on LLM output.
+from config, resolves the authored login, and injects the `githubapi` client. Provider SDKs stay out
+via `setup` helpers. Tests are deterministic glue only — no assertions on LLM output.

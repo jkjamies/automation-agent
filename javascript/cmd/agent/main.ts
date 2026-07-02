@@ -19,7 +19,7 @@ import { newParkStore } from '../../src/agent/setup/parkstore';
 import { newSessionService } from '../../src/agent/setup/session';
 import { buildSummaryAgent } from '../../src/agent/summary/agentsSetup';
 import type { CommitLister } from '../../src/agent/summary/summary';
-import { StaticProvider, newAppProvider, type TokenProvider } from '../../src/auth/auth';
+import { StaticProvider, isIdentityResolver, newAppProvider, type TokenProvider } from '../../src/auth/auth';
 import { type Config, TasksBackend, appMode, load } from '../../src/config/config';
 import { Client } from '../../src/githubapi/client';
 import { sshCommand } from '../../src/gitrepo/repo';
@@ -181,7 +181,21 @@ async function run(): Promise<void> {
   // One auth provider backs both the REST client and the git transport (PAT/anonymous or a
   // GitHub App installation token), so they share one credential.
   const provider = buildTokenProvider(cfg);
-  const gh = new Client(provider);
+  // Resolve the login this service authors comments as (the app's "<slug>[bot]" in App mode, the PAT
+  // user in PAT mode) so the reviewer's marker-comment upsert edits only its own comments.
+  // Best-effort: a lookup failure must not block startup, so warn and let the client fall back to
+  // author-type matching.
+  let authoredLogin = '';
+  if (isIdentityResolver(provider)) {
+    try {
+      authoredLogin = await provider.authoredLogin();
+    } catch (err) {
+      log.warn(
+        `could not resolve GitHub comment-author identity; marker upsert falls back to author-type matching: ${(err as Error).message}`,
+      );
+    }
+  }
+  const gh = new Client(provider, { authoredLogin, appAuthored: appMode(cfg) });
   // SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
   // and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
   // rather than fail so read-only/dry-run flows still work, but PR operations will not.

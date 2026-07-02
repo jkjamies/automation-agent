@@ -121,6 +121,39 @@ export interface TreeEntry {
 }
 
 /**
+ * One inline review comment on the head (RIGHT) side of a file. GitHub rejects an inline comment
+ * whose line is outside the PR's diff hunks, so the caller posts only in-diff findings here and
+ * lists the rest in the summary comment.
+ */
+export interface ReviewComment {
+  path: string;
+  line: number;
+  side: string; // "RIGHT" (head side)
+  body: string;
+}
+
+/**
+ * An advisory pull-request review: a body plus optional inline comments. The reviewer never
+ * approves or requests changes, so the event is always COMMENT.
+ */
+export interface ReviewInput {
+  body: string;
+  comments: ReviewComment[];
+}
+
+/**
+ * Describes the advisory agent-review check run: always completed, conclusion success or neutral —
+ * never failure, so it informs without gating merges.
+ */
+export interface CheckRunInput {
+  name: string;
+  headSha: string;
+  conclusion: string; // "success" | "neutral"
+  title: string;
+  summary: string;
+}
+
+/**
  * Identifies an existing inline review comment for reconciliation: its GraphQL node id (the
  * minimize-comment subject) and its body (which carries the hidden fingerprint marker).
  */
@@ -189,6 +222,14 @@ export interface OctokitLike {
         pull_number: number;
         per_page: number;
       }): Promise<{ data: unknown[] }>;
+      createReview(params: {
+        owner: string;
+        repo: string;
+        pull_number: number;
+        event: 'COMMENT';
+        body?: string;
+        comments: Array<{ path: string; body: string; line: number; side: string }>;
+      }): Promise<unknown>;
     };
     issues: {
       addLabels(params: {
@@ -196,6 +237,24 @@ export interface OctokitLike {
         repo: string;
         issue_number: number;
         labels: string[];
+      }): Promise<unknown>;
+      listComments(params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        per_page: number;
+      }): Promise<{ data: unknown[] }>;
+      createComment(params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        body: string;
+      }): Promise<unknown>;
+      updateComment(params: {
+        owner: string;
+        repo: string;
+        comment_id: number;
+        body: string;
       }): Promise<unknown>;
     };
     checks: {
@@ -206,6 +265,15 @@ export interface OctokitLike {
         check_name: string;
         filter: 'latest' | 'all';
       }): Promise<{ data: { total_count: number; check_runs: unknown[] } }>;
+      create(params: {
+        owner: string;
+        repo: string;
+        name: string;
+        head_sha: string;
+        status: 'completed';
+        conclusion: string;
+        output: { title: string; summary: string };
+      }): Promise<unknown>;
     };
     git: {
       getTree(params: {
@@ -218,6 +286,12 @@ export interface OctokitLike {
   };
   /** Auto-follows pagination, returning the concatenated `data` items. */
   paginate(fn: unknown, params: unknown): Promise<unknown[]>;
+  /**
+   * Run a GraphQL operation over the same authenticated client as REST. Octokit derives the GraphQL
+   * endpoint from the REST base, including the GitHub Enterprise Server `/api/v3` → `/api/graphql`
+   * mapping.
+   */
+  graphql(query: string, variables?: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
@@ -235,27 +309,46 @@ export interface AuthProvider {
  */
 export class Client {
   private readonly gh: OctokitLike;
+  // authoredLogin is the GitHub login this client authors content as ("<slug>[bot]" in App mode,
+  // the user login in PAT mode). "" means it could not be resolved, in which case appAuthored
+  // selects a safe fallback for marker-comment ownership (see ownsComment).
+  private readonly authoredLogin: string;
+  // appAuthored is true when the REST token comes from a GitHub App installation, so an
+  // unresolved-identity ownership fallback can restrict an in-place edit to bot-authored comments.
+  private readonly appAuthored: boolean;
 
   /**
    * Build a Client from an auth provider (the `auth` seam): `StaticProvider` for a PAT
    * or the anonymous client, `AppProvider` for auto-refreshed GitHub App installation
    * tokens. The provider owns the Octokit instance (and its auth refresh), so REST and
    * git share one credential.
+   *
+   * `authoredLogin` is the login this client authors comments as (resolved by `cmd` and injected),
+   * so `upsertMarkerComment` edits only its own comment; `appAuthored` marks App-installation auth,
+   * the ownership fallback when the login is unresolved.
    */
-  constructor(provider: AuthProvider) {
+  constructor(provider: AuthProvider, opts: { authoredLogin?: string; appAuthored?: boolean } = {}) {
     // A real Octokit's overloaded method/paginate signatures are narrower than
     // the OctokitLike shape used for test fakes; cast through unknown at this
     // single trusted boundary.
     this.gh = provider.github() as unknown as OctokitLike;
+    this.authoredLogin = opts.authoredLogin ?? '';
+    this.appAuthored = opts.appAuthored ?? false;
   }
 
   /**
    * Build a Client around an injected octokit-like object, bypassing the real
    * Octokit constructor. Lets tests fake the network surface.
    */
-  static withOctokit(gh: OctokitLike): Client {
+  static withOctokit(
+    gh: OctokitLike,
+    opts: { authoredLogin?: string; appAuthored?: boolean } = {},
+  ): Client {
     const c: Client = Object.create(Client.prototype) as Client;
-    (c as unknown as { gh: OctokitLike }).gh = gh;
+    const w = c as unknown as { gh: OctokitLike; authoredLogin: string; appAuthored: boolean };
+    w.gh = gh;
+    w.authoredLogin = opts.authoredLogin ?? '';
+    w.appAuthored = opts.appAuthored ?? false;
     return c;
   }
 
@@ -477,6 +570,158 @@ export class Client {
       throw new Error(`list review comments ${owner}/${repo}#${num}: ${errMsg(err)}`);
     }
   }
+
+  /** Post an advisory (COMMENT) pull-request review with optional inline comments. */
+  async createReview(owner: string, repo: string, num: number, input: ReviewInput): Promise<void> {
+    try {
+      const comments = input.comments.map((rc) => ({
+        path: rc.path,
+        body: rc.body,
+        line: rc.line,
+        side: rc.side,
+      }));
+      const params: {
+        owner: string;
+        repo: string;
+        pull_number: number;
+        event: 'COMMENT';
+        comments: Array<{ path: string; body: string; line: number; side: string }>;
+        body?: string;
+      } = { owner, repo, pull_number: num, event: 'COMMENT', comments };
+      if (input.body !== '') {
+        params.body = input.body;
+      }
+      await this.gh.rest.pulls.createReview(params);
+    } catch (err) {
+      throw new Error(`create review ${owner}/${repo}#${num}: ${errMsg(err)}`);
+    }
+  }
+
+  /**
+   * Post a completed, advisory check run for the head SHA. The agent-review check is advisory and
+   * must never gate a merge, so the conclusion is constrained here at the API boundary — a
+   * "failure"/"cancelled" cannot slip in.
+   */
+  async createCheckRun(owner: string, repo: string, input: CheckRunInput): Promise<void> {
+    if (input.conclusion !== 'success' && input.conclusion !== 'neutral') {
+      throw new Error(
+        `create check run ${owner}/${repo}: advisory conclusion must be success or neutral, got ${JSON.stringify(input.conclusion)}`,
+      );
+    }
+    try {
+      await this.gh.rest.checks.create({
+        owner,
+        repo,
+        name: input.name,
+        head_sha: input.headSha,
+        status: 'completed',
+        conclusion: input.conclusion,
+        output: { title: input.title, summary: input.summary },
+      });
+    } catch (err) {
+      throw new Error(`create check run ${owner}/${repo} @${input.headSha}: ${errMsg(err)}`);
+    }
+  }
+
+  /**
+   * Collapse a comment as OUTDATED via GraphQL (the REST API has no equivalent), so a finding that
+   * no longer applies is hidden rather than deleted — the thread is preserved. `subjectId` is the
+   * comment's GraphQL node id ({@link ReviewCommentRef.nodeId}).
+   *
+   * The mutation runs over the same authenticated client as REST (the installation token
+   * authenticates both); Octokit derives the GraphQL endpoint from the REST base incl. the GitHub
+   * Enterprise Server `/api/v3` → `/api/graphql` mapping.
+   */
+  async minimizeComment(subjectId: string): Promise<void> {
+    const mutation =
+      'mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED})' +
+      '{minimizedComment{isMinimized}}}';
+    try {
+      await this.gh.graphql(mutation, { id: subjectId });
+    } catch (err) {
+      throw new Error(`minimize comment ${subjectId}: ${errMsg(err)}`);
+    }
+  }
+
+  /**
+   * Edit the single issue comment this client authored whose body contains `marker`, or create one
+   * if none exists. The reviewer's summary comment carries a hidden marker so a re-review updates it
+   * in place instead of piling up duplicates. Only a comment the client could have authored is
+   * edited (see {@link ownsComment}): GitHub rejects editing a foreign comment, so a comment that
+   * merely echoes the marker must not hijack the upsert.
+   *
+   * @throws Error on an empty marker, a body missing the marker, or an API error.
+   */
+  async upsertMarkerComment(
+    owner: string,
+    repo: string,
+    num: number,
+    marker: string,
+    body: string,
+  ): Promise<void> {
+    // An empty marker would match every comment and edit an unrelated one; a body without the
+    // marker could never be found again, piling up duplicates. Both are caller bugs, so fail fast
+    // rather than corrupt the PR's comments.
+    if (marker === '') {
+      throw new Error(`upsert comment ${owner}/${repo}#${num}: empty marker`);
+    }
+    if (!body.includes(marker)) {
+      throw new Error(`upsert comment ${owner}/${repo}#${num}: body must contain the marker`);
+    }
+    let comments: unknown[];
+    try {
+      comments = await this.gh.paginate(this.gh.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: num,
+        per_page: 100,
+      });
+    } catch (err) {
+      throw new Error(`upsert comment ${owner}/${repo}#${num}: ${errMsg(err)}`);
+    }
+    for (const raw of comments) {
+      const ic = raw as Record<string, unknown>;
+      if (!str(ic.body).includes(marker) || !this.ownsComment(ic)) {
+        continue;
+      }
+      const commentId = typeof ic.id === 'number' ? ic.id : 0;
+      try {
+        await this.gh.rest.issues.updateComment({ owner, repo, comment_id: commentId, body });
+      } catch (err) {
+        // With a known login the match is authoritative, so any edit failure is a real error. On
+        // the weak author-type fallback (identity unresolved) the match can be a foreign bot that
+        // merely echoes the marker; a 403/404 there means "not ours", so skip it and fall through
+        // to create.
+        if (this.authoredLogin === '' && isHttpStatus(err, 403, 404)) {
+          continue;
+        }
+        throw new Error(`edit comment ${owner}/${repo}#${num}: ${errMsg(err)}`);
+      }
+      return;
+    }
+    try {
+      await this.gh.rest.issues.createComment({ owner, repo, issue_number: num, body });
+    } catch (err) {
+      throw new Error(`upsert comment ${owner}/${repo}#${num}: ${errMsg(err)}`);
+    }
+  }
+
+  /**
+   * Report whether this client authored `ic` — the precondition for editing it in place (GitHub
+   * rejects editing a comment the client did not author). A known login is the authoritative check
+   * (byte-for-byte match); otherwise fall back to author type: App mode trusts only bot-authored
+   * comments; PAT/anonymous trusts the marker alone.
+   */
+  private ownsComment(ic: Record<string, unknown>): boolean {
+    const user = (ic.user as Record<string, unknown> | null | undefined) ?? null;
+    if (this.authoredLogin !== '') {
+      return user !== null && str(user.login) === this.authoredLogin;
+    }
+    if (this.appAuthored) {
+      return user !== null && str(user.type) === 'Bot';
+    }
+    return true;
+  }
 }
 
 /**
@@ -653,6 +898,15 @@ function str(v: unknown): string {
 /** Coerce a possibly-missing number field to `0`. */
 function num(v: unknown): number {
   return typeof v === 'number' ? v : 0;
+}
+
+/**
+ * Report whether `err` is (or carries) an Octokit API error with one of the given HTTP status
+ * codes. Octokit's `RequestError` exposes the status on a `status` property.
+ */
+function isHttpStatus(err: unknown, ...codes: number[]): boolean {
+  const status = (err as { status?: unknown } | null | undefined)?.status;
+  return typeof status === 'number' && codes.includes(status);
 }
 
 /** Parse an ISO-8601 timestamp to a Date, or null when absent/empty. */
