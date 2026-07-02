@@ -52,7 +52,7 @@ const (
 )
 
 // TasksBackend selects the webhook execution transport: how an enqueued envelope reaches
-// the dispatcher. See specs/20260626-workflow-execution-transport.md.
+// the dispatcher.
 type TasksBackend string
 
 const (
@@ -94,7 +94,7 @@ type Config struct {
 	GitHubToken string
 	// GitHubApp carries the resolved GitHub App credentials. A zero value
 	// (AppID == 0) means App mode is off and the static GitHubToken (PAT) is used.
-	// See AppMode and specs/20260625-github-app-authentication.md.
+	// See AppMode.
 	GitHubApp GitHubApp
 	// GitTransport selects the git clone/push transport: "https" (default — uses GitHubToken)
 	// or "ssh" (local dev — ssh-agent/keys). SSH only covers the git transport; the GitHub
@@ -128,7 +128,7 @@ type Config struct {
 
 	// Reviewer (PR code-review agent). ReviewEnabled (REVIEW_ENABLED) is the kill switch:
 	// false (the default) means pull_request events are accepted and acknowledged but no
-	// review work runs. See specs/20260625-pr-code-review-agent.md.
+	// review work runs.
 	ReviewEnabled bool
 	// ReviewSkipDrafts skips draft PRs unless the triggering action is ready_for_review
 	// (REVIEW_SKIP_DRAFTS, default true).
@@ -164,8 +164,7 @@ type Config struct {
 
 	// Execution transport (webhook → dispatcher). TasksBackend selects in-process (default)
 	// or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
-	// task carries InternalToken as its Bearer credential (no new auth var). See
-	// specs/20260626-workflow-execution-transport.md.
+	// task carries InternalToken as its Bearer credential (no new auth var).
 	TasksBackend TasksBackend
 	// TasksProject is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
 	// GOOGLE_CLOUD_PROJECT. Required for cloudtasks.

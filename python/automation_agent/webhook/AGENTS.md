@@ -88,7 +88,7 @@ sequenceDiagram
   retry-on-non-2xx contract: a transient dispatch error → `500` (the queue retries with
   backoff); a poison body (undecodable / unknown `Kind`) → `200` + log (acked so the queue
   drops it instead of looping). Returns `501` when no dispatcher is wired. See
-  `specs/20260626-workflow-execution-transport.md` and `automation_agent/tasks`.
+  `automation_agent/tasks`.
 
 The `/internal/*` endpoints are Bearer-authenticated with `internal_token` (`INTERNAL_TOKEN`),
 constant-time-compared. With **no** token they are **disabled (404)** — never open by default;

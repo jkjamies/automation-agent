@@ -18,7 +18,6 @@
 // outdated), and steered off the reviewed repo's own standards (.agents/standards, .cursor/rules,
 // CLAUDE.md, …) when present. Deny publishes the "too large, please split" summary + a neutral
 // check. Still to come: reply-to-reply threading (incremental re-review is intentionally deferred).
-// See specs/20260625-pr-code-review-agent.md.
 package reviewer
 
 import (

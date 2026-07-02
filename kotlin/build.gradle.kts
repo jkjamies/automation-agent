@@ -48,7 +48,7 @@ dependencies {
     // Cloud Tasks client for the production TASKS_BACKEND=cloudtasks execution transport: webhook
     // ingress enqueues an HTTP-target task that POSTs the envelope to /internal/dispatch, so the
     // workflow runs in-request (CPU stays allocated on Cloud Run) with durable retry. Used only when
-    // the cloudtasks backend is selected. See specs/20260626-workflow-execution-transport.md.
+    // the cloudtasks backend is selected.
     implementation("com.google.cloud:google-cloud-tasks:2.93.0")
 
     // ADK for Kotlin (the native, coroutine-based SDK; mirrors adk-go). The `agent.setup`

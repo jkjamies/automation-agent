@@ -197,8 +197,7 @@ func run(logger *slog.Logger) error {
 	// Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
 	// in-process (default) on a bounded goroutine pool drained on SIGTERM, or — in
 	// production — via Cloud Tasks, which delivers each envelope to /internal/dispatch so
-	// the compute runs in-request (CPU stays allocated) with durable retry. See
-	// specs/20260626-workflow-execution-transport.md.
+	// the compute runs in-request (CPU stays allocated) with durable retry.
 	transport, err := buildTransport(sigCtx, logger, cfg, dispatcher.Dispatch)
 	if err != nil {
 		return fmt.Errorf("build task transport: %w", err)
@@ -275,7 +274,7 @@ func run(logger *slog.Logger) error {
 
 // buildTransport selects the webhook execution transport: Cloud Tasks in production
 // (durable, in-request, rate-limited by the queue) or the in-process goroutine pool for
-// local dev (the default). See specs/20260626-workflow-execution-transport.md.
+// local dev (the default).
 func buildTransport(ctx context.Context, logger *slog.Logger, cfg config.Config, dispatch tasks.DispatchFunc) (tasks.Transport, error) {
 	if cfg.TasksBackend == config.TasksCloudTasks {
 		t, err := tasks.NewCloudTasks(ctx, cfg.TasksProject, cfg.TasksLocation, cfg.TasksQueue, cfg.DispatchURL, cfg.InternalToken, cfg.TasksDispatchDeadline)

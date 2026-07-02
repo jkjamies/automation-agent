@@ -10,8 +10,7 @@ workflow runs later. Deterministic tooling — **no agent imports** (the dispatc
 On Cloud Run with request-based billing, CPU is throttled to near-zero once a response is sent, so
 the old post-202 background dispatch starved multi-minute LLM compute. The webhook now **enqueues
 and returns fast**; in production the workflow runs **in-request** via `POST /internal/dispatch`,
-which Cloud Tasks delivers to (durable retry + queue rate-limiting, CPU stays allocated). See
-`specs/20260626-workflow-execution-transport.md`.
+which Cloud Tasks delivers to (durable retry + queue rate-limiting, CPU stays allocated).
 
 ## Backends (`TASKS_BACKEND`)
 

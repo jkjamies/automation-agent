@@ -53,8 +53,7 @@ function buildTokenProvider(cfg: Config): TokenProvider {
 
 /**
  * Select the webhook execution transport: Cloud Tasks in production (durable, in-request,
- * rate-limited by the queue) or the in-process task pool for local dev (the default). See
- * `specs/20260626-workflow-execution-transport.md`.
+ * rate-limited by the queue) or the in-process task pool for local dev (the default).
  */
 function buildTransport(cfg: Config, dispatch: DispatchFunc, logger: obs.Logger): Transport {
   if (cfg.tasksBackend === TasksBackend.CloudTasks) {
@@ -242,7 +241,7 @@ async function run(): Promise<void> {
   // Cloud Tasks, which delivers each envelope to /internal/dispatch so the compute runs
   // in-request (CPU stays allocated) with durable retry. (With the default `memory` session
   // backend, parked runs are not durable, so a restart strands them; a sqlite/firestore
-  // backend survives restart.) See specs/20260626-workflow-execution-transport.md.
+  // backend survives restart.)
   const transport = buildTransport(cfg, (e: Envelope) => dispatcher.dispatch(e), rlog);
 
   // The durable timeout catch-all behind POST /internal/sweep: resolve every engine's

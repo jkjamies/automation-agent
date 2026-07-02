@@ -9,8 +9,7 @@
  *     fallback (GITHUB_TOKEN / GH_TOKEN / `gh auth token`) and the empty, anonymous client used for
  *     public reads and tests.
  *   * [AppProvider] — mints and caches a short-lived (~1h), auto-refreshed installation token for a
- *     single pinned installation (single-org per deployment; see
- *     specs/20260625-github-app-authentication.md §1). The `repo` argument is accepted for the
+ *     single pinned installation (single-org per deployment). The `repo` argument is accepted for the
  *     contract but ignored: one installation covers every repo in the deployment.
  *
  * Unlike the Go (ghinstallation), Python (PyGithub) and JS (@octokit/auth-app) ports, the JVM has

@@ -20,7 +20,7 @@ For the full variable list see `.agents/standards/architecture-design.md` §12 a
   `TASKS_QUEUE`, an absolute **https** `DISPATCH_URL` ending in `/internal/dispatch` (`http://` would
   leak the Bearer; `isSecureDispatchUrl`), `INTERNAL_TOKEN`, and `GITHUB_WEBHOOK_SECRET` are all set,
   and `TASKS_DISPATCH_DEADLINE` is within Cloud Tasks' 15s..30m range (default and ceiling 30m). See
-  `tasks/AGENTS.md` and `specs/20260626-workflow-execution-transport.md`.
+  `tasks/AGENTS.md`.
 - **GitHub App mode** (`resolveGitHubApp`): `GITHUB_APP_ID` / `GITHUB_APP_INSTALLATION_ID` plus
   exactly one of `GITHUB_APP_PRIVATE_KEY` / `GITHUB_APP_PRIVATE_KEY_PATH` select the production App
   auth path (`appMode()` → true). Absent App vars leave the zero value = PAT mode; a partial or

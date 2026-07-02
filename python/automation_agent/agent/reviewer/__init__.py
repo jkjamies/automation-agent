@@ -2,8 +2,7 @@
 
 It reacts to GitHub ``pull_request`` events (routed as :attr:`ingest.Kind.REVIEW`) and posts
 per-category sub-agent findings, a count-based scorecard, inline comments with suggestions, and an
-advisory ``agent-review`` check. Comment-only; it never opens PRs. See
-``specs/20260625-pr-code-review-agent.md``.
+advisory ``agent-review`` check. Comment-only; it never opens PRs.
 """
 
 from __future__ import annotations
