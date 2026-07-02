@@ -11,6 +11,13 @@ from google.genai import types
 from automation_agent.agent.setup.events import content_text, user_text
 
 
+def json_config() -> types.GenerateContentConfig:
+    """Request JSON-formatted model output. On the local Ollama path this switches the
+    adapter into JSON mode (so the response is at least syntactically valid JSON); it does
+    not enforce a schema. Lives here so callers need not import the provider SDK directly."""
+    return types.GenerateContentConfig(response_mime_type="application/json")
+
+
 async def generate_text(llm: BaseLlm, system: str, user: str) -> str:
     """Run one completion (``system`` instruction + ``user`` prompt) and return text."""
     req = LlmRequest(

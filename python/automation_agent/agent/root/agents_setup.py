@@ -30,13 +30,15 @@ class Deps:
     lint_kickoff: Handler | None = None  # Kind.LINT
     coverage_kickoff: Handler | None = None  # Kind.COVERAGE
     ci_resume: Handler | None = None  # Kind.CI (dispatched to all fix engines)
+    review_kickoff: Handler | None = None  # Kind.REVIEW (PR code-review agent)
     log: logging.Logger | None = None
 
 
 def build_root_dispatcher(d: Deps) -> Dispatcher:
     """Build the dispatcher and register the available workflows.
 
-    CRON_DAILY → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume.
+    CRON_DAILY → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume;
+    REVIEW → PR code-review agent.
     """
     disp = Dispatcher(d.log)
 
@@ -54,6 +56,8 @@ def build_root_dispatcher(d: Deps) -> Dispatcher:
         disp.register(Kind.COVERAGE, d.coverage_kickoff)
     if d.ci_resume is not None:
         disp.register(Kind.CI, d.ci_resume)
+    if d.review_kickoff is not None:
+        disp.register(Kind.REVIEW, d.review_kickoff)
     return disp
 
 

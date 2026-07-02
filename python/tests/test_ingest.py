@@ -49,7 +49,10 @@ def test_encode_wire_shape() -> None:
     # UTC instant spelled with a trailing "Z", and a standard-base64 payload ("hi" -> "aGk=").
     b = encode(new(Kind.LINT, "webhook:/lint", b"hi", datetime.fromtimestamp(0, tz=UTC)))
     text = b.decode()
-    assert text == '{"kind":"lint","source":"webhook:/lint","received_at":"1970-01-01T00:00:00Z","payload":"aGk="}'
+    assert (
+        text
+        == '{"kind":"lint","source":"webhook:/lint","received_at":"1970-01-01T00:00:00Z","payload":"aGk="}'
+    )
 
 
 def test_decode_rejects_bad_input() -> None:

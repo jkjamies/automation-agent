@@ -60,6 +60,36 @@ class TasksBackend(StrEnum):
     CLOUDTASKS = "cloudtasks"
 
 
+# Reviewer intake defaults (pilot-tunable). Held byte-for-byte identical across every port so a
+# review is sized and steered the same way everywhere.
+DEFAULT_REVIEW_MAX_FILES = 50
+DEFAULT_REVIEW_MAX_DIFF_BYTES = 256 * 1024  # 256 KiB
+DEFAULT_REVIEW_MIN_CONFIDENCE = 0.6
+DEFAULT_REVIEW_STANDARDS_MAX_BYTES = 256 * 1024  # 256 KiB
+
+# The paths dropped before sizing/review: lockfiles, generated code, vendored trees, minified
+# bundles, snapshots, and binaries. A pattern with no '/' matches the basename; one with '/'
+# matches the full path ("**" crosses separators).
+DEFAULT_REVIEW_EXCLUDE_GLOBS = (
+    "go.sum,go.work.sum,package-lock.json,yarn.lock,pnpm-lock.yaml,"
+    "npm-shrinkwrap.json,Cargo.lock,poetry.lock,Pipfile.lock,Gemfile.lock,composer.lock,"
+    "gradle.lockfile,*.min.js,*.min.css,*.map,*.snap,*.pb.go,*_pb2.py,*.gen.go,*_generated.go,"
+    "vendor/**,node_modules/**,third_party/**,dist/**,build/**,__snapshots__/**,"
+    "*.png,*.jpg,*.jpeg,*.gif,*.webp,*.ico,*.pdf,*.woff,*.woff2,*.ttf,*.eot,"
+    "*.zip,*.gz,*.tar,*.jar,*.bin,*.so,*.dylib,*.dll,*.exe"
+)
+
+# The convention-doc paths discovered in the reviewed repo — format-agnostic across the common
+# AI-assistant and project conventions. A pattern with no '/' matches the basename; one with '/'
+# matches the full path.
+DEFAULT_REVIEW_STANDARDS_GLOBS = (
+    "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md,"
+    ".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md,"
+    ".windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md,"
+    ".editorconfig,.golangci.yml,.golangci.yaml"
+)
+
+
 # Trace exporter values for otel_traces_exporter. The app speaks exactly these four sinks and
 # never names a vendor; any OTLP-native backend is otlp + an endpoint. See obs and
 # .agents/standards/observability.md.
@@ -149,6 +179,40 @@ class Config:
     # (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
     agent_pr_label: str = "automation-agent"
 
+    # Reviewer (PR code-review agent). review_enabled (REVIEW_ENABLED) is the kill switch:
+    # the engine no-ops unless it is set, so the feature is dark by default and the rollback
+    # posture is a single flag. The other vars tune intake, standards-aware review, and the
+    # debounce/coalesce window; all are held byte-for-byte identical across every port.
+    review_enabled: bool = False
+    # review_skip_drafts skips draft PRs unless the triggering action is ready_for_review
+    # (REVIEW_SKIP_DRAFTS, default true).
+    review_skip_drafts: bool = True
+    # review_exclude_globs drops generated/vendored/lockfile/minified/binary paths before
+    # sizing and review (REVIEW_EXCLUDE_GLOBS). Defaults to DEFAULT_REVIEW_EXCLUDE_GLOBS.
+    review_exclude_globs: list[str] = field(default_factory=list)
+    # review_max_files / review_max_diff_bytes are the two-dimensional size-gate caps
+    # (REVIEW_MAX_FILES, REVIEW_MAX_DIFF_BYTES): a PR over either cap (measured on the filtered
+    # diff) is denied rather than degraded. A non-positive value disables that dimension.
+    review_max_files: int = DEFAULT_REVIEW_MAX_FILES
+    review_max_diff_bytes: int = DEFAULT_REVIEW_MAX_DIFF_BYTES
+    # review_standards toggles standards-aware review (REVIEW_STANDARDS, default true): discover
+    # the reviewed repo's own convention docs, distill them, and steer the lenses off them.
+    # review_standards_globs are the discovery globs (REVIEW_STANDARDS_GLOBS);
+    # review_standards_max_bytes caps the total doc bytes fed to the distiller
+    # (REVIEW_STANDARDS_MAX_BYTES). review_uncited_mode (REVIEW_UNCITED_MODE, drop|nitpick,
+    # default nitpick) is how an uncited conformance finding is handled.
+    review_standards: bool = True
+    review_standards_globs: list[str] = field(default_factory=list)
+    review_standards_max_bytes: int = DEFAULT_REVIEW_STANDARDS_MAX_BYTES
+    review_uncited_mode: str = "nitpick"
+    # review_min_confidence drops findings below this confidence before scoring
+    # (REVIEW_MIN_CONFIDENCE, the phase-1 verify gate). A non-positive value keeps everything.
+    review_min_confidence: float = DEFAULT_REVIEW_MIN_CONFIDENCE
+    # review_debounce coalesces rapid pushes (REVIEW_DEBOUNCE): a synchronize review is enqueued
+    # under a per-PR dedup name with this delay, so a burst of pushes collapses to one review of
+    # the latest SHA. opened/reopened/ready_for_review enqueue immediately.
+    review_debounce: timedelta = timedelta(seconds=30)
+
     # Execution transport (webhook -> dispatcher). tasks_backend selects in-process (default)
     # or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
     # task carries internal_token as its Bearer credential (no new auth var). See
@@ -227,26 +291,19 @@ class Config:
             ValueError: if a provider enum is invalid or max_iterations < 1.
         """
         if self.llm_provider not in (Provider.OLLAMA, Provider.GEMINI):
-            raise ValueError(
-                f"invalid LLM_PROVIDER {self.llm_provider!r} (want ollama|gemini)"
-            )
+            raise ValueError(f"invalid LLM_PROVIDER {self.llm_provider!r} (want ollama|gemini)")
         if self.notify_provider not in (NotifyProvider.SLACK, NotifyProvider.TEAMS):
-            raise ValueError(
-                f"invalid NOTIFY_PROVIDER {self.notify_provider!r} (want slack|teams)"
-            )
+            raise ValueError(f"invalid NOTIFY_PROVIDER {self.notify_provider!r} (want slack|teams)")
         if self.session_backend not in (
             SessionBackend.MEMORY,
             SessionBackend.SQLITE,
             SessionBackend.FIRESTORE,
         ):
             raise ValueError(
-                f"invalid SESSION_BACKEND {self.session_backend!r} "
-                "(want memory|sqlite|firestore)"
+                f"invalid SESSION_BACKEND {self.session_backend!r} (want memory|sqlite|firestore)"
             )
         if self.git_transport not in ("https", "ssh"):
-            raise ValueError(
-                f"invalid GIT_TRANSPORT {self.git_transport!r} (want https|ssh)"
-            )
+            raise ValueError(f"invalid GIT_TRANSPORT {self.git_transport!r} (want https|ssh)")
         if self.tasks_backend == TasksBackend.CLOUDTASKS:
             self._validate_cloudtasks()
         elif self.tasks_backend != TasksBackend.INPROCESS:
@@ -270,6 +327,29 @@ class Config:
                 "rejected to avoid acting on every installed repo)"
             )
         self._validate_observability()
+        self._validate_reviewer()
+
+    def _validate_reviewer(self) -> None:
+        """Check the REVIEW_* settings that defaults alone cannot guarantee: the standards
+        byte cap must be positive, the confidence gate must be a probability, and the uncited
+        mode must be one of the two known values.
+
+        Raises:
+            ValueError: on a non-positive standards cap, an out-of-range confidence, or an
+                unknown uncited mode.
+        """
+        if self.review_standards_max_bytes <= 0:
+            raise ValueError(
+                f"REVIEW_STANDARDS_MAX_BYTES: must be positive, got {self.review_standards_max_bytes}"
+            )
+        if not (0 <= self.review_min_confidence <= 1):
+            raise ValueError(
+                f"REVIEW_MIN_CONFIDENCE: must be in [0,1], got {self.review_min_confidence}"
+            )
+        if self.review_uncited_mode not in ("drop", "nitpick"):
+            raise ValueError(
+                f"invalid REVIEW_UNCITED_MODE {self.review_uncited_mode!r} (want drop|nitpick)"
+            )
 
     def _validate_observability(self) -> None:
         """Check the OTEL_* settings: the exporter must be one of the four known sinks, and
@@ -286,9 +366,7 @@ class Config:
             return
         if self.otel_traces_exporter == OTEL_EXPORTER_OTLP:
             if not self.otel_exporter_otlp_endpoint.strip():
-                raise ValueError(
-                    "OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT"
-                )
+                raise ValueError("OTEL_TRACES_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT")
             return
         raise ValueError(
             f"invalid OTEL_TRACES_EXPORTER {self.otel_traces_exporter!r} "
@@ -417,9 +495,7 @@ def load_from(get: Lookup) -> Config:
         github_token=_get_or(get, "GITHUB_TOKEN", _get_or(get, "GH_TOKEN", "")),
         git_transport=_get_or(get, "GIT_TRANSPORT", "https"),
         git_ssh_key=_get_or(get, "GIT_SSH_KEY", ""),
-        notify_provider=NotifyProvider(
-            _get_or(get, "NOTIFY_PROVIDER", NotifyProvider.SLACK.value)
-        ),
+        notify_provider=NotifyProvider(_get_or(get, "NOTIFY_PROVIDER", NotifyProvider.SLACK.value)),
         slack_webhook_url=_get_or(get, "SLACK_WEBHOOK_URL", ""),
         teams_webhook_url=_get_or(get, "TEAMS_WEBHOOK_URL", ""),
         port=_get_or(get, "PORT", "8080"),
@@ -445,6 +521,25 @@ def load_from(get: Lookup) -> Config:
         otel_capture_message_content=_get_bool(
             get, "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", False
         ),
+        review_enabled=_get_bool(get, "REVIEW_ENABLED", False),
+        review_skip_drafts=_get_bool(get, "REVIEW_SKIP_DRAFTS", True),
+        review_exclude_globs=_split_list(
+            _get_or(get, "REVIEW_EXCLUDE_GLOBS", DEFAULT_REVIEW_EXCLUDE_GLOBS)
+        ),
+        review_max_files=_get_int(get, "REVIEW_MAX_FILES", DEFAULT_REVIEW_MAX_FILES),
+        review_max_diff_bytes=_get_int(get, "REVIEW_MAX_DIFF_BYTES", DEFAULT_REVIEW_MAX_DIFF_BYTES),
+        review_standards=_get_bool(get, "REVIEW_STANDARDS", True),
+        review_standards_globs=_split_list(
+            _get_or(get, "REVIEW_STANDARDS_GLOBS", DEFAULT_REVIEW_STANDARDS_GLOBS)
+        ),
+        review_standards_max_bytes=_get_int(
+            get, "REVIEW_STANDARDS_MAX_BYTES", DEFAULT_REVIEW_STANDARDS_MAX_BYTES
+        ),
+        review_uncited_mode=_get_or(get, "REVIEW_UNCITED_MODE", "nitpick"),
+        review_min_confidence=_get_float(
+            get, "REVIEW_MIN_CONFIDENCE", DEFAULT_REVIEW_MIN_CONFIDENCE
+        ),
+        review_debounce=_parse_duration(_get_or(get, "REVIEW_DEBOUNCE", "30s"), "REVIEW_DEBOUNCE"),
     )
 
     # Code models default to the base models when unset.
@@ -492,6 +587,36 @@ def _get_bool(get: Lookup, key: str, default: bool) -> bool:
     if v in ("0", "false", "no", "off"):
         return False
     return default
+
+
+def _get_int(get: Lookup, key: str, default: int) -> int:
+    """Parse an integer env var (REVIEW_MAX_FILES etc.). Unset or blank yields ``default``.
+
+    Raises:
+        ValueError: on a non-integer value.
+    """
+    v = get(key)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return int(v.strip())
+    except ValueError as exc:
+        raise ValueError(f"{key}: invalid integer {v.strip()!r}") from exc
+
+
+def _get_float(get: Lookup, key: str, default: float) -> float:
+    """Parse a float env var (REVIEW_MIN_CONFIDENCE). Unset or blank yields ``default``.
+
+    Raises:
+        ValueError: on a non-numeric value.
+    """
+    v = get(key)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return float(v.strip())
+    except ValueError as exc:
+        raise ValueError(f"{key}: invalid number {v.strip()!r}") from exc
 
 
 def _split_list(s: str) -> list[str]:
@@ -561,9 +686,7 @@ def _resolve_github_app(get: Lookup) -> tuple[int, int, bytes]:
             with open(key_path, "rb") as f:
                 raw = f.read()
         except OSError as exc:
-            raise ValueError(
-                f"read GITHUB_APP_PRIVATE_KEY_PATH {key_path!r}: {exc}"
-            ) from exc
+            raise ValueError(f"read GITHUB_APP_PRIVATE_KEY_PATH {key_path!r}: {exc}") from exc
     else:
         raw = key_literal.encode("utf-8")
     return app_id, install_id, _normalize_private_key_pem(raw)
@@ -594,9 +717,7 @@ def _normalize_private_key_pem(raw: bytes) -> bytes:
     # GitHub App keys are RSA, and RS256 JWT signing requires an RSA key — reject
     # EC/Ed25519 here rather than failing cryptically at the first token exchange.
     if not isinstance(key, rsa.RSAPrivateKey):
-        raise ValueError(
-            f"GitHub App private key must be RSA, got {type(key).__name__}"
-        )
+        raise ValueError(f"GitHub App private key must be RSA, got {type(key).__name__}")
     return raw
 
 

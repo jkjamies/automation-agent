@@ -109,6 +109,14 @@ class Server:
                 return Response(content="invalid signature", status_code=401)
             return await self._dispatch(new(Kind.COVERAGE, "webhook:/coverage", body, self.now()))
 
+        # The single GitHub App webhook door. The App delivers every event to this one URL,
+        # so it routes by the X-GitHub-Event header:
+        #   - pull_request -> KindReview: kick off the PR code-review agent (native-event
+        #     kickoff).
+        #   - check_run    -> KindCI:     resume a parked lint/coverage fix run.
+        # Any other event (e.g. ping, or one the App is subscribed to but this service
+        # ignores) is acknowledged with 200 and not dispatched, so GitHub records a
+        # successful delivery. HMAC verification applies to every delivery before routing.
         @app.post("/webhooks/github")
         async def github(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             body = await self._take_body(request)
@@ -116,7 +124,12 @@ class Server:
                 return body
             if not self._authenticated(request, body):
                 return Response(content="invalid signature", status_code=401)
-            return await self._dispatch(new(Kind.CI, "webhook:/github", body, self.now()))
+            event = request.headers.get("X-GitHub-Event", "")
+            if event == "pull_request":
+                return await self._dispatch(new(Kind.REVIEW, "webhook:/github", body, self.now()))
+            if event == "check_run":
+                return await self._dispatch(new(Kind.CI, "webhook:/github", body, self.now()))
+            return Response(status_code=200)
 
         # Cloud Scheduler ingress (Bearer-token auth; disabled with a 404 unless
         # internal_token is set). Lets the daily schedule live GCP-side so the instance can

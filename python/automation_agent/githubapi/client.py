@@ -92,6 +92,58 @@ class CheckResult:
 
 
 @dataclass
+class PRFile:
+    """One changed file in a pull request: its path, change status, line counts, and the
+    unified diff patch. ``patch`` carries the hunk text the reviewer needs to map a finding to
+    a diff line; GitHub omits it for binary or very large files, so it is then empty — kept,
+    not an error. Because an empty patch is ambiguous (binary vs. oversized text),
+    ``additions``/``deletions`` are reported even when the patch is omitted, letting an omitted
+    text diff be charged conservatively from its line counts rather than as zero diff bytes."""
+
+    path: str
+    previous_path: str = ""  # prior path for a rename, else empty
+    status: str = ""  # added | modified | removed | renamed | copied | changed
+    additions: int = 0
+    deletions: int = 0
+    patch: str = ""  # unified diff hunks; empty for binary/oversized files
+
+
+@dataclass
+class PullRequestEvent:
+    """The parsed essentials of a GitHub pull_request webhook event — the reviewer's
+    native-event kickoff. The diff itself is fetched separately via :meth:`Client.list_pr_files`
+    (the event body carries only metadata)."""
+
+    action: str = ""  # opened | reopened | synchronize | ready_for_review | ...
+    number: int = 0
+    repo_full_name: str = ""  # owner/name
+    head_ref: str = ""  # source branch
+    head_sha: str = ""
+    base_ref: str = ""  # target branch
+    draft: bool = False
+    labels: list[str] = field(default_factory=list)
+    author_login: str = ""  # PR author login (e.g. "dependabot[bot]")
+
+
+@dataclass
+class TreeEntry:
+    """One entry in a repository git tree: its repo-relative path, blob/tree SHA, and type."""
+
+    path: str
+    sha: str = ""
+    type: str = ""  # "blob" | "tree"
+
+
+@dataclass
+class ReviewCommentRef:
+    """Identifies an existing inline review comment for reconciliation: its GraphQL node id (the
+    minimize_comment subject) and its body (which carries the hidden fingerprint marker)."""
+
+    node_id: str
+    body: str
+
+
+@dataclass
 class CheckEvent:
     """The parsed essentials of a GitHub check_run webhook event."""
 
@@ -111,12 +163,26 @@ class Client:
     per call so one client serves many repositories.
     """
 
-    def __init__(self, provider: AuthProvider) -> None:
+    def __init__(
+        self,
+        provider: AuthProvider,
+        *,
+        authored_login: str = "",
+        app_authored: bool = False,
+    ) -> None:
         """Build a Client from an auth provider (``auth.StaticProvider`` for PAT /
         anonymous, ``auth.AppProvider`` for GitHub App installation tokens). The provider
         owns the underlying PyGithub client and its token refresh.
+
+        ``authored_login`` is the login this client authors content as; when known,
+        :meth:`upsert_marker_comment` edits only comments by this login — the authoritative
+        ownership signal. ``app_authored`` is the fallback when the login is unknown: an App
+        installation posts as a bot user (type ``"Bot"``), so an in-place edit is restricted to
+        bot-authored comments rather than any comment echoing the marker.
         """
         self._gh = provider.github()
+        self._authored_login = authored_login
+        self._app_authored = app_authored
 
     def list_commits_since(self, owner: str, repo: str, since: datetime) -> list[Commit]:
         """Return commits to owner/repo authored since the given time."""
@@ -241,6 +307,102 @@ class Client:
             return fc.decoded_content.decode("utf-8")
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"decode {path}: {exc}") from exc
+
+    def list_pr_files(self, owner: str, repo: str, number: int) -> list[PRFile]:
+        """Return every changed file in a pull request (following pagination). It is the
+        reviewer's primary input — changed files + patches — fetched via REST."""
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            pr = r.get_pull(number)
+            return [
+                PRFile(
+                    path=f.filename or "",
+                    previous_path=f.previous_filename or "",
+                    status=f.status or "",
+                    additions=f.additions or 0,
+                    deletions=f.deletions or 0,
+                    patch=f.patch or "",
+                )
+                for f in pr.get_files()
+            ]
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"list PR files {owner}/{repo}#{number}: {exc}") from exc
+
+    def pull_request_head_sha(self, owner: str, repo: str, number: int) -> str:
+        """Return the PR's current head commit SHA. The reviewer compares it to the SHA carried
+        by a review task to detect a task superseded by a newer push and skip a stale review."""
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            pr = r.get_pull(number)
+            head = pr.head
+            return (head.sha or "") if head is not None else ""
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"get PR {owner}/{repo}#{number}: {exc}") from exc
+
+    def list_review_comments(self, owner: str, repo: str, number: int) -> list[ReviewCommentRef]:
+        """Return the PR's inline review comments (paginated). Reconciliation parses the
+        fingerprint marker from each body to decide what to keep, add, or minimize."""
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            pr = r.get_pull(number)
+            return [
+                ReviewCommentRef(node_id=rc.node_id or "", body=rc.body or "")
+                for rc in pr.get_review_comments()
+            ]
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"list review comments {owner}/{repo}#{number}: {exc}") from exc
+
+    def tree(self, owner: str, repo: str, ref: str) -> tuple[list[TreeEntry], bool]:
+        """List the repository's git tree at ``ref`` (a commit SHA, branch, or tag),
+        recursively — how the reviewer discovers a repo's own standards docs without a clone.
+
+        The second return is GitHub's truncation flag: the API caps a recursive tree (very large
+        repos), and a truncated listing may omit entries, so the caller can decide whether
+        incomplete discovery is acceptable rather than silently missing files.
+        """
+        try:
+            r = self._gh.get_repo(f"{owner}/{repo}")
+            t = r.get_git_tree(ref, recursive=True)
+            entries = [
+                TreeEntry(path=te.path or "", sha=te.sha or "", type=te.type or "")
+                for te in (t.tree or [])
+            ]
+            return entries, bool(t.truncated)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"get tree {owner}/{repo}@{ref}: {exc}") from exc
+
+
+def parse_pull_request_event(body: bytes) -> PullRequestEvent:
+    """Parse a pull_request webhook body into the fields the reviewer gates on. It mirrors
+    :func:`parse_check_run_event`: the webhook JSON is decoded in the tooling layer so the agent
+    consumes a stable projection, never the raw SDK type.
+
+    Raises:
+        ValueError: if the body is not valid JSON.
+    """
+    try:
+        ev: dict[str, Any] = json.loads(body)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"parse pull_request event: {exc}") from exc
+
+    pr = ev.get("pull_request") or {}
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    out = PullRequestEvent(
+        action=ev.get("action") or "",
+        number=pr.get("number") or 0,
+        repo_full_name=((ev.get("repository") or {}).get("full_name")) or "",
+        head_ref=head.get("ref") or "",
+        head_sha=head.get("sha") or "",
+        base_ref=base.get("ref") or "",
+        draft=bool(pr.get("draft")),
+        author_login=((pr.get("user") or {}).get("login")) or "",
+    )
+    for label in pr.get("labels") or []:
+        name = (label or {}).get("name")
+        if name:
+            out.labels.append(name)
+    return out
 
 
 def parse_check_run_event(body: bytes) -> CheckEvent:
