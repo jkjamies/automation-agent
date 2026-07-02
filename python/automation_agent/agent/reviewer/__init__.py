@@ -1,9 +1,8 @@
 """The in-house PR code-review workflow (a CodeRabbit-style advisory reviewer).
 
-It reacts to GitHub ``pull_request`` events (routed as :attr:`ingest.Kind.REVIEW`), gates the PR
-(size/draft/exclude filters), runs per-category sub-agents, and produces a count-based scorecard.
-Publishing the results (inline comments, the marker summary, and the advisory ``agent-review``
-check) is a follow-up. Comment-only; it never opens PRs. See
+It reacts to GitHub ``pull_request`` events (routed as :attr:`ingest.Kind.REVIEW`) and posts
+per-category sub-agent findings, a count-based scorecard, inline comments with suggestions, and an
+advisory ``agent-review`` check. Comment-only; it never opens PRs. See
 ``specs/20260625-pr-code-review-agent.md``.
 """
 
