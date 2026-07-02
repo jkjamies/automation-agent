@@ -12,6 +12,10 @@ import com.automation.agent.agent.fixflow.Deps
 import com.automation.agent.agent.fixflow.Engine
 import com.automation.agent.agent.fixflow.GitHub
 import com.automation.agent.agent.lintfixer.newEngine as newLintEngine
+import com.automation.agent.agent.reviewer.Deps as ReviewerDeps
+import com.automation.agent.agent.reviewer.GitHubClient as ReviewGitHubClient
+import com.automation.agent.agent.reviewer.enqueueOptions
+import com.automation.agent.agent.reviewer.newEngine as newReviewEngine
 import com.automation.agent.agent.root.Handler
 import com.automation.agent.agent.root.RootDeps
 import com.automation.agent.agent.root.buildRootDispatcher
@@ -157,6 +161,25 @@ private fun run() {
             }
         }
 
+    // The PR code-review agent (dark by default: REVIEW_ENABLED=false). It reads the PR via the
+    // shared REST client and runs its analysis in-request on Kind.REVIEW; publishing is a follow-up.
+    val reviewGh =
+        object : ReviewGitHubClient {
+            override suspend fun listPRFiles(owner: String, repo: String, num: Int) = client.listPRFiles(owner, repo, num)
+            override suspend fun pullRequestHeadSha(owner: String, repo: String, num: Int) = client.pullRequestHeadSha(owner, repo, num)
+        }
+    val reviewEngine =
+        newReviewEngine(
+            ReviewerDeps(
+                enabled = cfg.reviewEnabled, gh = reviewGh, baseLlm = llm, codeLlm = codeLlm,
+                minConfidence = cfg.reviewMinConfidence, skipDrafts = cfg.reviewSkipDrafts,
+                excludeGlobs = cfg.reviewExcludeGlobs, maxFiles = cfg.reviewMaxFiles, maxDiffBytes = cfg.reviewMaxDiffBytes,
+                standardsEnabled = cfg.reviewStandards, standardsGlobs = cfg.reviewStandardsGlobs,
+                standardsMaxBytes = cfg.reviewStandardsMaxBytes, uncitedDrop = cfg.reviewUncitedMode == "drop",
+                log = rlog,
+            ),
+        )
+
     val dispatcher =
         buildRootDispatcher(
             RootDeps(
@@ -164,6 +187,7 @@ private fun run() {
                 lintKickoff = payloadHandler { lintEngine.kickoff(it) },
                 coverageKickoff = payloadHandler { coverageEngine.kickoff(it) },
                 ciResume = ciResumeHandler(engines),
+                reviewKickoff = payloadHandler { reviewEngine.kickoff(it) },
                 log = rlog,
             ),
         )
@@ -185,7 +209,9 @@ private fun run() {
     val server =
         webhookServer(
             port = cfg.port.toInt(),
-            ingest = { envelope -> transport.enqueue(envelope) },
+            // A review synchronize is enqueued with the debounce/coalesce hints so rapid pushes
+            // collapse to one delayed task; every other envelope carries no hints (immediate).
+            ingest = { envelope -> transport.enqueue(envelope, enqueueOptions(envelope, cfg.reviewDebounce)) },
             secret = cfg.githubWebhookSecret,
             internalToken = cfg.internalToken,
             sweep = sweep,

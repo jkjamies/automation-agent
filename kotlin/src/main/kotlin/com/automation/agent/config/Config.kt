@@ -25,6 +25,33 @@ const val OTEL_EXPORTER_CONSOLE = "console"
 const val OTEL_EXPORTER_OTLP = "otlp"
 const val OTEL_EXPORTER_GCP = "gcp"
 
+// Reviewer intake defaults (pilot-tunable). Held byte-for-byte identical across every port so a
+// review is sized and steered the same way everywhere.
+private const val DEFAULT_REVIEW_MAX_FILES = 50
+private const val DEFAULT_REVIEW_MAX_DIFF_BYTES = 256 * 1024 // 256 KiB
+private const val DEFAULT_REVIEW_MIN_CONFIDENCE = 0.6
+private const val DEFAULT_REVIEW_STANDARDS_MAX_BYTES = 256 * 1024 // 256 KiB
+
+// The paths dropped before sizing/review: lockfiles, generated code, vendored trees, minified
+// bundles, snapshots, and binaries. A pattern with no '/' matches the basename; one with '/' matches
+// the full path ("**" crosses separators).
+private const val DEFAULT_REVIEW_EXCLUDE_GLOBS =
+    "go.sum,go.work.sum,package-lock.json,yarn.lock,pnpm-lock.yaml," +
+        "npm-shrinkwrap.json,Cargo.lock,poetry.lock,Pipfile.lock,Gemfile.lock,composer.lock," +
+        "gradle.lockfile,*.min.js,*.min.css,*.map,*.snap,*.pb.go,*_pb2.py,*.gen.go,*_generated.go," +
+        "vendor/**,node_modules/**,third_party/**,dist/**,build/**,__snapshots__/**," +
+        "*.png,*.jpg,*.jpeg,*.gif,*.webp,*.ico,*.pdf,*.woff,*.woff2,*.ttf,*.eot," +
+        "*.zip,*.gz,*.tar,*.jar,*.bin,*.so,*.dylib,*.dll,*.exe"
+
+// The convention-doc paths discovered in the reviewed repo — format-agnostic across the common
+// AI-assistant and project conventions. A pattern with no '/' matches the basename; one with '/'
+// matches the full path.
+private const val DEFAULT_REVIEW_STANDARDS_GLOBS =
+    "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md," +
+        ".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md," +
+        ".windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md," +
+        ".editorconfig,.golangci.yml,.golangci.yaml"
+
 /** Provider selects which LLM backend agents use. */
 enum class Provider(val value: String) {
     OLLAMA("ollama"),
@@ -139,6 +166,39 @@ data class Config(
     // Single human-facing label applied to every agent PR on creation (AGENT_PR_LABEL).
     // Write-only: PR lookup is by branch, so the label never gates behavior.
     val agentPrLabel: String,
+    // Reviewer (PR code-review agent). reviewEnabled (REVIEW_ENABLED) is the kill switch: the engine
+    // no-ops unless it is set, so the feature is dark by default and the rollback posture is a single
+    // flag. The other vars tune intake, standards-aware review, and the debounce/coalesce window; all
+    // are held byte-for-byte identical across every port.
+    val reviewEnabled: Boolean,
+    // reviewSkipDrafts skips draft PRs unless the triggering action is ready_for_review
+    // (REVIEW_SKIP_DRAFTS, default true).
+    val reviewSkipDrafts: Boolean,
+    // reviewExcludeGlobs drops generated/vendored/lockfile/minified/binary paths before sizing and
+    // review (REVIEW_EXCLUDE_GLOBS). Defaults to the built-in exclude list.
+    val reviewExcludeGlobs: List<String>,
+    // reviewMaxFiles / reviewMaxDiffBytes are the two-dimensional size-gate caps (REVIEW_MAX_FILES,
+    // REVIEW_MAX_DIFF_BYTES): a PR over either cap (measured on the filtered diff) is denied rather
+    // than degraded. A non-positive value disables that dimension.
+    val reviewMaxFiles: Int,
+    val reviewMaxDiffBytes: Int,
+    // reviewStandards toggles standards-aware review (REVIEW_STANDARDS, default true): discover the
+    // reviewed repo's own convention docs, distill them, and steer the lenses off them.
+    // reviewStandardsGlobs are the discovery globs (REVIEW_STANDARDS_GLOBS); reviewStandardsMaxBytes
+    // caps the total doc bytes fed to the distiller (REVIEW_STANDARDS_MAX_BYTES). reviewUncitedMode
+    // (REVIEW_UNCITED_MODE, drop|nitpick, default nitpick) is how an uncited conformance finding is
+    // handled.
+    val reviewStandards: Boolean,
+    val reviewStandardsGlobs: List<String>,
+    val reviewStandardsMaxBytes: Int,
+    val reviewUncitedMode: String,
+    // reviewMinConfidence drops findings below this confidence before scoring (REVIEW_MIN_CONFIDENCE,
+    // the phase-1 verify gate). A non-positive value keeps everything.
+    val reviewMinConfidence: Double,
+    // reviewDebounce coalesces rapid pushes (REVIEW_DEBOUNCE): a synchronize review is enqueued under
+    // a per-PR dedup name with this delay, so a burst of pushes collapses to one review of the latest
+    // SHA. opened/reopened/ready_for_review enqueue immediately.
+    val reviewDebounce: Duration,
     // Sessions: where the durable suspend/resume session + park record live.
     val sessionBackend: SessionBackend,
     // sqliteDsn is the database path for SESSION_BACKEND=sqlite (ignored otherwise).
@@ -215,6 +275,24 @@ data class Config(
         }
         validateTasks()
         validateOtel()
+        validateReviewer()
+    }
+
+    /**
+     * Checks the REVIEW_* settings that defaults alone cannot guarantee: the standards byte cap must
+     * be positive, the confidence gate must be a probability, and the uncited mode must be one of the
+     * two known values.
+     */
+    private fun validateReviewer() {
+        require(reviewStandardsMaxBytes > 0) {
+            "REVIEW_STANDARDS_MAX_BYTES: must be positive, got $reviewStandardsMaxBytes"
+        }
+        require(reviewMinConfidence in 0.0..1.0) {
+            "REVIEW_MIN_CONFIDENCE: must be in [0,1], got $reviewMinConfidence"
+        }
+        require(reviewUncitedMode == "drop" || reviewUncitedMode == "nitpick") {
+            "invalid REVIEW_UNCITED_MODE \"$reviewUncitedMode\" (want drop|nitpick)"
+        }
     }
 
     /**
@@ -293,6 +371,10 @@ data class Config(
             "slackWebhookUrl=${redactSecret(slackWebhookUrl)}, teamsWebhookUrl=${redactSecret(teamsWebhookUrl)}, " +
             "port=$port, maxIterations=$maxIterations, ciTimeout=$ciTimeout, " +
             "githubWebhookSecret=${redactSecret(githubWebhookSecret)}, agentPrLabel=$agentPrLabel, " +
+            "reviewEnabled=$reviewEnabled, reviewSkipDrafts=$reviewSkipDrafts, reviewMaxFiles=$reviewMaxFiles, " +
+            "reviewMaxDiffBytes=$reviewMaxDiffBytes, reviewStandards=$reviewStandards, " +
+            "reviewStandardsMaxBytes=$reviewStandardsMaxBytes, reviewUncitedMode=$reviewUncitedMode, " +
+            "reviewMinConfidence=$reviewMinConfidence, reviewDebounce=$reviewDebounce, " +
             "sessionBackend=$sessionBackend, sqliteDsn=$sqliteDsn, firestoreProject=$firestoreProject, " +
             "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)}, " +
             "tasksBackend=$tasksBackend, tasksProject=$tasksProject, tasksLocation=$tasksLocation, " +
@@ -358,6 +440,10 @@ data class Config(
             val tasksDispatchDeadline = parseGoDuration(dispatchDeadlineRaw)
                 ?: throw IllegalArgumentException("TASKS_DISPATCH_DEADLINE: invalid duration \"$dispatchDeadlineRaw\"")
 
+            val reviewDebounceRaw = getOr(get, "REVIEW_DEBOUNCE", "30s")
+            val reviewDebounce = parseGoDuration(reviewDebounceRaw)
+                ?: throw IllegalArgumentException("REVIEW_DEBOUNCE: invalid duration \"$reviewDebounceRaw\"")
+
             // Resolve GitHub App credentials (production auth path). Absent App vars leave the zero
             // value — PAT mode; partial/misconfigured App vars are a startup error, never a silent
             // fallback to PAT (Decision §4).
@@ -390,6 +476,17 @@ data class Config(
                 firestoreProject = getOr(get, "FIRESTORE_PROJECT", ""),
                 firestoreCollection = getOr(get, "FIRESTORE_COLLECTION", "automation_agent"),
                 internalToken = getOr(get, "INTERNAL_TOKEN", ""),
+                reviewEnabled = getBool(get, "REVIEW_ENABLED", false),
+                reviewSkipDrafts = getBool(get, "REVIEW_SKIP_DRAFTS", true),
+                reviewExcludeGlobs = splitList(getOr(get, "REVIEW_EXCLUDE_GLOBS", DEFAULT_REVIEW_EXCLUDE_GLOBS)),
+                reviewMaxFiles = getInt(get, "REVIEW_MAX_FILES", DEFAULT_REVIEW_MAX_FILES),
+                reviewMaxDiffBytes = getInt(get, "REVIEW_MAX_DIFF_BYTES", DEFAULT_REVIEW_MAX_DIFF_BYTES),
+                reviewStandards = getBool(get, "REVIEW_STANDARDS", true),
+                reviewStandardsGlobs = splitList(getOr(get, "REVIEW_STANDARDS_GLOBS", DEFAULT_REVIEW_STANDARDS_GLOBS)),
+                reviewStandardsMaxBytes = getInt(get, "REVIEW_STANDARDS_MAX_BYTES", DEFAULT_REVIEW_STANDARDS_MAX_BYTES),
+                reviewUncitedMode = getOr(get, "REVIEW_UNCITED_MODE", "nitpick"),
+                reviewMinConfidence = getFloat(get, "REVIEW_MIN_CONFIDENCE", DEFAULT_REVIEW_MIN_CONFIDENCE),
+                reviewDebounce = reviewDebounce,
                 tasksBackend = tasksBackend,
                 // TASKS_PROJECT falls back to GOOGLE_CLOUD_PROJECT (the ambient Cloud Run var).
                 tasksProject = getOr(get, "TASKS_PROJECT", getOr(get, "GOOGLE_CLOUD_PROJECT", "")),
@@ -434,6 +531,22 @@ private fun getBool(get: Config.Companion.Lookup, key: String, def: Boolean): Bo
         "0", "false", "f", "no", "off" -> false
         else -> def
     }
+}
+
+// Parses an integer setting (REVIEW_MAX_FILES etc.); a blank/unset value yields [def], a non-integer
+// value is a startup error.
+private fun getInt(get: Config.Companion.Lookup, key: String, def: Int): Int {
+    val v = get(key)?.trim()
+    if (v.isNullOrEmpty()) return def
+    return v.toIntOrNull() ?: throw IllegalArgumentException("$key: invalid integer \"$v\"")
+}
+
+// Parses a floating-point setting (REVIEW_MIN_CONFIDENCE); a blank/unset value yields [def], a
+// non-numeric value is a startup error.
+private fun getFloat(get: Config.Companion.Lookup, key: String, def: Double): Double {
+    val v = get(key)?.trim()
+    if (v.isNullOrEmpty()) return def
+    return v.toDoubleOrNull() ?: throw IllegalArgumentException("$key: invalid number \"$v\"")
 }
 
 /**

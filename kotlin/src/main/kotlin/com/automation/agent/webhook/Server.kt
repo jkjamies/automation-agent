@@ -94,7 +94,15 @@ fun Application.webhookRoutes(
         post("/webhooks/github") {
             val body = call.receiveCapped() ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, "payload too large")
             if (!call.authenticated(secret, body)) return@post call.respond(HttpStatusCode.Unauthorized, "invalid signature")
-            accept(ingest, Envelope.new(Kind.CI, "webhook:/github", body, now()))
+            // The GitHub App delivers every event kind to this one URL; route on the X-GitHub-Event
+            // header. pull_request -> the reviewer; check_run -> resume the fix engines. An event we
+            // do not subscribe to (or a probe) is acknowledged with 200 and no dispatch.
+            val kind = when (call.request.header("X-GitHub-Event")) {
+                "pull_request" -> Kind.REVIEW
+                "check_run" -> Kind.CI
+                else -> return@post call.respond(HttpStatusCode.OK, "ignored")
+            }
+            accept(ingest, Envelope.new(kind, "webhook:/github", body, now()))
         }
 
         // Internal Cloud Scheduler ingress: the daily digest + the durable timeout sweep. Guarded by

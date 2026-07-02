@@ -10,19 +10,22 @@ import com.automation.agent.ingest.Kind
 /**
  * Wires the dispatcher. Each handler is optional. [ciResume] handles [Kind.CI] for every fix
  * workflow (lint, coverage) — each engine no-ops unless its check matches. [summaryDaily] runs the
- * daily commit digest fired by the daily Cloud Scheduler trigger.
+ * daily commit digest fired by the daily Cloud Scheduler trigger. [reviewKickoff] handles
+ * [Kind.REVIEW] (a pull_request event) for the PR code-review agent.
  */
 data class RootDeps(
     val summaryDaily: BaseAgent? = null,
     val lintKickoff: Handler? = null,
     val coverageKickoff: Handler? = null,
     val ciResume: Handler? = null,
+    val reviewKickoff: Handler? = null,
     val log: System.Logger? = null,
 )
 
 /**
  * Builds the dispatcher and registers the available workflows: [Kind.CRON_DAILY] → summary;
- * [Kind.LINT] → lint-fixer; [Kind.COVERAGE] → coverage-fixer; [Kind.CI] → resume (all fix engines).
+ * [Kind.LINT] → lint-fixer; [Kind.COVERAGE] → coverage-fixer; [Kind.CI] → resume (all fix engines);
+ * [Kind.REVIEW] → the PR code-review agent.
  */
 fun buildRootDispatcher(deps: RootDeps): Dispatcher {
     val dispatcher = Dispatcher(deps.log)
@@ -31,6 +34,7 @@ fun buildRootDispatcher(deps: RootDeps): Dispatcher {
     deps.lintKickoff?.let { dispatcher.register(Kind.LINT, it) }
     deps.coverageKickoff?.let { dispatcher.register(Kind.COVERAGE, it) }
     deps.ciResume?.let { dispatcher.register(Kind.CI, it) }
+    deps.reviewKickoff?.let { dispatcher.register(Kind.REVIEW, it) }
     return dispatcher
 }
 
