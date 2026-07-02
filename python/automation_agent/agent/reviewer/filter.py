@@ -15,7 +15,7 @@ from automation_agent.githubapi import PRFile
 
 
 @dataclass
-class _GlobPattern:
+class GlobPattern:
     """One compiled exclude glob. A pattern with no '/' matches against the file's basename
     (e.g. "*.min.js", "go.sum"); a pattern with a '/' matches against the full path (e.g.
     "vendor/**"). "**" matches across path separators; "*" and "?" do not."""
@@ -33,12 +33,12 @@ class FileFilter:
         """Compile the exclude globs. Blank entries (e.g. a trailing comma in the env value) are
         skipped. Every glob compiles — :func:`glob_to_regexp` escapes all regexp metacharacters
         — so this cannot fail."""
-        self._patterns: list[_GlobPattern] = []
+        self._patterns: list[GlobPattern] = []
         for g in globs:
             g = g.strip()
             if g == "":
                 continue
-            self._patterns.append(_GlobPattern(re=glob_to_regexp(g), basename="/" not in g))
+            self._patterns.append(GlobPattern(re=glob_to_regexp(g), basename="/" not in g))
 
     def excluded(self, p: str) -> bool:
         """Report whether a path matches any exclude glob."""

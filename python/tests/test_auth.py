@@ -169,6 +169,17 @@ def test_static_provider_empty_authored_login_is_anonymous() -> None:
     assert StaticProvider("").authored_login() == ""
 
 
+def test_static_provider_authored_login_resolves_pat_user(monkeypatch) -> None:
+    # A non-empty token resolves the authenticated user login via GET /user.
+    p = StaticProvider("pat-123")
+
+    class _User:
+        login = "octocat"
+
+    monkeypatch.setattr(p.github(), "get_user", lambda: _User())
+    assert p.authored_login() == "octocat"
+
+
 def test_app_provider_authored_login_resolves_bot_slug(stub) -> None:
     p = new_app_provider(42, 99, _PEM, base_url=stub.base_url)
     assert p.authored_login() == "automation-agent[bot]"

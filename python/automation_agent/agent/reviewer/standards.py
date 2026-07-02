@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, cast
 from google.adk.tools import BaseTool, FunctionTool
 
 from automation_agent.agent import setup
-from automation_agent.agent.reviewer.filter import _GlobPattern, glob_to_regexp
+from automation_agent.agent.reviewer.filter import GlobPattern, glob_to_regexp
 from automation_agent.agent.reviewer.findings import (
     Dimension,
     Finding,
@@ -195,19 +195,19 @@ def match_standards(entries: list[TreeEntry], globs: list[str]) -> list[TreeEntr
     return out
 
 
-def compile_standards_globs(globs: list[str]) -> list[_GlobPattern]:
+def compile_standards_globs(globs: list[str]) -> list[GlobPattern]:
     """Build path matchers from the configured globs. A glob with no '/' matches the basename;
     one with a '/' matches the full path. Reuses the exclude-filter glob compiler."""
-    pats: list[_GlobPattern] = []
+    pats: list[GlobPattern] = []
     for g in globs:
         g = g.strip()
         if g == "":
             continue
-        pats.append(_GlobPattern(re=glob_to_regexp(g), basename="/" not in g))
+        pats.append(GlobPattern(re=glob_to_regexp(g), basename="/" not in g))
     return pats
 
 
-def matches_glob(pats: list[_GlobPattern], p: str) -> bool:
+def matches_glob(pats: list[GlobPattern], p: str) -> bool:
     """Report whether ``p`` matches any compiled standards glob."""
     base = posixpath.basename(p)
     for pat in pats:
