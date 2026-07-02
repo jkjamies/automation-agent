@@ -3,9 +3,19 @@
  *
  * Lets callers outside `setup` use a model without importing genai directly.
  */
+import type { GenerateContentConfig } from '@google/genai';
 import type { BaseLlm, LlmRequest } from '@google/adk';
 
 import { contentText, userText } from './events';
+
+/**
+ * Request JSON-formatted model output. On the local Ollama path this switches the adapter into JSON
+ * mode (so the response is at least syntactically valid JSON); it does not enforce a schema. Lives
+ * here so callers need not import the provider SDK directly.
+ */
+export function jsonConfig(): GenerateContentConfig {
+  return { responseMimeType: 'application/json' };
+}
 
 /** Run one completion (`system` instruction + `user` prompt) and return its text. */
 export async function generateText(llm: BaseLlm, system: string, user: string): Promise<string> {

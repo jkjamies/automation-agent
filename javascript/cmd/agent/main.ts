@@ -12,6 +12,7 @@ import express from 'express';
 import { newCoverageEngine } from '../../src/agent/covfixer/index';
 import { type Deps as FixDeps, type Engine } from '../../src/agent/fixflow/index';
 import { newLintEngine } from '../../src/agent/lintfixer/index';
+import { enqueueOptions, newEngine as newReviewEngine } from '../../src/agent/reviewer/index';
 import { buildRootDispatcher } from '../../src/agent/root/agentsSetup';
 import { buildLLM, buildCodeLLM } from '../../src/agent/setup/llm';
 import { newParkStore } from '../../src/agent/setup/parkstore';
@@ -228,11 +229,31 @@ async function run(): Promise<void> {
   const covEngine = newCoverageEngine(fixDeps);
   const engines = [lintEngine, covEngine];
 
+  // PR code-review agent (reacts to pull_request → Review). Always registered; the engine no-ops
+  // unless REVIEW_ENABLED is set, so REVIEW_ENABLED is the kill switch.
+  const reviewEngine = newReviewEngine({
+    enabled: cfg.reviewEnabled,
+    gh,
+    baseLlm: llm,
+    codeLlm,
+    minConfidence: cfg.reviewMinConfidence,
+    skipDrafts: cfg.reviewSkipDrafts,
+    excludeGlobs: cfg.reviewExcludeGlobs,
+    maxFiles: cfg.reviewMaxFiles,
+    maxDiffBytes: cfg.reviewMaxDiffBytes,
+    standardsEnabled: cfg.reviewStandards,
+    standardsGlobs: cfg.reviewStandardsGlobs,
+    standardsMaxBytes: cfg.reviewStandardsMaxBytes,
+    uncitedDrop: cfg.reviewUncitedMode === 'drop',
+    log: rlog,
+  });
+
   const dispatcher = buildRootDispatcher({
     summaryDaily,
     lintKickoff: payloadHandler((raw) => lintEngine.kickoff(raw)),
     coverageKickoff: payloadHandler((raw) => covEngine.kickoff(raw)),
     ciResume: ciResumeHandler(engines),
+    reviewKickoff: payloadHandler((raw) => reviewEngine.kickoff(raw)),
     log: rlog,
   });
 
@@ -272,7 +293,9 @@ async function run(): Promise<void> {
   }
   const srv = new Server(
     async (e) => {
-      await transport.enqueue(e);
+      // Review envelopes carry coalescing hints (debounce + per-PR dedup name) so rapid pushes
+      // collapse to one task on the latest SHA; other kinds enqueue immediately.
+      await transport.enqueue(e, enqueueOptions(e, cfg.reviewDebounceMs));
     },
     {
       secret: cfg.githubWebhookSecret,

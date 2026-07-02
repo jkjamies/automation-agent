@@ -146,12 +146,27 @@ export class Server {
       });
     });
 
+    // The single GitHub App webhook door. The App delivers every event to this one URL, so it
+    // routes by the X-GitHub-Event header:
+    //   - pull_request -> Kind.Review: kick off the PR code-review agent (native-event kickoff).
+    //   - check_run    -> Kind.CI:     resume a parked lint/coverage fix run.
+    // Any other event (e.g. ping, or one the App is subscribed to but this service ignores) is
+    // acknowledged with 200 and not dispatched, so GitHub records a successful delivery. HMAC
+    // verification applies to every delivery before routing.
     app.post('/webhooks/github', (req: Request, res: Response) => {
       void this.handleBody(req, res, (body) => {
         if (!this.authenticated(req, res, body)) {
           return Promise.resolve();
         }
-        return this.dispatch(res, newEnvelope(Kind.CI, 'webhook:/github', body, this.now()));
+        const event = headerValue(req, 'x-github-event');
+        if (event === 'pull_request') {
+          return this.dispatch(res, newEnvelope(Kind.Review, 'webhook:/github', body, this.now()));
+        }
+        if (event === 'check_run') {
+          return this.dispatch(res, newEnvelope(Kind.CI, 'webhook:/github', body, this.now()));
+        }
+        res.status(200).end();
+        return Promise.resolve();
       });
     });
 

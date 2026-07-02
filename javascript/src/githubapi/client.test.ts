@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Client, parseCheckRunEvent, type OctokitLike } from './client';
+import { Client, parseCheckRunEvent, parsePullRequestEvent, type OctokitLike } from './client';
 
 // --- octokit-shaped fake -----------------------------------------------------
 
@@ -17,6 +17,10 @@ interface FakeOpts {
   checkRunsByRef?: Record<string, unknown[]>;
   contents?: unknown;
   comparison?: unknown;
+  prFiles?: unknown[];
+  onePull?: unknown; // pulls.get response body
+  reviewComments?: unknown[];
+  tree?: { tree: unknown[]; truncated: boolean };
 }
 
 interface Seen {
@@ -57,6 +61,12 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
       seen.pullsHead = params.head;
       return { data: opts.pulls ?? [] };
     }),
+    get: async () => ({ data: opts.onePull ?? {} }),
+    listFiles: tag('prFiles', async () => ({ data: opts.prFiles ?? [] })),
+    listReviewComments: tag('reviewComments', async () => ({ data: opts.reviewComments ?? [] })),
+  };
+  const git = {
+    getTree: async () => ({ data: opts.tree ?? { tree: [], truncated: false } }),
   };
   const issues = {
     addLabels: async (params: { issue_number: number; labels: string[] }) => {
@@ -74,7 +84,7 @@ function makeClient(opts: FakeOpts): { client: Client; seen: Seen } {
   };
 
   const gh: OctokitLike = {
-    rest: { repos, pulls, issues, checks } as unknown as OctokitLike['rest'],
+    rest: { repos, pulls, issues, checks, git } as unknown as OctokitLike['rest'],
     // Resolve the tagged method, invoke it, and return its `.data` (mirrors
     // octokit's auto-pagination over a single page).
     paginate: async (fn: unknown, params: unknown) => {
@@ -323,6 +333,72 @@ describe('getFileContent', () => {
   });
 });
 
+// --- reviewer read methods ---------------------------------------------------
+
+describe('listPRFiles', () => {
+  it('projects changed files with patches and rename info', async () => {
+    const { client } = makeClient({
+      prFiles: [
+        { filename: 'a.go', status: 'modified', additions: 3, deletions: 1, patch: '@@ +x' },
+        { filename: 'b.go', previous_filename: 'old.go', status: 'renamed', additions: 0, deletions: 0 },
+      ],
+    });
+    const files = await client.listPRFiles('o', 'r', 7);
+    expect(files).toHaveLength(2);
+    expect(files[0]).toEqual({ path: 'a.go', previousPath: '', status: 'modified', additions: 3, deletions: 1, patch: '@@ +x' });
+    expect(files[1]!.previousPath).toBe('old.go');
+    expect(files[1]!.patch).toBe(''); // omitted patch degrades to ''
+  });
+});
+
+describe('pullRequestHeadSha', () => {
+  it('returns the current head SHA', async () => {
+    const { client } = makeClient({ onePull: { head: { sha: 'headsha' } } });
+    expect(await client.pullRequestHeadSha('o', 'r', 3)).toBe('headsha');
+  });
+
+  it('degrades a missing head to an empty string', async () => {
+    const { client } = makeClient({ onePull: {} });
+    expect(await client.pullRequestHeadSha('o', 'r', 3)).toBe('');
+  });
+});
+
+describe('tree', () => {
+  it('projects entries and the truncation flag', async () => {
+    const { client } = makeClient({
+      tree: {
+        tree: [
+          { path: 'AGENTS.md', sha: 's1', type: 'blob' },
+          { path: 'src', sha: 's2', type: 'tree' },
+        ],
+        truncated: true,
+      },
+    });
+    const { entries, truncated } = await client.tree('o', 'r', 'main');
+    expect(truncated).toBe(true);
+    expect(entries).toEqual([
+      { path: 'AGENTS.md', sha: 's1', type: 'blob' },
+      { path: 'src', sha: 's2', type: 'tree' },
+    ]);
+  });
+});
+
+describe('listReviewComments', () => {
+  it('projects node ids and bodies', async () => {
+    const { client } = makeClient({
+      reviewComments: [
+        { node_id: 'n1', body: 'a <!-- ar-fp:x -->' },
+        { node_id: 'n2', body: 'b' },
+      ],
+    });
+    const comments = await client.listReviewComments('o', 'r', 7);
+    expect(comments).toEqual([
+      { nodeId: 'n1', body: 'a <!-- ar-fp:x -->' },
+      { nodeId: 'n2', body: 'b' },
+    ]);
+  });
+});
+
 // --- error wrapping ----------------------------------------------------------
 
 describe('error wrapping', () => {
@@ -391,5 +467,48 @@ describe('parseCheckRunEvent', () => {
 
   it('throws on invalid JSON', () => {
     expect(() => parseCheckRunEvent('not json')).toThrow(/parse check_run event/);
+  });
+});
+
+// --- parsePullRequestEvent (pure) -------------------------------------------
+
+describe('parsePullRequestEvent', () => {
+  it('parses the fields the reviewer gates on', () => {
+    const body = `{
+      "action":"synchronize",
+      "pull_request":{
+        "number":7,
+        "draft":true,
+        "head":{"ref":"feature/x","sha":"headsha"},
+        "base":{"ref":"main"},
+        "user":{"login":"dependabot[bot]"},
+        "labels":[{"name":"skip-review"},{"name":"bug"}]
+      },
+      "repository":{"full_name":"acme/web.api"}
+    }`;
+    const ev = parsePullRequestEvent(body);
+    expect(ev.action).toBe('synchronize');
+    expect(ev.number).toBe(7);
+    expect(ev.repoFullName).toBe('acme/web.api');
+    expect(ev.headRef).toBe('feature/x');
+    expect(ev.headSha).toBe('headsha');
+    expect(ev.baseRef).toBe('main');
+    expect(ev.draft).toBe(true);
+    expect(ev.authorLogin).toBe('dependabot[bot]');
+    expect(ev.labels).toEqual(['skip-review', 'bug']);
+  });
+
+  it('degrades missing fields to empty/0 defaults', () => {
+    const ev = parsePullRequestEvent('{}');
+    expect(ev.action).toBe('');
+    expect(ev.number).toBe(0);
+    expect(ev.repoFullName).toBe('');
+    expect(ev.draft).toBe(false);
+    expect(ev.labels).toEqual([]);
+  });
+
+  it('accepts a Uint8Array body and throws on invalid JSON', () => {
+    expect(parsePullRequestEvent(new TextEncoder().encode('{"action":"opened"}')).action).toBe('opened');
+    expect(() => parsePullRequestEvent('nope')).toThrow(/parse pull_request event/);
   });
 });

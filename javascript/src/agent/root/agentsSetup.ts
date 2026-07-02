@@ -21,12 +21,14 @@ export interface Deps {
   lintKickoff?: Handler | null; // Kind.Lint
   coverageKickoff?: Handler | null; // Kind.Coverage
   ciResume?: Handler | null; // Kind.CI (dispatched to all fix engines)
+  reviewKickoff?: Handler | null; // Kind.Review (PR code-review agent)
   log?: Logger | null;
 }
 
 /**
  * Build the dispatcher and register the available workflows.
- * CronDaily → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume.
+ * CronDaily → summary; LINT → lint-fixer; COVERAGE → coverage-fixer; CI → resume; REVIEW → PR
+ * code-review agent.
  */
 export function buildRootDispatcher(d: Deps): Dispatcher {
   const disp = new Dispatcher(d.log);
@@ -42,6 +44,9 @@ export function buildRootDispatcher(d: Deps): Dispatcher {
   }
   if (d.ciResume) {
     disp.register(Kind.CI, d.ciResume);
+  }
+  if (d.reviewKickoff) {
+    disp.register(Kind.Review, d.reviewKickoff);
   }
   return disp;
 }

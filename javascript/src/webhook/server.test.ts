@@ -49,16 +49,40 @@ describe('webhook server', () => {
     expect(c.env!.source).toBe('webhook:/coverage');
   });
 
-  it('github with a valid signature -> 202 with KindCI', async () => {
+  it('github check_run with a valid signature -> 202 with KindCI', async () => {
     const c = new Capture();
     const body = '{"action":"completed"}';
     const resp = await request(new Server(c.ingest, { secret: 'topsecret' }).app)
       .post('/webhooks/github')
       .set('X-Hub-Signature-256', sign('topsecret', body))
+      .set('X-GitHub-Event', 'check_run')
       .send(body);
 
     expect(resp.status).toBe(202);
     expect(c.env!.kind).toBe(Kind.CI);
+  });
+
+  it('github pull_request routes to KindReview', async () => {
+    const c = new Capture();
+    const resp = await request(new Server(c.ingest).app)
+      .post('/webhooks/github')
+      .set('X-GitHub-Event', 'pull_request')
+      .send('{"action":"opened"}');
+
+    expect(resp.status).toBe(202);
+    expect(c.env!.kind).toBe(Kind.Review);
+    expect(c.env!.source).toBe('webhook:/github');
+  });
+
+  it('github with an unrecognized event -> 200 and no dispatch', async () => {
+    const c = new Capture();
+    const resp = await request(new Server(c.ingest).app)
+      .post('/webhooks/github')
+      .set('X-GitHub-Event', 'ping')
+      .send('{}');
+
+    expect(resp.status).toBe(200);
+    expect(c.env).toBeNull();
   });
 
   it('github with an invalid signature -> 401', async () => {
@@ -82,7 +106,10 @@ describe('webhook server', () => {
 
   it('github with no configured secret skips verification -> 202', async () => {
     const c = new Capture();
-    const resp = await request(new Server(c.ingest).app).post('/webhooks/github').send('{}');
+    const resp = await request(new Server(c.ingest).app)
+      .post('/webhooks/github')
+      .set('X-GitHub-Event', 'check_run')
+      .send('{}');
 
     expect(resp.status).toBe(202);
     expect(c.env!.kind).toBe(Kind.CI);
