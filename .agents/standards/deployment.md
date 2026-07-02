@@ -96,7 +96,7 @@ follows Cloud Tasks' retry-on-non-2xx contract: a transient dispatch error → `
 queue retries); a poison body (undecodable / unknown kind) → `200` + log (dropped, not
 retried). **Scale-to-zero is preserved** — no `min-instances` requirement. The fixers'
 durable CI wait (Firestore park/resume) is unchanged and orthogonal: it offloads *waiting*,
-this transport fixes *computing*. See `specs/20260626-workflow-execution-transport.md`.
+this transport fixes *computing*.
 
 #### Why a shared bearer for `/internal/*` (and not OIDC yet)
 

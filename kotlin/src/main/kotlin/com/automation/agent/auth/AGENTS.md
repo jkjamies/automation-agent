@@ -1,8 +1,7 @@
 # auth
 
 The GitHub authentication seam. One interface, `TokenProvider`, hides whether a token comes from a
-static PAT (local-dev fallback) or a freshly minted GitHub App installation token (production). See
-`specs/20260625-github-app-authentication.md`.
+static PAT (local-dev fallback) or a freshly minted GitHub App installation token (production).
 
 ## Flow
 

@@ -7,7 +7,7 @@
  * delivered by Cloud Tasks in production. The seam exists because on Cloud Run with
  * request-based billing CPU is throttled to near-zero once a response is sent, so
  * multi-minute LLM compute must run *inside* a request (Cloud Tasks gives that, plus durable
- * retry and rate limiting). See `specs/20260626-workflow-execution-transport.md`.
+ * retry and rate limiting).
  * Deterministic tooling — no agent imports (the dispatcher is injected as a
  * {@link DispatchFunc}).
  */

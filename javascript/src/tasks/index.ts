@@ -1,8 +1,7 @@
 /**
  * tasks — the execution transport between webhook ingress and the dispatcher.
  *
- * In-process (default, local) or Cloud Tasks (production, in-request). See
- * `specs/20260626-workflow-execution-transport.md`.
+ * In-process (default, local) or Cloud Tasks (production, in-request).
  */
 
 export { type DispatchFunc, type EnqueueOptions, type Logger, type Transport } from './transport';

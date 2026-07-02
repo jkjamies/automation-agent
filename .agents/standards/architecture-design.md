@@ -754,7 +754,7 @@ the firestore emulator for local tests, and the pending-work list — lives in
   which runs the workflow synchronously with CPU allocated; the queue adds durable retry + rate
   limiting. `inprocess` (local/default) reproduces the in-process worker pool. **Scale-to-zero is
   preserved** (no `min-instances`). Orthogonal to the fixers' durable CI wait (that offloads *waiting*;
-  this fixes *computing*). See `specs/20260626-workflow-execution-transport.md`.
+  this fixes *computing*).
 - **Observability (`OTEL_TRACES_EXPORTER`).** The agent framework already emits a native
   span tree per run (`invoke_agent` → `call_llm` → `execute_tool`, GenAI semantic
   conventions); the `internal/obs` package registers the tracer provider + exporter that

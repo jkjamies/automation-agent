@@ -171,7 +171,6 @@ private fun run() {
     // The execution transport runs the dispatch: in-process (default) on a bounded coroutine pool
     // drained on SIGTERM, or — in production — via Cloud Tasks, which delivers each envelope to
     // /internal/dispatch so the compute runs in-request (CPU stays allocated) with durable retry.
-    // See specs/20260626-workflow-execution-transport.md.
     val transport = buildTransport(cfg, rlog) { envelope -> dispatcher.dispatch(envelope) }
 
     if (cfg.githubWebhookSecret.isEmpty()) {
@@ -243,7 +242,6 @@ private fun buildTokenProvider(cfg: Config): TokenProvider =
  * rate-limited by the queue) or the in-process coroutine pool for local dev (the default). The
  * in-process backend runs [dispatch] directly; the Cloud Tasks backend instead delivers each
  * envelope to /internal/dispatch, which the webhook wires to the same dispatcher.
- * See specs/20260626-workflow-execution-transport.md.
  */
 private fun buildTransport(cfg: Config, log: System.Logger, dispatch: DispatchFunc): Transport {
     if (cfg.tasksBackend == TasksBackend.CLOUDTASKS) {

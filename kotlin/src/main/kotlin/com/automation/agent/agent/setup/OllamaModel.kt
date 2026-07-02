@@ -54,8 +54,7 @@ private const val OLLAMA_CONNECT_TIMEOUT_MS = 10_000L
  * Bounds inactivity between data packets: the wait for the first streamed chunk (model load +
  * prefill on a cold 26b model) and any inter-chunk gap thereafter. It is a generous cold-start
  * cushion, NOT a cap on total generation — with SSE streaming the runner asks Ollama to flush
- * NDJSON chunks as it decodes, so the socket stays active and a long decode runs unbounded. See
- * specs/20260625-ollama-sse-streaming-long-generations.md.
+ * NDJSON chunks as it decodes, so the socket stays active and a long decode runs unbounded.
  */
 private const val OLLAMA_SOCKET_TIMEOUT_MS = 300_000L
 

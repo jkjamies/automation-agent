@@ -17,8 +17,7 @@ imports**.
   (unlike a post-202 background task). The body is the wire-encoded envelope (`ingest.decode`); a
   poison (undecodable) body is **acked with 200** and logged so the queue drops it, while a transient
   dispatch error is a **500** so the queue retries with backoff (the retry-on-non-2xx contract).
-  Returns **501** when no dispatch handler is wired. See `tasks` and
-  `specs/20260626-workflow-execution-transport.md`.
+  Returns **501** when no dispatch handler is wired. See `tasks`.
 
 ## Auth model
 

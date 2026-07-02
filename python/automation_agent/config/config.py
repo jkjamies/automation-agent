@@ -47,7 +47,7 @@ class SessionBackend(StrEnum):
 
 class TasksBackend(StrEnum):
     """Selects the webhook execution transport: how an enqueued envelope reaches the
-    dispatcher. See ``specs/20260626-workflow-execution-transport.md``."""
+    dispatcher."""
 
     # Runs each dispatch in a background asyncio task pool (the pre-transport behavior). The
     # default — selecting it changes nothing. Local dev only: it does not survive an instance
@@ -142,10 +142,9 @@ class Config:
     repos: list[str] = field(default_factory=list)
     github_token: str = ""
     # GitHub App (production auth). ``github_app_id == 0`` means App mode is off and the
-    # static ``github_token`` (PAT) is used. See :meth:`app_mode` and
-    # ``specs/20260625-github-app-authentication.md``. ``github_app_private_key_pem`` holds
-    # the literal PEM bytes (from the env var or the key file), unescaped and validated to
-    # parse as RSA at load time.
+    # static ``github_token`` (PAT) is used; see :meth:`app_mode`.
+    # ``github_app_private_key_pem`` holds the literal PEM bytes (from the env var or the key
+    # file), unescaped and validated to parse as RSA at load time.
     github_app_id: int = 0
     github_app_installation_id: int = 0
     github_app_private_key_pem: bytes = b""
@@ -215,8 +214,7 @@ class Config:
 
     # Execution transport (webhook -> dispatcher). tasks_backend selects in-process (default)
     # or Cloud Tasks. The Cloud Tasks settings locate the queue and the worker endpoint; the
-    # task carries internal_token as its Bearer credential (no new auth var). See
-    # specs/20260626-workflow-execution-transport.md.
+    # task carries internal_token as its Bearer credential (no new auth var).
     tasks_backend: TasksBackend = TasksBackend.INPROCESS
     # tasks_project is the GCP project owning the queue (TASKS_PROJECT); empty falls back to
     # GOOGLE_CLOUD_PROJECT. Required for cloudtasks.

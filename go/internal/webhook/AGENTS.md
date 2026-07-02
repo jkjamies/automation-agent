@@ -82,7 +82,7 @@ sequenceDiagram
   retry-on-non-2xx contract: a transient dispatch error → `500` (the queue retries with
   backoff); a poison body (undecodable / unknown `Kind`) → `200` + log (acked so the queue
   drops it instead of looping). Returns `501` when no dispatcher is wired. See
-  `specs/20260626-workflow-execution-transport.md` and `internal/tasks`.
+  `internal/tasks`.
 
 The `/webhooks/*` POSTs are HMAC-verified via `X-Hub-Signature-256` when a secret is
 configured (skipped only when unset, for local dev) — the kickoffs included, since they

@@ -46,7 +46,7 @@ log = logging.getLogger("automation_agent")
 def build_transport(cfg: Config, dispatch: DispatchFunc) -> Transport:
     """Select the webhook execution transport: Cloud Tasks in production (durable,
     in-request, rate-limited by the queue) or the in-process task pool for local dev (the
-    default). See ``specs/20260626-workflow-execution-transport.md``."""
+    default)."""
     if cfg.tasks_backend == TasksBackend.CLOUDTASKS:
         log.info(
             "execution transport: cloud tasks project=%s location=%s queue=%s dispatch_url=%s",
@@ -267,8 +267,7 @@ async def run() -> None:
     # Webhooks enqueue asynchronously and return fast. The transport runs the dispatch:
     # in-process (default) on a bounded task pool drained on SIGTERM, or — in production — via
     # Cloud Tasks, which delivers each envelope to /internal/dispatch so the compute runs
-    # in-request (CPU stays allocated) with durable retry. See
-    # specs/20260626-workflow-execution-transport.md.
+    # in-request (CPU stays allocated) with durable retry.
     transport = build_transport(cfg, dispatcher.dispatch)
 
     async def _ingest(e: Envelope) -> None:

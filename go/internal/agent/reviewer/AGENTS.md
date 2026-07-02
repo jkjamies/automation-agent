@@ -4,12 +4,58 @@ The in-house **PR code-review** workflow. It reacts to GitHub `pull_request` eve
 being built to post a CodeRabbit-style review — per-category sub-agent findings, a
 count-based scorecard, inline comments with ```suggestion blocks, an "🤖 Prompt for AI
 agents" block, and an **advisory** `agent-review` check (never a merge gate). It is
-**comment-only** and never opens PRs. See `specs/20260625-pr-code-review-agent.md`.
+**comment-only** and never opens PRs.
 
 Unlike the lint/coverage fixers, the reviewer is **not** a suspend/resume fix loop: it is
 mostly one-shot per `pull_request` event and does not park on `await_ci`. Its long LLM
 compute runs **in-request** via the execution transport (`KindReview` → `/internal/dispatch`),
 so CPU stays allocated on Cloud Run.
+
+## Flow
+
+```mermaid
+flowchart TD
+    EV["pull_request event"] --> WH["/webhooks/github — route on X-GitHub-Event → KindReview"]
+    WH --> EQ{action}
+    EQ -->|synchronize| DEB["EnqueueOptions: debounce + per-PR-per-window coalesce name (REVIEW_DEBOUNCE)"]
+    EQ -->|"opened / reopened / ready_for_review"| IMM["enqueue immediately"]
+    DEB --> DISP["/internal/dispatch (in-request transport — CPU stays allocated)"]
+    IMM --> DISP
+    DISP --> KO["Engine.Kickoff"]
+    KO --> STALE{"superseded? current head SHA ≠ event SHA"}
+    STALE -.->|newer push won| SKST["skip (stale)"]
+    STALE --> DEC["decide — deterministic, model-free intake"]
+    DEC --> D1["parse → trigger gate → skip rules (draft / own branch / skip-review / dep-bot)"]
+    D1 --> D2["ListPRFiles → exclude-glob filter → two-dimensional size gate"]
+    D2 --> DK{decision}
+    DK -->|skip| NOOP["no-op (log)"]
+    DK -->|"deny (too large)"| DENY["publishDeny: 'please split' summary + neutral check"]
+    DK -->|review| STD["discoverStandards: tree → match globs → fetch → distill (base tier) → cache"]
+    STD -.->|"off / none / error"| GEN["generic review (no rules injected)"]
+    STD --> FAN(["ParallelReview — fan out (ADK ParallelAgent; concurrent on Vertex, GPU-serialized locally). Each lens sees the whole filtered diff + the injected rule list"])
+    GEN --> FAN
+    FAN --> C1["Safety<br/>code tier"]
+    FAN --> C2["Security<br/>code tier"]
+    FAN --> C3["Code quality<br/>code tier"]
+    FAN --> C4["Performance<br/>base tier"]
+    FAN --> C5["Accessibility<br/>base tier · UI/markup only"]
+    FAN --> C6["(other) catch-all → nitpick<br/>base tier"]
+    C1 --> GLUE
+    C2 --> GLUE
+    C3 --> GLUE
+    C4 --> GLUE
+    C5 --> GLUE
+    C6 --> GLUE
+    GLUE["glue synthesis (code tier, always): architecture · testability · coverage"]
+    GLUE --> GATE["verify gate (REVIEW_MIN_CONFIDENCE) + citation gate + dedupe"]
+    GATE --> SCORE["scorecard: per-dimension level + critical-cap → 🔴/🟡/🟢"]
+    SCORE --> PUB["Engine.publish"]
+    PUB --> CLS["classify vs diff hunks: inline · 🔭 outside-diff · 🧹 nitpicks"]
+    CLS --> REC["reconcile vs existing ar-fp comments: keep / add / minimize OUTDATED (best-effort)"]
+    REC --> POST["POST advisory review (inline + suggestion + 🤖 prompt block)"]
+    POST --> SUM["upsert marker summary comment (scorecard table)"]
+    SUM --> CHK["agent-review check: green→success · yellow/red→neutral (never failure)"]
+```
 
 ## Trigger — native-event kickoff
 

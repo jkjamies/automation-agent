@@ -9,9 +9,8 @@
 //     anonymous client used for public reads and tests.
 //   - AppProvider — mints and caches a short-lived (~1h), auto-refreshed
 //     installation token for a single pinned installation (single-org per
-//     deployment; see specs/20260625-github-app-authentication.md §1). The repo
-//     argument is accepted for the contract but ignored: one installation covers
-//     every repo in the deployment.
+//     deployment). The repo argument is accepted for the contract but ignored:
+//     one installation covers every repo in the deployment.
 //
 // NewRoundTripper bridges the seam to the REST client by injecting the provider's
 // token into every request; gitrepo calls Token directly per git operation.

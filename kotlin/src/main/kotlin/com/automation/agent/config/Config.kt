@@ -75,7 +75,7 @@ enum class SessionBackend(val value: String) {
 
 /**
  * TasksBackend selects the webhook execution transport: how an enqueued envelope reaches the
- * dispatcher. See specs/20260626-workflow-execution-transport.md.
+ * dispatcher.
  */
 enum class TasksBackend(val value: String) {
     /** Runs each dispatch in a bounded in-process coroutine pool (the pre-transport behavior). */
@@ -111,8 +111,7 @@ data class Config(
     val githubToken: String,
     // GitHub App credentials (production auth path). [githubAppId] == 0 means App mode is off and the
     // static [githubToken] (PAT) is used. Resolved at load time; partial/misconfigured App vars are a
-    // startup error, never a silent fallback. See [appMode] and
-    // specs/20260625-github-app-authentication.md.
+    // startup error, never a silent fallback. See [appMode].
     val githubAppId: Long,
     val githubAppInstallationId: Long,
     // The App private key in PEM form, already unescaped and validated to parse as RSA (the literal

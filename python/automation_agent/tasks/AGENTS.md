@@ -3,8 +3,7 @@
 The execution transport between webhook ingress and the dispatcher. Webhook ingress reduces
 a request to an `ingest.Envelope` and calls `Transport.enqueue`, which returns fast; the
 envelope's workflow runs **later** — and, in production, **in-request** so Cloud Run keeps
-CPU allocated for the whole (multi-minute LLM) compute. See
-`specs/20260626-workflow-execution-transport.md`.
+CPU allocated for the whole (multi-minute LLM) compute.
 
 ## Why this exists
 

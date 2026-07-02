@@ -90,7 +90,7 @@ export interface Config {
   repos: string[];
   githubToken: string;
   // GitHub App (production auth). githubAppId === 0 means App mode is off and the static
-  // githubToken (PAT) is used. See appMode() and specs/20260625-github-app-authentication.md.
+  // githubToken (PAT) is used. See appMode().
   // githubAppPrivateKeyPem holds the literal PEM (from the env var or the key file),
   // unescaped and validated to parse as RSA at load time.
   githubAppId: number;

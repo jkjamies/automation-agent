@@ -104,8 +104,7 @@ sequenceDiagram
   a `DecodeError` from `decode` — is **acked with 200** and logged so the queue drops it, while
   a transient dispatch error (or an unexpected non-`DecodeError` thrown while decoding) is a
   **500** so the queue retries with backoff (the retry-on-non-2xx contract) rather than silently
-  dropping a task on a genuine bug. See `src/tasks` and
-  `specs/20260626-workflow-execution-transport.md`.
+  dropping a task on a genuine bug. See `src/tasks`.
 
 All three `/webhooks/*` routes share one HMAC over the body (`X-Hub-Signature-256`,
 HMAC-SHA256, hex digest), verified in constant time; verification is skipped only when no

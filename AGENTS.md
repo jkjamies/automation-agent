@@ -92,8 +92,7 @@ no longer strands in-flight runs; `memory` keeps the old ephemeral behavior.
 Webhook-triggered work is handed to the **execution transport** (`TASKS_BACKEND`):
 `inprocess` runs it in an in-process worker pool (local/default), while `cloudtasks`
 (prod) enqueues to Cloud Tasks → `POST /internal/dispatch` so the multi-minute compute
-runs **in-request** on Cloud Run (CPU stays allocated; scale-to-zero preserved) — see
-[`specs/20260626-workflow-execution-transport.md`](specs/20260626-workflow-execution-transport.md).
+runs **in-request** on Cloud Run (CPU stays allocated; scale-to-zero preserved).
 Deterministic, agent-free tooling lives under `internal/` and is called by
 agents but never imports them. Env vars + local run modes:
 [`.agents/standards/local-development.md`](.agents/standards/local-development.md); ops,

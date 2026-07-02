@@ -16,8 +16,7 @@ import kotlinx.coroutines.flow.fold
 /**
  * The single shared run config used at every runner call site (here and [LongRunDriver]). It opts
  * into SSE streaming so a long Ollama generation streams token-by-token over a long-lived body
- * instead of being bounded by a first-chunk/response-header timeout (see
- * specs/20260625-ollama-sse-streaming-long-generations.md). Streaming is transparent here because
+ * instead of being bounded by a first-chunk/response-header timeout. Streaming is transparent here because
  * every consumer below filters partials: text/state is only collected from non-partial events, and
  * tool calls surface on the final (`done`) response.
  */
