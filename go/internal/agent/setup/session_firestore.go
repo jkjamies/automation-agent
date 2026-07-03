@@ -11,7 +11,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/google/uuid"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

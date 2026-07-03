@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 
 	"automation-agent/internal/githubapi"
 )

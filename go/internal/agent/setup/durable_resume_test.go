@@ -8,12 +8,13 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/runner"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/session/database"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/session/database"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // newSQLiteService builds a durable (file-backed) session service over dsn and runs the
@@ -46,7 +47,7 @@ func newDurableCIWaiter(t *testing.T, appName string, svc session.Service) *runn
 		Name:          "await_ci",
 		Description:   "Open the PR and wait for CI to report.",
 		IsLongRunning: true,
-	}, func(_ tool.Context, _ struct {
+	}, func(_ agent.Context, _ struct {
 		PR int `json:"pr"`
 	}) (map[string]any, error) {
 		return map[string]any{"status": "pending"}, nil

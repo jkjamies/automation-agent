@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/runner"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 )
 
@@ -26,7 +26,7 @@ func newCIWaiter(t *testing.T) *runner.Runner {
 		Name:          "await_ci",
 		Description:   "Open the PR and wait for CI to report.",
 		IsLongRunning: true,
-	}, func(_ tool.Context, _ struct {
+	}, func(_ agent.Context, _ struct {
 		PR int `json:"pr"`
 	}) (map[string]any, error) {
 		return map[string]any{"status": "pending"}, nil

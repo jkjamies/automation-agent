@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/ollama/ollama/api"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 )
 
@@ -228,7 +229,7 @@ func TestLiveOllamaTools(t *testing.T) {
 	weather, err := functiontool.New(functiontool.Config{
 		Name:        "get_weather",
 		Description: "Get the current weather for a city.",
-	}, func(_ tool.Context, args struct {
+	}, func(_ agent.Context, args struct {
 		City string `json:"city"`
 	}) (struct {
 		Weather string `json:"weather"`

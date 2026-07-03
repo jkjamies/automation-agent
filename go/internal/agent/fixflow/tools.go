@@ -4,8 +4,9 @@ import (
 	"os"
 	"sort"
 
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 type readFileArgs struct {
@@ -28,7 +29,7 @@ func repoTools(root string) ([]tool.Tool, error) {
 	readFile, err := functiontool.New(functiontool.Config{
 		Name:        "read_file",
 		Description: "Read a repository file by its repo-relative path (e.g. \"src/main.go\" or \"AGENTS.md\").",
-	}, func(_ tool.Context, args readFileArgs) (readFileResult, error) {
+	}, func(_ agent.Context, args readFileArgs) (readFileResult, error) {
 		c, err := ReadFile(root, args.Path)
 		if err != nil {
 			return readFileResult{}, err
@@ -42,7 +43,7 @@ func repoTools(root string) ([]tool.Tool, error) {
 	listDir, err := functiontool.New(functiontool.Config{
 		Name:        "list_dir",
 		Description: "List the files and subdirectories of a repository directory by its repo-relative path. Use \".\" for the repository root.",
-	}, func(_ tool.Context, args listDirArgs) (listDirResult, error) {
+	}, func(_ agent.Context, args listDirArgs) (listDirResult, error) {
 		entries, err := listDirEntries(root, args.Path)
 		if err != nil {
 			return listDirResult{}, err

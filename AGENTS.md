@@ -11,7 +11,7 @@ This service is maintained as parallel ports that **must all stay 1:1 in functio
 
 | Language | Location | ADK | Status |
 |---|---|---|---|
-| Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk` v1.4.0 | reference |
+| Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | reference |
 | Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | functional 1:1 port — `gradle build` green |
 | Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green |
 | TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | functional 1:1 port — `make ci` green |

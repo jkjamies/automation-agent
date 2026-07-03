@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/githubapi"
@@ -167,7 +168,7 @@ type applyFixResult struct {
 // applyFix runs one fix attempt for the calling session. The run params are loaded from the
 // store by session id (never model-supplied), so the model's (empty) args cannot influence
 // the target.
-func (dr *Driver) applyFix(tc tool.Context, _ applyFixArgs) (applyFixResult, error) {
+func (dr *Driver) applyFix(tc agent.Context, _ applyFixArgs) (applyFixResult, error) {
 	rec, ok, err := dr.store.Get(tc, tc.SessionID())
 	if err != nil {
 		return applyFixResult{}, fmt.Errorf("apply_fix: load run %q: %w", tc.SessionID(), err)
@@ -204,7 +205,7 @@ type awaitCIResult struct {
 
 // awaitCI is the long-running park point: it records that the run is waiting and returns
 // immediately with a pending status. The real CI result is fed back later via Resume.
-func (dr *Driver) awaitCI(_ tool.Context, _ awaitCIArgs) (awaitCIResult, error) {
+func (dr *Driver) awaitCI(_ agent.Context, _ awaitCIArgs) (awaitCIResult, error) {
 	return awaitCIResult{Status: "pending"}, nil
 }
 

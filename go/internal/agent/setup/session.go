@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/session/database"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/session/database"
 
 	"automation-agent/internal/config"
 )

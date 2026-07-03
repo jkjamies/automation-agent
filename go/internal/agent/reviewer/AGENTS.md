@@ -226,10 +226,11 @@ incremental re-review is intentionally deferred — see the *Coalesce-to-latest*
 
 ### Structured output on the local model path
 
-adk-go v1.4.0's `OutputSchema` does **not** enforce a shape (validation is an unimplemented
-TODO), and the Ollama adapter only forwards generic JSON mode via `ResponseMIMEType`. So
-category agents request `application/json` (valid JSON syntax), describe the exact findings
-schema in their prompt, and `parseFindings` recovers **defensively** — it extracts the first
+Category agents deliberately do not set `OutputSchema` — schema validation fails the run on
+a malformed body, while the spec wants malformed → no findings — and the Ollama adapter only
+forwards generic JSON mode via `ResponseMIMEType`. So category agents request
+`application/json` (valid JSON syntax), describe the exact findings schema in their prompt,
+and `parseFindings` recovers **defensively** — it extracts the first
 JSON array from the model text, tolerates fences/prose, and treats a malformed body as no
 findings (empty = success, Decisions 2/13). This is best-effort by design; the narrow
 single-lens prompts are themselves the false-positive control, and the model is a config knob.

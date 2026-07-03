@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/workflowagents/parallelagent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/workflowagents/parallelagent"
+	"google.golang.org/adk/v2/session"
 
 	"automation-agent/internal/agent/setup"
 )

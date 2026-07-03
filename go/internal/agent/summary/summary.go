@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/session"
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/githubapi"
