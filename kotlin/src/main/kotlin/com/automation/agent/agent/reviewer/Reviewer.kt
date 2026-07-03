@@ -19,6 +19,7 @@ import com.automation.agent.githubapi.PullRequestEvent
 import com.automation.agent.githubapi.parsePullRequestEvent
 import com.google.adk.kt.models.Model
 import java.lang.System.Logger.Level
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Marks branches the fixers create (they push to automation-agent/...). The reviewer skips PRs from
@@ -193,6 +194,8 @@ class Engine(deps: Deps) {
         val files =
             try {
                 gh.listPRFiles(split.owner, split.repo, ev.number)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw RuntimeException("reviewer: list PR files: ${e.message}", e)
             }
@@ -217,6 +220,8 @@ class Engine(deps: Deps) {
         val current =
             try {
                 gh.pullRequestHeadSha(owner, repo, ev.number)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 log.log(Level.WARNING, "could not fetch current head SHA; proceeding with review pr=${ev.repoFullName} err=${e.message}")
                 return false

@@ -371,10 +371,10 @@ data class Config(
             "slackWebhookUrl=${redactSecret(slackWebhookUrl)}, teamsWebhookUrl=${redactSecret(teamsWebhookUrl)}, " +
             "port=$port, maxIterations=$maxIterations, ciTimeout=$ciTimeout, " +
             "githubWebhookSecret=${redactSecret(githubWebhookSecret)}, agentPrLabel=$agentPrLabel, " +
-            "reviewEnabled=$reviewEnabled, reviewSkipDrafts=$reviewSkipDrafts, reviewMaxFiles=$reviewMaxFiles, " +
-            "reviewMaxDiffBytes=$reviewMaxDiffBytes, reviewStandards=$reviewStandards, " +
-            "reviewStandardsMaxBytes=$reviewStandardsMaxBytes, reviewUncitedMode=$reviewUncitedMode, " +
-            "reviewMinConfidence=$reviewMinConfidence, reviewDebounce=$reviewDebounce, " +
+            "reviewEnabled=$reviewEnabled, reviewSkipDrafts=$reviewSkipDrafts, reviewExcludeGlobs=$reviewExcludeGlobs, " +
+            "reviewMaxFiles=$reviewMaxFiles, reviewMaxDiffBytes=$reviewMaxDiffBytes, reviewStandards=$reviewStandards, " +
+            "reviewStandardsGlobs=$reviewStandardsGlobs, reviewStandardsMaxBytes=$reviewStandardsMaxBytes, " +
+            "reviewUncitedMode=$reviewUncitedMode, reviewMinConfidence=$reviewMinConfidence, reviewDebounce=$reviewDebounce, " +
             "sessionBackend=$sessionBackend, sqliteDsn=$sqliteDsn, firestoreProject=$firestoreProject, " +
             "firestoreCollection=$firestoreCollection, internalToken=${redactSecret(internalToken)}, " +
             "tasksBackend=$tasksBackend, tasksProject=$tasksProject, tasksLocation=$tasksLocation, " +
