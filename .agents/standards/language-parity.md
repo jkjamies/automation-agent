@@ -1,33 +1,47 @@
-# Language parity (Go · Kotlin · Python · TypeScript)
+# Language parity (Go · Python — modern pair · Kotlin · TypeScript — frozen pair)
 
-`automation-agent` is maintained as **parallel ports of one design** that must remain
-**1:1 in functionality**. This document is the contract every port obeys.
+`automation-agent` is maintained as **parallel ports of one design**, organized as **two
+parity pairs** with no parity requirement *across* the pairs. This document is the
+contract each pair obeys.
 
-## Reference and ports
+## The two pairs
 
-| Language | Location | ADK | Role |
-|---|---|---|---|
-| Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | **reference (source of truth)** |
-| Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | port |
-| Python | `python/` | `google-adk` (PyPI) | port |
-| TypeScript | `javascript/` | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | port |
+| Pair | Language | Location | ADK | Role |
+|---|---|---|---|---|
+| **Modern** | Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | **reference (source of truth)** |
+| **Modern** | Python | `python/` | `google-adk` (PyPI, 2.x line) | port of the reference |
+| **Frozen** | Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | frozen — 1:1 with TypeScript |
+| **Frozen** | TypeScript | `javascript/` | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | frozen — 1:1 with Kotlin |
 
-Each language targets its **own native ADK** (adk-go, adk-kotlin, adk-python, adk-js), so parity is
-**functional, not version-matched** — the ADKs are at different versions and expose
-different idiomatic APIs. The shared contract is the *agent topology and behavior*, not the
-SDK calls.
+- **The modern pair (Go ↔ Python)** carries the design forward on the ADK 2.x line
+  (graph workflows, request-input pause/resume). Full parity contract below.
+- **The frozen pair (Kotlin ↔ TypeScript)** is feature-frozen at its current 1:1
+  behavior (their ADKs have no 2.x line). It receives no new features; if a critical fix
+  ever touches one, it must land in **both** — the pair keeps parity with each other.
+- **Across pairs there is no parity requirement.** The modern pair diverges freely from
+  the frozen pair's mechanics (e.g. the fixers' CI-wait loop is a workflow graph on the
+  modern pair and long-running tools on the frozen pair). External contracts (webhooks,
+  check names, notify payloads) still match across all four, because outside systems
+  observe them.
 
-The language-neutral design lives in `.agents/standards/architecture-design.md`. When the design and a port
-disagree, the design wins; when Go and a port disagree on undocumented behavior, **Go wins**.
+Each language targets its **own native ADK**, so parity is **functional, not
+version-matched** — the ADKs are at different versions and expose different idiomatic
+APIs. The shared contract is the *agent topology and behavior*, not the SDK calls.
 
-## What "1:1" means
+The language-neutral design lives in `.agents/standards/architecture-design.md` and
+describes the modern pair. When the design and a port disagree, the design wins; when Go
+and Python disagree on undocumented behavior, **Go wins**.
+
+## What "1:1" means (within a pair)
 
 Parity is about **observable behavior and structure**, not literal syntax. Idiomatic
 language differences are expected and encouraged (coroutines vs goroutines, `Result`/
-exceptions vs `error` returns, data classes vs structs). What must match across ports:
+exceptions vs `error` returns, data classes vs structs) — including where the two SDKs
+surface the same capability under different helpers, as long as the observable behavior
+matches. What must match across a pair:
 
 1. **Package / directory structure.** Each Go package under `internal/` and `cmd/` maps
-   to an equivalent package/module in every port. Same names where the language allows.
+   to an equivalent package/module in the pair's port. Same names where the language allows.
 2. **Public surface.** The same types, constructors, methods, and their semantics. A
    function that validates and returns an error in Go validates and signals failure the
    idiomatic way in the port — but with the same inputs, outputs, and error conditions.
@@ -36,29 +50,33 @@ exceptions vs `error` returns, data classes vs structs). What must match across 
    verification, Slack/Teams payloads, GitHub API calls, labels, and check names. Anything
    another system observes must be byte-compatible where it matters. The webhook routes and
    `check_run` names every port must match are registered in [`webhooks.md`](webhooks.md).
+   **External contracts hold across all four ports**, frozen pair included.
 5. **Conventions.** Per-directory `AGENTS.md`; the build-agent pattern (pure wiring split
    from testable logic); prompts as markdown loaded from resources; ≥80% test coverage;
    never assert on LLM output content; provider SDKs confined to the `agent/setup` layer;
    tooling never imports agents.
 6. **Docs + diagrams.** The root and `agent/root` `AGENTS.md` diagrams (and the
-   `architecture-design.md`/`deployment.md` topology diagrams) must stay consistent across
-   ports — when an agent, ingest `Kind`, or ingress route changes, update the parallel
-   diagrams in every port in the same change. See [`documentation.md`](documentation.md).
+   `architecture-design.md`/`deployment.md` topology diagrams) must stay consistent within
+   a pair — when an agent, ingest `Kind`, or ingress route changes, update the parallel
+   diagrams in the pair's other port in the same change. See
+   [`documentation.md`](documentation.md).
 
-## What may differ
+## What may differ (within a pair)
 
-- Build system and dependency manifests (Go modules vs Gradle vs uv/pip).
+- Build system and dependency manifests (Go modules vs uv/pip).
 - Concurrency primitives, error representation, null-handling, and collection idioms.
-- Test framework (`testing` vs JUnit/Kotlin-test vs pytest) — but the *cases* should mirror.
+- Test framework (`testing` vs pytest) — but the *cases* should mirror.
 - Library choices where Go's pick has no direct equivalent, as long as the contract holds
-  (e.g. go-git ↔ JGit, go-github ↔ GitHub's Java client or raw REST).
+  (e.g. go-git ↔ GitPython, go-github ↔ PyGithub).
 - **The ADK itself.** Each port uses its language's native ADK at whatever version is
   current; the agent *wiring* differs, the agent *topology and behavior* do not.
 
 ## Workflow rule
 
 - **Change Go first.** New behavior or fixes land in the reference, then propagate into
-  every *existing* port within the same logical change set. Ports never silently drift.
-- **Touch one, check the rest.** A PR that edits any port must either update the others or
-  record the deliberate gap in that PR's description. Parity is tracked per-PR: each change
-  states which ports it covers and any divergence it knowingly leaves open.
+  Python within the same logical change set. The modern pair never silently drifts.
+- **Touch one, check the pair.** A PR that edits either modern port must either update the
+  other or record the deliberate gap in that PR's description. Parity is tracked per-PR:
+  each change states which ports it covers and any divergence it knowingly leaves open.
+- **The frozen pair is not touched** by feature work. A critical fix that must land there
+  lands in both frozen ports together, preserving their mutual 1:1.

@@ -21,10 +21,11 @@ a late/duplicate webhook racing the timer/sweep resolves it at most once.
 Terminal resolution (`clear`) deletes both the park record and the ADK session
 (`LongRunDriver.DeleteSession`) so durable backends don't accumulate finished runs.
 
-The outer loop is driven by a deterministic `setup.NewSequencerModel` (a dumb
-apply→await emitter), so retry/stop/timeout policy is all in the `Driver`, not the
-model. The substantive LLM work (triage, exploration, code edits) happens inside
-`apply_fix` → `attemptOnce`.
+The outer loop is a deterministic workflow graph (`Start → apply_fix → await_ci`, with a
+conditional `failure` cycle back to `apply_fix` and a shared `conclude` terminal), so
+retry/stop/timeout policy is all in the `Driver`, not the graph. The substantive LLM
+work (triage, exploration, code edits) happens inside the `apply_fix` node →
+`attemptOnce`.
 
 ## Flow
 
@@ -56,10 +57,10 @@ flowchart TD
 
 - `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`;
   `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
-- `driver.go` — `Driver`: the `apply_fix`/`await_ci` tools, the `fixer` agent (on a
-  deterministic sequencer model), and the Kickoff/Resume/onTimeout/`SweepTimeouts`
-  lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record
-  **and** the ADK session.
+- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the
+  `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the
+  Kickoff/Resume/onTimeout/`SweepTimeouts` lifecycle over the injected `setup.ParkStore`.
+  Terminal `clear` deletes the park record **and** the ADK session.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean /
   max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park
   record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
@@ -69,8 +70,8 @@ flowchart TD
 - `envelope.go` — the trusted `{repo, base, report}` kickoff envelope.
 - `util.go` — `Engine.Label()`, `ExtractJSONArray/Object`, `StripFences`.
 
-The generic suspend/resume plumbing (`LongRunDriver`, `NewSequencerModel`) lives in
-`internal/agent/setup` (it touches `genai`, which ARCH confines to `setup`).
+The generic pause/resume plumbing (`LongRunDriver`) lives in `internal/agent/setup` (it
+touches `genai`, which ARCH confines to `setup`).
 
 Multiple engines can each be handed a `check_run` event; only the one whose
 `CheckName` matches acts. Tested with fake triage/analyze + a local seed repo + fakes,

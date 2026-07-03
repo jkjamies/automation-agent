@@ -3,54 +3,79 @@ package setup
 import (
 	"context"
 	"fmt"
-	"iter"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/agent/workflowagent"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
-	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
+	"google.golang.org/adk/v2/workflow"
 	"google.golang.org/genai"
 )
 
+// newCIWaiterAgent builds the minimal parking workflow: a single await node that pauses
+// for the CI result on its first pass, then routes to a conclude node that reports the
+// conclusion. It is the setup-level proof of the pause/resume mechanic the fix loop
+// runs on.
+func newCIWaiterAgent(t *testing.T) agent.Agent {
+	t.Helper()
+	rerun := true
+	await := workflow.NewEmittingFunctionNode[any, any]("await_ci",
+		func(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+			reply, err := workflow.ResumeOrRequestInput(nc, emit, session.RequestInput{
+				InterruptID: "await_ci-" + nc.InvocationID(),
+				Message:     "Open the PR and wait for CI to report.",
+			})
+			if err != nil {
+				return nil, err
+			}
+			ev := session.NewEvent(nc, nc.InvocationID())
+			ev.Output = reply
+			ev.Routes = []string{"concluded"}
+			if err := emit(ev); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}, workflow.NodeConfig{RerunOnResume: &rerun})
+	conclude := workflow.NewFunctionNode[any, *genai.Content]("conclude",
+		func(_ agent.Context, input any) (*genai.Content, error) {
+			conclusion := "unknown"
+			if m, ok := input.(map[string]any); ok {
+				conclusion = fmt.Sprint(m["conclusion"])
+			}
+			return AssistantText("CI concluded: " + conclusion), nil
+		}, workflow.NodeConfig{})
+	a, err := workflowagent.New(workflowagent.Config{
+		Name:        "ci-waiter",
+		Description: "parks awaiting a CI result, then reports it",
+		Edges: []workflow.Edge{
+			{From: workflow.Start, To: await},
+			{From: await, To: conclude, Route: workflow.Default},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
 // newCIWaiter builds the parking agent + a shared in-memory runner used by the
-// suspend/resume prototypes.
+// suspend/resume tests.
 func newCIWaiter(t *testing.T) *runner.Runner {
 	t.Helper()
-	awaitCI, err := functiontool.New(functiontool.Config{
-		Name:          "await_ci",
-		Description:   "Open the PR and wait for CI to report.",
-		IsLongRunning: true,
-	}, func(_ agent.Context, _ struct {
-		PR int `json:"pr"`
-	}) (map[string]any, error) {
-		return map[string]any{"status": "pending"}, nil
+	r, err := runner.New(runner.Config{
+		AppName: "susp", Agent: newCIWaiterAgent(t),
+		SessionService: session.InMemoryService(), AutoCreateSession: true,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, err := llmagent.New(llmagent.Config{
-		Name:        "ci-waiter",
-		Model:       suspendStub{},
-		Instruction: "Call await_ci and report the result.",
-		Tools:       []tool.Tool{awaitCI},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := runner.New(runner.Config{AppName: "susp", Agent: a, SessionService: session.InMemoryService(), AutoCreateSession: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
-// park runs until the agent parks on the long-running call and returns its id.
+// park runs until the agent pauses on the request-input park and returns its interrupt id.
 func park(t *testing.T, r *runner.Runner, uid, sid string) string {
 	t.Helper()
 	var id string
@@ -68,47 +93,16 @@ func park(t *testing.T, r *runner.Runner, uid, sid string) string {
 	return id
 }
 
-// suspendStub drives the long-running cycle deterministically:
-//   - no await_ci response in history       -> call await_ci
-//   - await_ci returned {"status":"pending"} -> acknowledge, end the turn (park)
-//   - await_ci returned {"conclusion": ...}  -> report the final result
-type suspendStub struct{}
-
-func (suspendStub) Name() string { return "suspend-stub" }
-func (suspendStub) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
-	var conclusion string
-	pending := false
-	for _, c := range req.Contents {
-		for _, p := range c.Parts {
-			if p.FunctionResponse == nil || p.FunctionResponse.Name != "await_ci" {
-				continue
-			}
-			if v, ok := p.FunctionResponse.Response["conclusion"]; ok {
-				conclusion = fmt.Sprint(v)
-			} else if s, ok := p.FunctionResponse.Response["status"]; ok && fmt.Sprint(s) == "pending" {
-				pending = true
-			}
-		}
-	}
-	return func(yield func(*model.LLMResponse, error) bool) {
-		switch {
-		case conclusion != "":
-			yield(&model.LLMResponse{Content: AssistantText("CI concluded: " + conclusion), TurnComplete: true, FinishReason: genai.FinishReasonStop}, nil)
-		case pending:
-			yield(&model.LLMResponse{Content: AssistantText("Awaiting CI."), TurnComplete: true, FinishReason: genai.FinishReasonStop}, nil)
-		default:
-			fc := &genai.FunctionCall{ID: "call_ci_1", Name: "await_ci", Args: map[string]any{"pr": float64(1)}}
-			yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: fc}}}, TurnComplete: true, FinishReason: genai.FinishReasonStop}, nil)
-		}
-	}
-}
-
-// resumeWith feeds a function-response (the CI outcome) for the parked call back on
-// the same session, returning the final text and whether the run re-parked.
+// resumeWith feeds a request-input response (the CI outcome) for the parked interrupt
+// back on the same session, returning the final text and whether the run re-parked.
 func resumeWith(t *testing.T, r *runner.Runner, uid, sid, callID, conclusion string) (final string, reparked bool) {
 	t.Helper()
 	resume := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{
-		FunctionResponse: &genai.FunctionResponse{ID: callID, Name: "await_ci", Response: map[string]any{"conclusion": conclusion}},
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       callID,
+			Name:     workflow.WorkflowInputFunctionCallName,
+			Response: map[string]any{"payload": map[string]any{"conclusion": conclusion}},
+		},
 	}}}
 	for ev, err := range r.Run(context.Background(), uid, sid, resume, agent.RunConfig{}) {
 		if err != nil {
@@ -126,13 +120,13 @@ func resumeWith(t *testing.T, r *runner.Runner, uid, sid, callID, conclusion str
 	return final, reparked
 }
 
-// TestLongRunningSuspendResume proves the core architecture mechanic: a run parks on
-// a long-running tool, and a SECOND runner.Run on the SAME in-memory session resumes
-// it with the supplied result rather than restarting.
+// TestLongRunningSuspendResume proves the core architecture mechanic: a run parks on a
+// request-input pause, and a SECOND runner.Run on the SAME in-memory session resumes it
+// with the supplied result rather than restarting.
 func TestLongRunningSuspendResume(t *testing.T) {
 	r := newCIWaiter(t)
 	id := park(t, r, "u", "s")
-	t.Logf("parked on long-running call id=%q", id)
+	t.Logf("parked on interrupt id=%q", id)
 
 	final, _ := resumeWith(t, r, "u", "s", id, "success")
 	if !strings.Contains(final, "success") {
@@ -141,10 +135,11 @@ func TestLongRunningSuspendResume(t *testing.T) {
 	t.Logf("resumed and concluded: %q", final)
 }
 
-// TestLateWebhookAfterTimeout proves the race is safe at the runner level (defense in
-// depth behind the registry's atomic claim): after a timeout has concluded the run, a
-// LATE CI webhook replaying the same call id must NOT re-park or leak a new parked
-// run. (In production the registry drops it before it ever reaches the runner.)
+// TestLateWebhookAfterTimeout proves the race is safe at the engine level (defense in
+// depth behind the ParkStore's atomic claim): after a timeout has concluded the run, a
+// LATE CI webhook replaying the same interrupt id must NOT re-park or leak a new parked
+// run — the engine recognizes the interrupt as already resolved and no-ops the turn.
+// (In production the ParkStore claim drops it before it ever reaches the runner.)
 func TestLateWebhookAfterTimeout(t *testing.T) {
 	r := newCIWaiter(t)
 	id := park(t, r, "u", "s")
@@ -153,25 +148,12 @@ func TestLateWebhookAfterTimeout(t *testing.T) {
 		t.Fatal("timeout resume re-parked")
 	}
 
-	// Late webhook replays the same (now stale) call id.
-	resume := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{
-		FunctionResponse: &genai.FunctionResponse{ID: id, Name: "await_ci", Response: map[string]any{"conclusion": "success"}},
-	}}}
-	var reparked bool
-	var runErr error
-	for ev, err := range r.Run(context.Background(), "u", "s", resume, agent.RunConfig{}) {
-		if err != nil {
-			runErr = err
-			break
-		}
-		if len(ev.LongRunningToolIDs) > 0 {
-			reparked = true
-		}
-	}
+	// Late webhook replays the same (now resolved) interrupt id.
+	final, reparked := resumeWith(t, r, "u", "s", id, "success")
 	if reparked {
 		t.Fatal("late webhook re-parked the run — would leak a parked run")
 	}
-	t.Logf("late webhook after timeout handled at runner level (err=%v, no re-park)", runErr)
+	t.Logf("late webhook after timeout no-oped at the engine level (final=%q, no re-park)", final)
 }
 
 // TestLongRunningTimeoutResume proves the kill path: when CI never reports, the
