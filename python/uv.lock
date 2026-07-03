@@ -289,7 +289,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "gitpython", specifier = ">=3.1.43" },
-    { name = "google-adk", specifier = ">=1.0.0" },
+    { name = "google-adk", specifier = ">=2.0.0" },
     { name = "google-cloud-firestore", specifier = ">=2.16.0" },
     { name = "google-cloud-tasks", specifier = ">=2.16.0" },
     { name = "httpx", specifier = ">=0.27.0" },
