@@ -6,8 +6,8 @@ resume -> loop or finish — plus the apply mechanics. Each concrete agent suppl
 `Spec` (its own triage fn, analyze fn, and branch/label/check names) **and its own
 prompts**; nothing about the LLM prompting is shared here.
 
-The CI wait is a real ADK **IsLongRunning** suspend/resume: the `Driver` runs a `fixer`
-agent that calls `apply_fix` then parks on `await_ci`. Both the ADK session and the parked
+The CI wait is a durable workflow **request-input pause**: the `Driver` runs a `fixer`
+workflow that runs `apply_fix` then parks on `await_ci`. Both the ADK session and the parked
 run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`): the run is
 recorded in the injected `setup.ParkStore` (a `ParkRecord` keyed by a UUID session id, with
 an `owner/repo#pr` `pr_key` index for CI resume). With a durable backend a process restart
@@ -21,10 +21,10 @@ webhook racing the timer/sweep resolves it at most once.
 Terminal resolution (`_clear`) deletes both the park record and the ADK session
 (`LongRunDriver.delete_session`) so durable backends don't accumulate finished runs.
 
-The outer loop is driven by a deterministic `setup.Sequencer` (a class extending
-`BaseLlm` that emits a fixed apply->await sequence), so retry/stop/timeout policy is all
-in the `Driver`, not the model. The substantive LLM work (triage, exploration, code edits) happens inside
-`apply_fix` -> `attempt_once`.
+The outer loop is a deterministic workflow graph (`START -> apply_fix -> await_ci`, with a
+conditional `failure` cycle back to `apply_fix` and a shared `conclude` terminal), so
+retry/stop/timeout policy is all in the `Driver`, not the graph. The substantive LLM work
+(triage, exploration, code edits) happens inside the `apply_fix` node -> `attempt_once`.
 
 ## Flow
 
@@ -35,7 +35,7 @@ flowchart TD
     KP --> DK["Driver.kickoff: run fixer agent"]
     DK --> AF["apply_fix -> attempt_once: triage -> open -> analyze -> commit (clone/branch/push/ensure PR)"]
     AF -->|"triage found nothing (NoWorkError)"| CLN["clean summary (clean_title) + clear; no PR, no park (stop_when concludes)"]
-    AF --> AW["await_ci (IsLongRunning)"]
+    AF --> AW["await_ci (request-input pause)"]
     AW --> PK["ParkStore.put(pr_key=owner/repo#pr, attempts) + ci_timeout timer"]
     PK --> SUS(["suspend (durable: survives restart)"])
 
@@ -56,8 +56,9 @@ flowchart TD
 
 - `engine.py` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`;
   `kickoff`/`resume` (delegate to the Driver) + `attempt_once` (one apply attempt).
-- `driver.py` — `Driver`: the `apply_fix`/`await_ci` tools, the `fixer` agent (on a
-  deterministic sequencer model), the `RunParams` (serialized into the park record), and the
+- `driver.py` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the
+  `fixer` workflow (declarative edges, `await_ci` parks via request-input), the `RunParams`
+  (serialized into the park record), and the
   kickoff/resume/on_timeout/`sweep_timeouts` lifecycle over the injected `setup.ParkStore`.
   Terminal `_clear` deletes the park
   record **and** the ADK session. Triage re-runs on every attempt (no cache): a retry resumes
@@ -72,7 +73,7 @@ flowchart TD
 - `envelope.py` — the trusted `{repo, base, report}` kickoff envelope.
 - `util.py` — `Engine.label()`, `extract_json_array/object`, `strip_fences`.
 
-The generic suspend/resume plumbing (`LongRunDriver`, the `Sequencer` class) lives in
+The generic pause/resume plumbing (`LongRunDriver`) lives in
 `automation_agent/agent/setup` (it touches `genai`, which arch confines to `setup`).
 
 Multiple engines can each be handed a `check_run` event; only the one whose

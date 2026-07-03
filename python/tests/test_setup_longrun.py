@@ -1,160 +1,185 @@
-"""Tests for setup long-run (sequencer + LongRunDriver).
+"""Tests for setup long-run (the LongRunDriver over a parking workflow graph).
 
-Python ADK propagates a raised tool exception instead of converting it to an
-``{"error": msg}`` response, so the ``apply`` tool here
-returns ``{"error": ...}`` itself to exercise the sequencer's error branch — the same
-convention fixflow's real ``apply_fix`` tool uses.
+The fixture graph is the canonical parking loop the driver is designed for::
+
+    START -> apply -"go_wait"-> await (pause) -"failure"-> apply (cycle)
+      apply/await -DEFAULT-> conclude
+
+with the apply node scripted by outcomes (one per activation) and a counter of apply
+activations: deterministic node bodies, real engine routing/pausing.
 """
 
 from __future__ import annotations
 
-from google.adk.agents import LlmAgent
-from google.adk.tools import FunctionTool, LongRunningFunctionTool
-from google.genai import types
+from collections.abc import AsyncGenerator
+from typing import Any
 
-from automation_agent.agent.setup.longrun import LongRunDriver, Sequencer
+from google.adk.agents import Context
+from google.adk.events import Event, EventActions
+from google.adk.events.request_input import RequestInput
+from google.adk.workflow import DEFAULT_ROUTE, START, Edge, FunctionNode, Workflow
+
+from automation_agent.agent.setup.longrun import (
+    NODE_OUTPUT_KEY,
+    DriveResult,
+    LongRunDriver,
+)
 
 
-class _Tools:
-    def __init__(self) -> None:
+class _Script:
+    """Scripted apply outcomes (one per activation) plus an activation counter."""
+
+    def __init__(self, outcomes: list[tuple[dict[str, Any], str]]) -> None:
+        self.outcomes = outcomes
         self.calls = 0
-        self.fail = False
 
-    def apply(self) -> dict:
+    def next(self) -> tuple[dict[str, Any], str]:
+        i = self.calls
         self.calls += 1
-        if self.fail:
-            return {"error": "apply boom"}
-        return {"pr_number": 7, "head_sha": "abc"}
-
-    def await_ci(self, pr_number: int, head_sha: str) -> dict:
-        return {"status": "pending"}
+        if i >= len(self.outcomes):
+            raise AssertionError(f"apply activation {i} exceeds scripted outcomes")
+        return self.outcomes[i]
 
 
-def _new_driver(tools: _Tools) -> LongRunDriver:
-    seq = Sequencer(
-        action="apply",
-        wait="await_ci",
-        retry_when=lambda r: str(r.get("conclusion")) == "failure",
-    )
-    agent = LlmAgent(
+def _apply_ok() -> tuple[dict[str, Any], str]:
+    return {NODE_OUTPUT_KEY: "apply", "pr_number": 7, "head_sha": "abc"}, "go_wait"
+
+
+def _lr_graph(script: _Script) -> Workflow:
+    async def apply(ctx: Context) -> AsyncGenerator[Any, None]:
+        out, route = script.next()
+        yield Event(output=out, actions=EventActions(route=route))
+
+    async def await_ci(ctx: Context) -> AsyncGenerator[Any, None]:
+        interrupt_id = f"await-{ctx.invocation_id}"
+        reply = ctx.resume_inputs.get(interrupt_id)
+        if reply is None:
+            yield RequestInput(interrupt_id=interrupt_id, message="waiting", response_schema=None)
+            return
+        out: dict[str, Any] = {NODE_OUTPUT_KEY: "await"}
+        route = "conclude"
+        if isinstance(reply, dict):
+            out.update(reply)
+            if str(reply.get("conclusion")) == "failure":
+                route = "failure"
+        yield Event(output=out, actions=EventActions(route=route))
+
+    def conclude() -> str:
+        return "done"
+
+    apply_node = FunctionNode(func=apply, name="apply")
+    await_node = FunctionNode(func=await_ci, name="await_node", rerun_on_resume=True)
+    conclude_node = FunctionNode(func=conclude, name="conclude")
+    return Workflow(
         name="lr",
-        model=seq,
-        instruction="apply then await",
-        tools=[FunctionTool(tools.apply), LongRunningFunctionTool(tools.await_ci)],
+        edges=[
+            Edge(from_node=START, to_node=apply_node),
+            Edge(from_node=apply_node, to_node=await_node, route="go_wait"),
+            Edge(from_node=apply_node, to_node=conclude_node, route=DEFAULT_ROUTE),
+            Edge(from_node=await_node, to_node=apply_node, route="failure"),
+            Edge(from_node=await_node, to_node=conclude_node, route=DEFAULT_ROUTE),
+        ],
     )
-    return LongRunDriver("lr-app", "u", agent)
+
+
+def _new_driver(script: _Script) -> LongRunDriver:
+    return LongRunDriver("lr-app", "u", _lr_graph(script))
 
 
 async def test_long_run_driver_loop() -> None:
-    tools = _Tools()
-    d = _new_driver(tools)
+    """Start -> park -> resume(failure) -> re-park -> resume(success): apply runs once per
+    attempt and the loop concludes."""
+    script = _Script([_apply_ok(), _apply_ok()])
+    d = _new_driver(script)
 
     start = await d.start("s1", "go")
-    assert start.parked_call_id, "Start did not park on await_ci"
-    assert str(start.tool_responses["apply"]["pr_number"]) == "7"
-    assert tools.calls == 1
+    assert start.parked_call_id, "Start did not park on await"
+    apply_out = start.node_output("apply")
+    assert apply_out is not None and str(apply_out["pr_number"]) == "7"
+    assert script.calls == 1
 
     # CI failed -> resume should re-apply and re-park.
-    retry = await d.resume("s1", start.parked_call_id, "await_ci", {"conclusion": "failure"})
+    retry = await d.resume("s1", start.parked_call_id, {"conclusion": "failure"})
     assert retry.parked_call_id, "failure resume did not re-park"
-    assert retry.parked_call_id != start.parked_call_id, "re-park should use a fresh call id"
-    assert tools.calls == 2
+    assert script.calls == 2
 
     # CI passed -> resume should conclude without re-parking.
-    done = await d.resume("s1", retry.parked_call_id, "await_ci", {"conclusion": "success"})
+    done = await d.resume("s1", retry.parked_call_id, {"conclusion": "success"})
     assert not done.parked_call_id, "success resume should not re-park"
-    assert tools.calls == 2, "apply must not run again on success"
-    assert "done" in done.final
+    assert script.calls == 2, "apply must not run again on success"
+    await_out = done.node_output("await")
+    assert await_out is not None and str(await_out["conclusion"]) == "success"
+
+
+async def test_long_run_driver_clean_stop() -> None:
+    """A terminal apply result (routes to conclude, never to the wait node) finishes the
+    run without parking, and its output is readable by tag."""
+    script = _Script([({NODE_OUTPUT_KEY: "apply", "clean": True}, "conclude")])
+    d = _new_driver(script)
+
+    res = await d.start("s1", "go")
+    assert not res.parked_call_id, "a clean (terminal) apply must not park"
+    apply_out = res.node_output("apply")
+    assert apply_out is not None and apply_out.get("clean") is True
+    assert script.calls == 1
 
 
 async def test_long_run_driver_apply_error() -> None:
-    tools = _Tools()
-    tools.fail = True
-    d = _new_driver(tools)
+    """An apply failure surfaces as an "error" output and concludes the run without
+    parking it — the caller (not the engine) owns notifying a human, so the error must
+    come back as data, not a failed run."""
+    script = _Script([({NODE_OUTPUT_KEY: "apply", "error": "apply boom"}, "conclude")])
+    d = _new_driver(script)
 
     res = await d.start("s1", "go")
     assert not res.parked_call_id, "a failed apply must not park"
-    assert "error" in res.tool_responses["apply"]
-    assert "failed" in res.final
+    apply_out = res.node_output("apply")
+    assert apply_out is not None and "error" in apply_out
 
 
-def test_sequencer_decide() -> None:
-    s = Sequencer(
-        action="apply",
-        wait="await_ci",
-        retry_when=lambda r: str(r.get("conclusion")) == "failure",
-    )
+async def test_long_run_driver_delete_session() -> None:
+    """Terminal cleanup actually removes the stored session, so a durable backend does
+    not leak completed runs; deleting a missing session is a no-op."""
+    script = _Script([_apply_ok()])
+    d = _new_driver(script)
 
-    def fc_name(content: types.Content) -> tuple[str, str]:
-        text = ""
-        for p in content.parts or []:
-            if p.function_call is not None:
-                return p.function_call.name, ""
-            if p.text:
-                text += p.text
-        return "", text
-
-    def resp(name: str, body: dict) -> types.Content:
-        return types.Content(
-            parts=[types.Part(function_response=types.FunctionResponse(name=name, response=body))]
-        )
-
-    # No history -> call apply.
-    assert fc_name(s._decide([]).content)[0] == "apply"
-    # apply ok -> call await_ci.
-    assert fc_name(s._decide([resp("apply", {"pr_number": 7})]).content)[0] == "await_ci"
-    # apply error -> conclude.
-    name, text = fc_name(s._decide([resp("apply", {"error": "x"})]).content)
-    assert name == "" and "failed" in text
-    # await_ci failure -> retry apply.
-    assert fc_name(s._decide([resp("await_ci", {"conclusion": "failure"})]).content)[0] == "apply"
-    # await_ci success -> conclude.
-    name, text = fc_name(s._decide([resp("await_ci", {"conclusion": "success"})]).content)
-    assert name == "" and text != ""
-
-
-def test_sequencer_stop_when() -> None:
-    # When the action result satisfies stop_when, the loop concludes immediately without ever
-    # calling await_ci (so a terminal action result is never forwarded to a wait tool whose
-    # schema would reject it).
-    s = Sequencer(
-        action="apply",
-        wait="await_ci",
-        stop_when=lambda r: bool(r.get("clean")),
-    )
-
-    def fc_name(content: types.Content) -> tuple[str, str]:
-        text = ""
-        for p in content.parts or []:
-            if p.function_call is not None:
-                return p.function_call.name, ""
-            if p.text:
-                text += p.text
-        return "", text
-
-    def resp(name: str, body: dict) -> types.Content:
-        return types.Content(
-            parts=[types.Part(function_response=types.FunctionResponse(name=name, response=body))]
-        )
-
-    # apply clean -> conclude (no await_ci).
-    name, text = fc_name(s._decide([resp("apply", {"clean": True})]).content)
-    assert name == "" and "done" in text
-    # apply not clean -> still call await_ci.
-    assert fc_name(s._decide([resp("apply", {"pr_number": 7})]).content)[0] == "await_ci"
+    await d.start("s1", "go")
+    existing = await d._session_service.get_session(app_name="lr-app", user_id="u", session_id="s1")
+    assert existing is not None, "session should exist after start"
+    await d.delete_session("s1")
+    gone = await d._session_service.get_session(app_name="lr-app", user_id="u", session_id="s1")
+    assert gone is None, "session should be gone after delete_session"
+    await d.delete_session("s1")  # deleting a missing session must no-op
 
 
 async def test_late_webhook_after_timeout() -> None:
     """A late/duplicate resume on a concluded run must not re-park (defense in depth
-    behind the park store's atomic claim)."""
-    tools = _Tools()
-    d = _new_driver(tools)
+    behind the park store's atomic claim): the engine recognizes the interrupt as already
+    resolved and no-ops the turn."""
+    script = _Script([_apply_ok()])
+    d = _new_driver(script)
     start = await d.start("s1", "go")
 
-    # timeout concludes the run (retry_when false for "timeout").
-    timed_out = await d.resume("s1", start.parked_call_id, "await_ci", {"conclusion": "timeout"})
+    # timeout concludes the run (route != failure -> conclude).
+    timed_out = await d.resume("s1", start.parked_call_id, {"conclusion": "timeout"})
     assert not timed_out.parked_call_id
 
-    # late webhook replays the same (now stale) call id -> must not re-park.
-    late = await d.resume("s1", start.parked_call_id, "await_ci", {"conclusion": "success"})
+    # late webhook replays the same (now stale) interrupt id -> must not re-park.
+    late = await d.resume("s1", start.parked_call_id, {"conclusion": "success"})
     assert not late.parked_call_id, "late webhook re-parked the run — would leak a parked run"
+
+
+def test_drive_result_node_output() -> None:
+    """Tag-based selection: latest per tag wins, and an unknown tag yields None."""
+    res = DriveResult(
+        node_outputs=[
+            {NODE_OUTPUT_KEY: "apply", "attempt": 1},
+            {NODE_OUTPUT_KEY: "await", "conclusion": "failure"},
+            {NODE_OUTPUT_KEY: "apply", "attempt": 2},
+        ]
+    )
+    apply_out = res.node_output("apply")
+    assert apply_out is not None and apply_out["attempt"] == 2
+    await_out = res.node_output("await")
+    assert await_out is not None and await_out["conclusion"] == "failure"
+    assert res.node_output("nope") is None

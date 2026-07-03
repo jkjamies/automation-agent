@@ -1,45 +1,60 @@
-"""Generic ADK long-running suspend/resume plumbing.
+"""Generic workflow pause/resume plumbing.
 
-A :class:`LongRunDriver` that runs an agent until it parks on a long-running tool
-call (or finishes), then resumes it with
-the real result; and a :class:`Sequencer` model that deterministically emits a fixed
-Action -> Wait tool sequence so all retry/stop/timeout policy lives in the caller, not
-the model. Kept in ``setup`` because it touches genai (confined here by the arch tests).
+A :class:`LongRunDriver` that runs a parking workflow through one cycle — until it pauses
+on a request-input interrupt (or finishes) — then resumes it with the real result. All
+domain policy (what to apply, whether to retry, how long to wait) lives in the caller.
+Kept in ``setup`` because it touches genai (confined here by the arch tests).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from google.adk.agents import BaseAgent
 from google.adk.apps import App, ResumabilityConfig
-from google.adk.models import BaseLlm, LlmRequest, LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
-from automation_agent.agent.setup.events import assistant_text, content_text
+from automation_agent.agent.setup.events import content_text
 from automation_agent.agent.setup.runner import STREAMING_RUN_CONFIG
+
+# NODE_OUTPUT_KEY is the reserved key a workflow node sets in its dict-typed event output
+# to name itself. Node events carry no engine-level node identity for top-level static
+# nodes, so drives attribute outputs to nodes by this self-describing marker instead of
+# relying on event order.
+NODE_OUTPUT_KEY = "node"
+
+# The engine routes a human/webhook reply back to a paused node via a FunctionResponse
+# whose call name is this well-known value (the request-input pause emits the matching
+# FunctionCall). The SDK does not export the constant publicly, so it is pinned here.
+_REQUEST_INPUT_CALL_NAME = "adk_request_input"
 
 
 @dataclass
 class DriveResult:
-    """The outcome of driving a long-running agent through one cycle."""
+    """The outcome of driving a parking workflow through one cycle."""
 
-    # parked_call_id is the id of the long-running call the agent suspended on, or ""
-    # when the run finished instead of parking.
+    # parked_call_id is the interrupt id of the request-input pause the run suspended on,
+    # or "" when the run finished instead of parking. Feeding it back to resume routes the
+    # real result to the waiting node.
     parked_call_id: str = ""
-    # tool_responses maps each tool name to its most recent response this cycle. A tool
-    # whose handler raised surfaces here under an "error" key.
-    tool_responses: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # final is the concatenated text of the agent's non-partial responses.
+    # node_outputs are the dict-typed event outputs emitted this cycle, in order. Nodes
+    # tag their output with NODE_OUTPUT_KEY; node_output selects by that tag.
+    node_outputs: list[dict[str, Any]] = field(default_factory=list)
+    # final is the concatenated text of the run's non-partial responses.
     final: str = ""
+
+    def node_output(self, node: str) -> dict[str, Any] | None:
+        """The most recent output this cycle tagged with the given node name, or None."""
+        for out in reversed(self.node_outputs):
+            if out.get(NODE_OUTPUT_KEY) == node:
+                return out
+        return None
 
 
 class LongRunDriver:
-    """Drives an agent through ADK suspend/resume on a single in-memory session.
+    """Drives a parking workflow through the engine's pause/resume on a single session.
 
     All domain policy (what to apply, whether to retry, how long to wait) lives in the
     caller; this type only knows how to run-to-park and resume-with-a-result.
@@ -49,7 +64,7 @@ class LongRunDriver:
         self,
         app_name: str,
         user_id: str,
-        root: BaseAgent,
+        root: Any,
         session_service: BaseSessionService | None = None,
     ) -> None:
         app = App(
@@ -58,7 +73,8 @@ class LongRunDriver:
             resumability_config=ResumabilityConfig(is_resumable=True),
         )
         # A durable session_service (sqlite/firestore) makes a parked run survive a process
-        # restart; the default in-memory one keeps today's behavior (a restart strands it).
+        # restart (its paused state is reconstructed from persisted session events); the
+        # default in-memory one keeps today's behavior (a restart strands it).
         self._session_service = session_service or InMemorySessionService()
         self._runner = Runner(
             app=app, session_service=self._session_service, auto_create_session=True
@@ -75,23 +91,23 @@ class LongRunDriver:
         )
 
     async def start(self, session_id: str, text: str) -> DriveResult:
-        """Seed a fresh invocation on ``session_id`` and drive until the agent parks
-        on a long-running tool or finishes."""
+        """Seed a fresh invocation on ``session_id`` and drive until the workflow pauses
+        on a request-input interrupt or finishes."""
         await self._ensure_session(session_id)
         msg = types.Content(role="user", parts=[types.Part.from_text(text=text)])
         return await self._drive(session_id, msg)
 
-    async def resume(
-        self, session_id: str, call_id: str, tool_name: str, response: dict[str, Any]
-    ) -> DriveResult:
-        """Feed the real result for a parked long-running call back into ``session_id``
-        and drive until the agent re-parks or finishes."""
+    async def resume(self, session_id: str, call_id: str, response: dict[str, Any]) -> DriveResult:
+        """Feed the real result for a parked request-input pause (``call_id`` is the
+        interrupt id a prior drive parked on) back into ``session_id`` and drive until the
+        workflow re-parks or finishes. The caller is the gate against stale resumes —
+        claim the run before resuming it."""
         msg = types.Content(
             role="user",
             parts=[
                 types.Part(
                     function_response=types.FunctionResponse(
-                        id=call_id, name=tool_name, response=response
+                        id=call_id, name=_REQUEST_INPUT_CALL_NAME, response=response
                     )
                 )
             ],
@@ -118,120 +134,9 @@ class LongRunDriver:
         ):
             if ev.long_running_tool_ids:
                 res.parked_call_id = next(iter(ev.long_running_tool_ids))
-            if ev.content is None:
-                continue
-            for p in ev.content.parts or []:
-                if p.function_response is not None and p.function_response.name:
-                    res.tool_responses[p.function_response.name] = dict(
-                        p.function_response.response or {}
-                    )
-            if not ev.partial:
+            if isinstance(ev.output, dict):
+                res.node_outputs.append(ev.output)
+            if ev.content is not None and not ev.partial:
                 parts.append(content_text(ev.content))
         res.final = "".join(parts)
         return res
-
-
-class Sequencer(BaseLlm):
-    """A deterministic ``BaseLlm`` that emits a fixed Action -> Wait tool sequence.
-
-    Call ``action`` (a normal tool), then ``wait`` (a long-running tool that suspends
-    the run). When the run resumes with ``wait``'s real result, ``retry_when`` decides
-    whether to loop (call ``action`` again) or conclude. It carries no policy of its
-    own: the caller owns retry/stop/timeout and only resumes a parked run when it wants
-    another attempt.
-    """
-
-    action: str
-    wait: str
-    retry_when: Callable[[dict[str, Any]], bool] | None = None
-    # stop_when reports whether an Action result is already terminal — the loop concludes
-    # without ever calling Wait. None means always proceed to Wait. Use it for an Action that
-    # can finish the work itself (e.g. nothing to do), so the result is not forwarded to a Wait
-    # tool whose schema would reject it.
-    stop_when: Callable[[dict[str, Any]], bool] | None = None
-    model_config = {"arbitrary_types_allowed": True}
-
-    def __init__(
-        self,
-        action: str,
-        wait: str,
-        retry_when: Callable[[dict[str, Any]], bool] | None = None,
-        stop_when: Callable[[dict[str, Any]], bool] | None = None,
-    ) -> None:
-        super().__init__(  # type: ignore[call-arg]
-            model=f"sequencer:{action}+{wait}",
-            action=action,
-            wait=wait,
-            retry_when=retry_when,
-            stop_when=stop_when,
-        )
-
-    async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):  # type: ignore[override]
-        yield self._decide(llm_request.contents or [])
-
-    def _decide(self, contents: list[types.Content]) -> LlmResponse:
-        """Choose the next step from the most recent function response in history:
-
-        * none yet                  -> call Action
-        * Action returned an error  -> conclude (nothing to wait on)
-        * Action result, stop_when  -> conclude (Action already finished the work)
-        * Action returned a result  -> call Wait, forwarding the result as its args
-        * Wait result, retry_when   -> call Action again
-        * Wait result, otherwise    -> conclude
-        """
-        last = _last_function_response(contents)
-        if last is None:
-            return self._call(self.action, None, contents)
-        if last.name == self.action:
-            resp = dict(last.response or {})
-            if "error" in resp:
-                return _sequencer_text(f"{self.action} failed: {resp['error']}")
-            if self.stop_when is not None and self.stop_when(resp):
-                return _sequencer_text("done")
-            return self._call(self.wait, resp, contents)
-        if last.name == self.wait:
-            if self.retry_when is not None and self.retry_when(dict(last.response or {})):
-                return self._call(self.action, None, contents)
-            return _sequencer_text("done")
-        return _sequencer_text("done")
-
-    def _call(
-        self, name: str, args: dict[str, Any] | None, contents: list[types.Content]
-    ) -> LlmResponse:
-        args = args or {}
-        # Unique id per call so the flow correlates each long-running park independently
-        # across retries within one session.
-        call_id = f"{name}_{_count_function_calls(contents, name) + 1}"
-        fc = types.FunctionCall(id=call_id, name=name, args=args)
-        return LlmResponse(
-            content=types.Content(role="model", parts=[types.Part(function_call=fc)]),
-            turn_complete=True,
-        )
-
-
-def _sequencer_text(text: str) -> LlmResponse:
-    return LlmResponse(content=assistant_text(text), turn_complete=True)
-
-
-def _last_function_response(
-    contents: list[types.Content],
-) -> types.FunctionResponse | None:
-    last: types.FunctionResponse | None = None
-    for c in contents:
-        if c is None:
-            continue
-        for p in c.parts or []:
-            if p.function_response is not None:
-                last = p.function_response
-    return last
-
-
-def _count_function_calls(contents: list[types.Content], name: str) -> int:
-    n = 0
-    for c in contents:
-        if c is None:
-            continue
-        for p in c.parts or []:
-            if p.function_call is not None and p.function_call.name == name:
-                n += 1
-    return n
