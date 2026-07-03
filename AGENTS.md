@@ -17,7 +17,7 @@ This service is maintained as parallel ports that **must all stay 1:1 in functio
 | TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | functional 1:1 port — `make ci` green |
 
 Each language uses its own native ADK; parity is **functional, not version-matched**
-(adk-go is v1.x, adk-kotlin is 0.4.x, adk-js is v1.x).
+(adk-go is v2.x, adk-kotlin is 0.4.x, adk-js is v1.x).
 
 **The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
