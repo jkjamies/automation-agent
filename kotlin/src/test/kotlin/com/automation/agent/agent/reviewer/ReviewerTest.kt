@@ -1,29 +1,66 @@
 package com.automation.agent.agent.reviewer
 
 import com.automation.agent.agent.setup.assistantText
+import com.automation.agent.githubapi.CheckResult
+import com.automation.agent.githubapi.CheckRunInput
 import com.automation.agent.githubapi.PRFile
 import com.automation.agent.githubapi.PullRequestEvent
+import com.automation.agent.githubapi.ReviewCommentRef
+import com.automation.agent.githubapi.ReviewInput
+import com.automation.agent.githubapi.Tree
 import com.google.adk.kt.models.LlmRequest
 import com.google.adk.kt.models.LlmResponse
 import com.google.adk.kt.models.Model
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 
-/** A fake GitHub client: returns canned changed files and a canned current head SHA. */
+/** A recording fake GitHub client: canned reads, and captures every publish write. */
 private class FakeGh(
     private val files: List<PRFile> = emptyList(),
     private val headSha: String = "",
+    private val existing: List<ReviewCommentRef> = emptyList(),
+    private val check: CheckResult = CheckResult(found = false),
 ) : GitHubClient {
     var listCalls = 0
+    val reviews = mutableListOf<ReviewInput>()
+    val checks = mutableListOf<CheckRunInput>()
+    val markerBodies = mutableListOf<String>()
+    val minimized = mutableListOf<String>()
+
     override suspend fun listPRFiles(owner: String, repo: String, num: Int): List<PRFile> {
         listCalls++
         return files
     }
 
+    override suspend fun createReview(owner: String, repo: String, num: Int, input: ReviewInput) {
+        reviews.add(input)
+    }
+
+    override suspend fun upsertMarkerComment(owner: String, repo: String, num: Int, marker: String, body: String) {
+        markerBodies.add(body)
+    }
+
+    override suspend fun createCheckRun(owner: String, repo: String, input: CheckRunInput) {
+        checks.add(input)
+    }
+
+    override suspend fun listReviewComments(owner: String, repo: String, num: Int): List<ReviewCommentRef> = existing
+
+    override suspend fun minimizeComment(subjectId: String) {
+        minimized.add(subjectId)
+    }
+
+    override suspend fun agentCheck(owner: String, repo: String, ref: String, checkName: String): CheckResult = check
+
     override suspend fun pullRequestHeadSha(owner: String, repo: String, num: Int): String = headSha
+
+    override suspend fun tree(owner: String, repo: String, ref: String): Tree = Tree(entries = emptyList(), truncated = false)
+
+    override suspend fun getFileContent(owner: String, repo: String, path: String, ref: String): String = ""
 }
 
 /** A fake model that returns a fixed findings JSON for every lens (canned; no model reasoning). */
@@ -155,17 +192,43 @@ class ReviewerTest : BehaviorSpec({
 
     Given("an enabled engine reviewing a real diff") {
         When("kickoff runs over a reviewable PR") {
-            Then("it scores the review and logs it (no GitHub writes)") {
+            Then("it publishes the review (summary + advisory check) and logs it") {
                 val log = RecordingLogger()
-                val e = engine(gh = FakeGh(files = listOf(file("a.kt"))), log = log)
+                val gh = FakeGh(files = listOf(file("a.kt")))
+                val e = engine(gh = gh, log = log)
                 e.kickoff(prEventJson().toByteArray())
-                log.messages.any { it.startsWith("review scored") } shouldBe true
+                log.messages.any { it.startsWith("review published") } shouldBe true
+                gh.markerBodies.size shouldBe 1
+                gh.checks.size shouldBe 1
+                gh.checks[0].name shouldBe CHECK_NAME
+                gh.checks[0].conclusion shouldBe "neutral" // red overall -> neutral (never failure)
+            }
+        }
+        When("the head SHA is already published") {
+            Then("it skips the re-post (idempotent)") {
+                val gh = FakeGh(files = listOf(file("a.kt")), check = CheckResult(found = true))
+                val e = engine(gh = gh)
+                e.kickoff(prEventJson().toByteArray())
+                gh.checks.size shouldBe 0
+                gh.markerBodies.size shouldBe 0
+            }
+        }
+        When("the PR is denied as too large") {
+            Then("it publishes the please-split summary + a neutral check") {
+                val log = RecordingLogger()
+                val gh = FakeGh(files = listOf(file("a.kt"), file("b.kt")))
+                val e = Engine(Deps(enabled = true, gh = gh, baseLlm = FakeModel(CANNED), codeLlm = FakeModel(CANNED), maxFiles = 1, log = log))
+                e.kickoff(prEventJson().toByteArray())
+                log.messages.any { it.startsWith("review denied") } shouldBe true
+                val denyBody = gh.markerBodies.single()
+                denyBody shouldContain "too large for automated review"
+                denyBody shouldContain "Please split it into smaller PRs"
+                gh.checks.single().conclusion shouldBe "neutral"
             }
         }
         When("a newer push has superseded the event SHA") {
             Then("it skips the stale review") {
                 val log = RecordingLogger()
-                // The current head SHA differs from the event's, so the task is stale.
                 val e = engine(gh = FakeGh(files = listOf(file("a.kt")), headSha = "newer-sha"), log = log)
                 e.kickoff(prEventJson(headSha = "old-sha").toByteArray())
                 log.messages.any { it.startsWith("stale review skipped") } shouldBe true
@@ -177,7 +240,7 @@ class ReviewerTest : BehaviorSpec({
         When("run over a reviewable diff with canned lens output") {
             Then("it dedupes cross-lens, gates by confidence, and scores critical-cap red") {
                 val e = engine(gh = FakeGh(files = listOf(file("a.kt"))))
-                val result = runReview(e, listOf(file("a.kt")))
+                val result = runReview(e, listOf(file("a.kt")), null)
                 result.findings.size shouldBe 1
                 result.card.total shouldBe 1
                 result.card.overall shouldBe Level.RED

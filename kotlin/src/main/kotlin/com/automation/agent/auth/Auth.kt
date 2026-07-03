@@ -26,6 +26,7 @@ package com.automation.agent.auth
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
@@ -60,12 +61,58 @@ interface TokenProvider {
 }
 
 /**
- * Returns the same token for every repo. Backs PAT mode and the empty/anonymous client (an empty
- * token yields unauthenticated requests, fine for public reads and tests).
+ * A provider that can resolve the GitHub login it authors content as, so the service can recognize
+ * the comments it posted (the authoritative ownership signal for marker-comment upserts). Optional:
+ * a provider need not implement it, in which case ownership falls back to author-type matching.
  */
-class StaticProvider(private val token: String = "") : TokenProvider {
+interface IdentityResolver {
+    /** Returns the login this provider authors as; "" means the identity is unknown. */
+    suspend fun authoredLogin(): String
+}
+
+/**
+ * Returns the same token for every repo. Backs PAT mode and the empty/anonymous client (an empty
+ * token yields unauthenticated requests, fine for public reads and tests). [baseUrl] / [httpClient]
+ * are injectable so a test can point the GET /user identity lookup at a stub.
+ */
+class StaticProvider(
+    private val token: String = "",
+    private val baseUrl: String = AppProvider.DEFAULT_BASE_URL,
+    httpClient: HttpClient? = null,
+) : TokenProvider, IdentityResolver {
+    private val http: HttpClient by lazy {
+        httpClient ?: HttpClient(CIO) {
+            install(HttpTimeout) {
+                requestTimeoutMillis = IDENTITY_TIMEOUT_MS
+                connectTimeoutMillis = IDENTITY_CONNECT_TIMEOUT_MS
+            }
+        }
+    }
+
     /** Returns the constant token; [repo] is ignored. */
     override suspend fun token(repo: String): String = token
+
+    /**
+     * Resolves the authenticated user login for the PAT via GET /user, so the service can recognize
+     * comments it authored in PAT mode. An empty token yields "" (anonymous — there is no identity
+     * to attribute).
+     */
+    override suspend fun authoredLogin(): String {
+        if (token.isEmpty()) return ""
+        val resp = http.get("${baseUrl.trimEnd('/')}/user") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+        }
+        if (!resp.status.isSuccess()) {
+            throw IOException("auth: user identity lookup failed ${resp.status.value}: ${resp.bodyAsText().take(256)}")
+        }
+        return authJson.decodeFromString<UserLoginDto>(resp.bodyAsText()).login
+    }
+
+    private companion object {
+        const val IDENTITY_TIMEOUT_MS = 30_000L
+        const val IDENTITY_CONNECT_TIMEOUT_MS = 10_000L
+    }
 }
 
 /**
@@ -83,7 +130,7 @@ class AppProvider(
     private val baseUrl: String = DEFAULT_BASE_URL,
     httpClient: HttpClient? = null,
     private val now: () -> Instant = Instant::now,
-) : TokenProvider {
+) : TokenProvider, IdentityResolver {
     private val http: HttpClient = httpClient ?: HttpClient(CIO) {
         install(HttpTimeout) {
             requestTimeoutMillis = EXCHANGE_TIMEOUT_MS
@@ -92,6 +139,11 @@ class AppProvider(
     }
 
     private val mutex = Mutex()
+    private val loginMutex = Mutex()
+
+    // Caches the resolved "<slug>[bot]" identity; only a success is cached, so a transient lookup
+    // failure can be retried on a later call.
+    private var login = ""
 
     @Volatile
     private var cached: Cached? = null
@@ -110,6 +162,27 @@ class AppProvider(
         val fresh = exchange(nowAt)
         cached = fresh
         fresh.token
+    }
+
+    /**
+     * Resolves the "<app-slug>[bot]" login this App authors content as, via a JWT-authenticated GET
+     * /app, so the service can recognize the comments it posted. Resolved once and cached (the slug
+     * is immutable for the deployment's lifetime).
+     */
+    override suspend fun authoredLogin(): String = loginMutex.withLock {
+        if (login.isNotEmpty()) return@withLock login
+        val jwt = buildAppJwt(appId, privateKey, now())
+        val resp = http.get("${baseUrl.trimEnd('/')}/app") {
+            header(HttpHeaders.Authorization, "Bearer $jwt")
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+        }
+        if (!resp.status.isSuccess()) {
+            throw IOException("auth: app identity lookup failed ${resp.status.value}: ${resp.bodyAsText().take(256)}")
+        }
+        val slug = authJson.decodeFromString<AppSlugDto>(resp.bodyAsText()).slug
+        if (slug.isEmpty()) throw IOException("auth: app identity response has no slug")
+        login = "$slug[bot]"
+        login
     }
 
     /** Signs an App JWT and exchanges it for an installation token at the pinned installation. */
@@ -211,3 +284,9 @@ private data class AccessTokenDto(
     val token: String = "",
     @SerialName("expires_at") val expiresAt: String = "",
 )
+
+@Serializable
+private data class UserLoginDto(val login: String = "")
+
+@Serializable
+private data class AppSlugDto(val slug: String = "")

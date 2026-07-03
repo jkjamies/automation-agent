@@ -9,13 +9,21 @@
  *
  * The flow per pull_request event: parse it, apply the trigger and skip rules, fetch the changed
  * files via the REST API, filter generated/vendored churn, and apply the two-dimensional size gate
- * to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass and
- * scores the findings (count-based scorecard). Publishing the scored review to the PR is a follow-up.
+ * to reach a decision (skip / deny / review). A review fans out the category lenses + glue pass,
+ * scores the findings (count-based scorecard), and publishes a CodeRabbit-style review via REST —
+ * inline comments, a marker-updated summary comment, and an advisory agent-review check —
+ * reconciled against the PR's existing comments and steered off the reviewed repo's own standards
+ * when present. Deny publishes the "too large, please split" summary + a neutral check.
  */
 package com.automation.agent.agent.reviewer
 
+import com.automation.agent.githubapi.CheckResult
+import com.automation.agent.githubapi.CheckRunInput
 import com.automation.agent.githubapi.PRFile
 import com.automation.agent.githubapi.PullRequestEvent
+import com.automation.agent.githubapi.ReviewCommentRef
+import com.automation.agent.githubapi.ReviewInput
+import com.automation.agent.githubapi.Tree
 import com.automation.agent.githubapi.parsePullRequestEvent
 import com.google.adk.kt.models.Model
 import java.lang.System.Logger.Level
@@ -29,14 +37,31 @@ import kotlin.coroutines.cancellation.CancellationException
 const val OWN_BRANCH_PREFIX = "automation-agent/"
 
 /**
- * The slice of the GitHub client the reviewer needs to detect and analyze a PR: read the changed
- * files (with patches) and read the head SHA (to detect a task superseded by a newer push). A local
- * interface keeps the engine testable with a fake.
+ * The slice of the GitHub client the reviewer needs: read the changed files (with patches), read
+ * the head SHA and repo tree, and publish the review (an advisory review with inline comments, the
+ * marker-updated summary comment, and the advisory agent-review check). A local interface keeps the
+ * engine testable with a fake.
  */
 interface GitHubClient {
     suspend fun listPRFiles(owner: String, repo: String, num: Int): List<PRFile>
 
+    suspend fun createReview(owner: String, repo: String, num: Int, input: ReviewInput)
+
+    suspend fun upsertMarkerComment(owner: String, repo: String, num: Int, marker: String, body: String)
+
+    suspend fun createCheckRun(owner: String, repo: String, input: CheckRunInput)
+
+    suspend fun listReviewComments(owner: String, repo: String, num: Int): List<ReviewCommentRef>
+
+    suspend fun minimizeComment(subjectId: String)
+
+    suspend fun agentCheck(owner: String, repo: String, ref: String, checkName: String): CheckResult
+
     suspend fun pullRequestHeadSha(owner: String, repo: String, num: Int): String
+
+    suspend fun tree(owner: String, repo: String, ref: String): Tree
+
+    suspend fun getFileContent(owner: String, repo: String, path: String, ref: String): String
 }
 
 /** Wires the reviewer engine. */
@@ -96,8 +121,9 @@ class Engine(deps: Deps) {
 
     // gh / baseLlm / codeLlm are required for real work; kickoff guards each with a controlled error
     // before any use (disabled/skip/deny paths never touch the missing one), so the collaborators can
-    // treat them as always-present.
-    private val gh: GitHubClient? = deps.gh
+    // treat them as always-present. gh is exposed so the sibling publish/standards modules can reach
+    // it off the engine; requireGh() gives them a non-null view without the not-null assertion.
+    val gh: GitHubClient? = deps.gh
     val baseLlm: Model? = deps.baseLlm
     val codeLlm: Model? = deps.codeLlm
     val minConfidence: Double = clampThreshold(deps.minConfidence)
@@ -109,7 +135,12 @@ class Engine(deps: Deps) {
     val standardsGlobs: List<String> = deps.standardsGlobs
     val standardsMaxBytes: Int = deps.standardsMaxBytes
     val uncitedDrop: Boolean = deps.uncitedDrop
+    val standardsCache: StandardsCache = StandardsCache()
     val log: System.Logger = deps.log ?: System.getLogger("automation-agent.reviewer")
+
+    /** A non-null view of the GitHub client for the publish/standards paths (reached only after
+     *  kickoff's client guard, so this never trips in practice). */
+    fun requireGh(): GitHubClient = gh ?: throw IllegalStateException("reviewer: GitHub client not configured")
 
     /**
      * Handles one pull_request webhook delivery (Kind.REVIEW). The root dispatcher calls it with the
@@ -135,32 +166,46 @@ class Engine(deps: Deps) {
             }
         val d = decide(ev, gh)
         val pr = "${ev.repoFullName}#${ev.number}"
-        // decide() already validated the full name before reaching a deny/review decision, so a
-        // malformed name here means skip.
+        // owner/repo are only used by the publish paths; decide() already validated the full name
+        // before reaching a deny/review decision, so a malformed name here means skip.
         val split = splitFullName(ev.repoFullName)
         // Coalesce-to-latest: a deny/review acts on the event's SHA, so if a newer push has
-        // superseded it, skip rather than produce a stale review. A skip produced nothing.
+        // superseded it, skip rather than post a stale review. A skip produced nothing.
         if (d.kind != DecisionKind.SKIP && superseded(split.owner, split.repo, ev, gh)) {
             log.log(Level.INFO, "stale review skipped (superseded by a newer push) pr=$pr eventSha=${ev.headSha}")
             return
         }
+        val meta =
+            PublishMeta(
+                owner = split.owner,
+                repo = split.repo,
+                number = ev.number,
+                headSha = ev.headSha,
+                files = d.files,
+                tiers = "code-reasoning + base",
+            )
         when (d.kind) {
             DecisionKind.SKIP ->
                 log.log(Level.INFO, "review skipped pr=$pr action=${ev.action} reason=${d.reason}")
-            DecisionKind.DENY ->
-                // Too large to review: it is denied, not degraded. Publishing the "please split"
-                // notice is a follow-up.
+            DecisionKind.DENY -> {
+                // Too large to review: post the "please split" summary + a neutral check, no model call.
+                publishDeny(this, meta, d.reason, d.files.size, d.diffBytes)
                 log.log(Level.INFO, "review denied pr=$pr files=${d.files.size} diffBytes=${d.diffBytes} reason=${d.reason}")
+            }
             DecisionKind.REVIEW -> {
                 // Review needs both tier models; the deny branch above does not.
                 if (baseLlm == null || codeLlm == null) {
                     throw IllegalStateException("reviewer: enabled but review models not configured")
                 }
-                val result = runReview(this, d.files)
-                // Publishing the scored review to the PR is a follow-up.
+                // Steer the lenses off the reviewed repo's own conventions; null when disabled or none
+                // found, in which case the lenses review generically.
+                val std = discoverStandards(this, split.owner, split.repo, ev.headSha, d.files)
+                meta.standards = std?.sourceList() ?: emptyList()
+                val result = runReview(this, d.files, std)
+                publish(this, result.card, result.findings, meta)
                 log.log(
                     Level.INFO,
-                    "review scored pr=$pr files=${d.files.size} overall=${levelGlyph(result.card.overall)} findings=${result.card.total}",
+                    "review published pr=$pr files=${d.files.size} overall=${levelGlyph(result.card.overall)} findings=${result.card.total}",
                 )
             }
         }
