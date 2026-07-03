@@ -27,20 +27,21 @@ data class ReviewResult(val card: Scorecard, val findings: List<Finding>)
  * glue pass, then apply the deterministic verify gate (confidence drop + dedup) and score. Returns
  * the scorecard and the gated findings (the caller publishes them).
  */
-suspend fun runReview(engine: Engine, files: List<PRFile>): ReviewResult {
+suspend fun runReview(engine: Engine, files: List<PRFile>, std: Standards?): ReviewResult {
     val diff = formatDiff(files)
     val cats = selectCategories(files)
 
-    val category = runCategoryReview(engine, diff, cats)
+    val category = runCategoryReview(engine, diff, cats, std)
     // Glue sees the category findings as "already reported" and skips re-flagging them, so it must
-    // see only the findings that survive the same gate as the final output. Otherwise a finding the
-    // verify gate later drops is suppressed in glue and then dropped here, vanishing from the review
-    // entirely.
-    val gatedForGlue = dropLowConfidence(category, engine.minConfidence)
-    val glue = runGlue(engine, diff, gatedForGlue)
+    // see only the findings that survive the same gates as the final output. Otherwise a finding the
+    // verify/citation gate later drops is suppressed in glue and then dropped here, vanishing from
+    // the review entirely.
+    val gatedForGlue = gateCitations(engine, dropLowConfidence(category, engine.minConfidence), std)
+    val glue = runGlue(engine, diff, gatedForGlue, std)
 
     var all = category + glue
     all = dropLowConfidence(all, engine.minConfidence) // phase-1 verify gate
+    all = gateCitations(engine, all, std) // citation gate
     all = dedupe(all) // cross-lens dedup
     return ReviewResult(scoreFindings(all), all)
 }
@@ -51,8 +52,8 @@ suspend fun runReview(engine: Engine, files: List<PRFile>): ReviewResult {
  * category's parsed findings. Empty findings is success. The "(other)" catch-all's findings are
  * demoted to nitpick.
  */
-suspend fun runCategoryReview(engine: Engine, diff: String, cats: List<Category>): List<Finding> {
-    val agents = cats.map { buildCategoryAgent(engine, it, diff) }
+suspend fun runCategoryReview(engine: Engine, diff: String, cats: List<Category>, std: Standards?): List<Finding> {
+    val agents = cats.map { buildCategoryAgent(engine, it, diff, std) }
     val parallel = ParallelAgent(name = "review_all", description = "Per-category review in parallel", subAgents = agents)
     val state = driveCollectState(newRunner("reviewer-review", parallel), "system", "review", REVIEW_TRIGGER)
 
@@ -77,8 +78,8 @@ suspend fun runCategoryReview(engine: Engine, diff: String, cats: List<Category>
  * Runs the holistic synthesis pass over the diff and the category findings, returning the additional
  * architectural/testability/coverage findings it produced. Empty is success.
  */
-suspend fun runGlue(engine: Engine, diff: String, prior: List<Finding>): List<Finding> {
-    val agent = buildGlueAgent(engine, diff, prior)
+suspend fun runGlue(engine: Engine, diff: String, prior: List<Finding>, std: Standards?): List<Finding> {
+    val agent = buildGlueAgent(engine, diff, prior, std)
     val text = driveText(newRunner("reviewer-glue", agent), "system", "glue", GLUE_TRIGGER)
     return parseFindings(text)
 }
@@ -144,16 +145,45 @@ fun modelForTier(engine: Engine, tier: Tier): Model {
 }
 
 /**
- * Composes a category agent's instruction: the lens prompt and the filtered diff (baked in because
- * it is per-event).
+ * Composes a category agent's instruction: the lens prompt, the repo's standards rule menu (when
+ * any), and the filtered diff (baked in because they are per-event).
  */
-fun buildReviewInstruction(promptBody: String, diff: String): String =
-    promptBody + "\n\n## Diff under review\n\n" + diff
+fun buildReviewInstruction(promptBody: String, diff: String, std: Standards?): String {
+    val parts = StringBuilder(promptBody)
+    writeStandardsMenu(parts, std)
+    parts.append("\n\n## Diff under review\n\n")
+    parts.append(diff)
+    return parts.toString()
+}
 
 /**
- * Composes the glue agent's instruction: the glue prompt, the diff, and the findings the category
- * agents already produced (so it reasons holistically without re-flagging them).
+ * Composes the glue agent's instruction: the glue prompt, the standards menu, the diff, and the
+ * findings the category agents already produced (so it reasons holistically without re-flagging
+ * them).
  */
-fun buildGlueInstruction(promptBody: String, diff: String, prior: List<Finding>): String =
-    promptBody + "\n\n## Diff under review\n\n" + diff +
-        "\n\n## Findings already reported by other lenses\n\n" + findingsJson(prior)
+fun buildGlueInstruction(promptBody: String, diff: String, prior: List<Finding>, std: Standards?): String {
+    val parts = StringBuilder(promptBody)
+    writeStandardsMenu(parts, std)
+    parts.append("\n\n## Diff under review\n\n")
+    parts.append(diff)
+    parts.append("\n\n## Findings already reported by other lenses\n\n")
+    parts.append(findingsJson(prior))
+    return parts.toString()
+}
+
+/**
+ * Appends the repo's compact rule menu and the citation instruction to an agent prompt when
+ * standards were discovered. The full text of any rule is available via get_rule.
+ */
+fun writeStandardsMenu(parts: StringBuilder, std: Standards?) {
+    if (isEmpty(std)) return
+    val real = std ?: return
+    parts.append("\n\n## Repo standards (cite rule_id for conformance findings)\n\n")
+    parts.append(real.menu())
+    parts.append(
+        "\nWhen a finding is a violation of one of these rules, set its dimension to the " +
+            "rule's dimension and set \"rule_id\" to the rule's id. Call get_rule(id) to read a " +
+            "rule's full text before flagging. Never invent a rule id; a pattern/architecture " +
+            "finding with no matching rule is not a standards violation.\n",
+    )
+}

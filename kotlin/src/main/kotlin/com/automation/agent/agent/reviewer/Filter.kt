@@ -13,8 +13,11 @@ import com.automation.agent.githubapi.PRFile
  * One compiled exclude glob. A pattern with no '/' matches against the file's basename (e.g.
  * "*.min.js", "go.sum"); a pattern with a '/' matches against the full path (e.g. a vendored tree).
  * "**" matches across path separators; "*" and "?" do not.
+ *
+ * Public so the standards-glob matcher (Standards.kt) can reuse the compiled-glob shape across the
+ * module boundary rather than reaching into a private name.
  */
-private data class GlobPattern(val re: Regex, val basename: Boolean)
+data class GlobPattern(val re: Regex, val basename: Boolean)
 
 /** The kept (non-excluded) files and the total size of their patches in bytes. */
 data class FilterResult(val kept: List<PRFile>, val diffBytes: Int)

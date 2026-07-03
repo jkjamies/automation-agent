@@ -16,6 +16,7 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.HttpRequestPipeline
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -29,6 +30,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.IOException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -141,6 +147,31 @@ data class Tree(val entries: List<TreeEntry>, val truncated: Boolean)
  */
 data class ReviewCommentRef(val nodeId: String, val body: String)
 
+/**
+ * One inline review comment on the head (RIGHT) side of a file. GitHub rejects an inline comment
+ * whose line is outside the PR's diff hunks, so the caller posts only in-diff findings here and
+ * lists the rest in the summary comment.
+ */
+data class ReviewComment(val path: String, val line: Int, val side: String, val body: String)
+
+/**
+ * An advisory pull-request review: a body plus optional inline comments. The reviewer never
+ * approves or requests changes, so the event is always COMMENT.
+ */
+data class ReviewInput(val body: String = "", val comments: List<ReviewComment> = emptyList())
+
+/**
+ * Describes the advisory agent-review check run: always completed, conclusion success or neutral —
+ * never failure, so it informs without gating merges.
+ */
+data class CheckRunInput(
+    val name: String,
+    val headSha: String,
+    val conclusion: String, // "success" | "neutral"
+    val title: String = "",
+    val summary: String = "",
+)
+
 /** Yields a currently-valid GitHub token for the REST client, or `""` for anonymous requests. The
  * githubapi-local view of the `auth.TokenProvider` seam (a narrow interface kept here so githubapi
  * stays decoupled from `auth`; the composition root adapts the real provider to it). */
@@ -157,6 +188,13 @@ class Client(
     private val tokenSource: TokenSource? = null,
     private val baseUrl: String = "https://api.github.com/",
     httpClient: HttpClient? = null,
+    // The login this client authors content as ("<slug>[bot]" in App mode, the user login in PAT
+    // mode), resolved by the composition root and injected. "" means it could not be resolved, in
+    // which case appAuthored picks a safe fallback for marker-comment ownership (see ownsComment).
+    private val authoredLogin: String = "",
+    // True when the REST token comes from a GitHub App installation, so an unresolved identity can
+    // still fall back to trusting only bot-authored comments (see ownsComment).
+    private val appAuthored: Boolean = false,
 ) {
     private val http: HttpClient = httpClient ?: HttpClient(CIO) {
         install(ContentNegotiation) { json(githubJson) }
@@ -325,6 +363,144 @@ class Client(
             url = resp.nextLink()
         }
         return out
+    }
+
+    /** Posts an advisory (COMMENT) pull-request review with optional inline comments. */
+    suspend fun createReview(owner: String, repo: String, num: Int, input: ReviewInput) {
+        val payload =
+            buildJsonObject {
+                put("event", "COMMENT")
+                if (input.body.isNotEmpty()) put("body", input.body)
+                put(
+                    "comments",
+                    buildJsonArray {
+                        input.comments.forEach { c ->
+                            add(
+                                buildJsonObject {
+                                    put("path", c.path)
+                                    put("body", c.body)
+                                    put("line", c.line)
+                                    put("side", c.side)
+                                },
+                            )
+                        }
+                    },
+                )
+            }
+        http.post(url("repos/$owner/$repo/pulls/$num/reviews")) {
+            contentType(ContentType.Application.Json)
+            setBody(githubJson.encodeToString(JsonObject.serializer(), payload))
+        }.orThrow()
+    }
+
+    /**
+     * Posts a completed, advisory check run for the head SHA. The agent-review check is advisory and
+     * must never gate a merge, so the conclusion is constrained here at the API boundary — a
+     * "failure"/"cancelled" cannot slip in.
+     */
+    suspend fun createCheckRun(owner: String, repo: String, input: CheckRunInput) {
+        if (input.conclusion != "success" && input.conclusion != "neutral") {
+            throw IllegalArgumentException("create check run $owner/$repo: advisory conclusion must be success or neutral, got \"${input.conclusion}\"")
+        }
+        val payload =
+            buildJsonObject {
+                put("name", input.name)
+                put("head_sha", input.headSha)
+                put("status", "completed")
+                put("conclusion", input.conclusion)
+                put("output", buildJsonObject { put("title", input.title); put("summary", input.summary) })
+            }
+        http.post(url("repos/$owner/$repo/check-runs")) {
+            contentType(ContentType.Application.Json)
+            setBody(githubJson.encodeToString(JsonObject.serializer(), payload))
+        }.orThrow()
+    }
+
+    /**
+     * Collapses a comment as OUTDATED via GraphQL (the REST API has no equivalent), so a finding that
+     * no longer applies is hidden rather than deleted — the thread is preserved. [subjectId] is the
+     * comment's GraphQL node id ([ReviewCommentRef.nodeId]). The mutation runs over the same
+     * authenticated client as REST; the endpoint derives from the REST base incl. the GitHub
+     * Enterprise Server `/api/v3` -> `/api/graphql` mapping.
+     */
+    suspend fun minimizeComment(subjectId: String) {
+        val mutation = "mutation(\$id:ID!){minimizeComment(input:{subjectId:\$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}"
+        val payload =
+            buildJsonObject {
+                put("query", mutation)
+                put("variables", buildJsonObject { put("id", subjectId) })
+            }
+        val resp =
+            http.post(graphqlUrl()) {
+                contentType(ContentType.Application.Json)
+                setBody(githubJson.encodeToString(JsonObject.serializer(), payload))
+            }
+        if (!resp.status.isSuccess()) throw IOException("graphql: unexpected status ${resp.status.value}")
+        val decoded = githubJson.decodeFromString<GraphQlResponseDto>(resp.bodyAsText())
+        if (decoded.errors.isNotEmpty()) throw IOException("graphql: ${decoded.errors[0].message}")
+    }
+
+    /**
+     * Edits the single issue comment this client authored whose body contains [marker], or creates
+     * one if none exists. The reviewer's summary comment carries a hidden marker so a re-review
+     * updates it in place instead of piling up duplicates. Only a comment the client could have
+     * authored is edited (see [ownsComment]): GitHub rejects editing a foreign comment, so a comment
+     * that merely echoes the marker must not hijack the upsert.
+     */
+    suspend fun upsertMarkerComment(owner: String, repo: String, num: Int, marker: String, body: String) {
+        // An empty marker would match every comment and edit an unrelated one; a body without the
+        // marker could never be found again, piling up duplicates. Both are caller bugs, so fail fast.
+        if (marker.isEmpty()) throw IllegalArgumentException("upsert comment $owner/$repo#$num: empty marker")
+        if (!body.contains(marker)) throw IllegalArgumentException("upsert comment $owner/$repo#$num: body must contain the marker")
+        val editPayload = githubJson.encodeToString(JsonObject.serializer(), buildJsonObject { put("body", body) })
+        var next: String? = url("repos/$owner/$repo/issues/$num/comments", "per_page" to "100")
+        while (next != null) {
+            val resp = http.get(next).orThrow()
+            for (ic in resp.body<List<IssueCommentDto>>()) {
+                if (!(ic.body ?: "").contains(marker) || !ownsComment(ic)) continue
+                val id = ic.id ?: continue
+                val editResp =
+                    http.patch(url("repos/$owner/$repo/issues/comments/$id")) {
+                        contentType(ContentType.Application.Json)
+                        setBody(editPayload)
+                    }
+                if (editResp.status.isSuccess()) return
+                // With a known login the match is authoritative, so any edit failure is a real error.
+                // On the weak author-type fallback (identity unresolved) the match can be a foreign
+                // bot that merely echoes the marker; a 403/404 there means "not ours", so skip it and
+                // fall through to create.
+                if (authoredLogin == "" && (editResp.status.value == 403 || editResp.status.value == 404)) continue
+                throw IOException("edit comment $owner/$repo#$num: github ${editResp.status.value}: ${editResp.bodyAsText().take(512)}")
+            }
+            next = resp.nextLink()
+        }
+        http.post(url("repos/$owner/$repo/issues/$num/comments")) {
+            contentType(ContentType.Application.Json)
+            setBody(editPayload)
+        }.orThrow()
+    }
+
+    /**
+     * Reports whether this client authored [ic] — the precondition for editing it in place (GitHub
+     * rejects editing a comment the client did not author). A known login is the authoritative check
+     * (byte-for-byte match); otherwise fall back to author type: App mode trusts only bot-authored
+     * comments; PAT/anonymous trusts the marker alone.
+     */
+    private fun ownsComment(ic: IssueCommentDto): Boolean {
+        if (authoredLogin != "") return (ic.user?.login ?: "") == authoredLogin
+        if (appAuthored) return (ic.user?.type ?: "") == "Bot"
+        return true
+    }
+
+    /**
+     * Derives the GraphQL endpoint from the REST base. api.github.com's REST base yields
+     * `.../graphql`; GitHub Enterprise Server serves REST at `<host>/api/v3` but GraphQL at
+     * `<host>/api/graphql`, so that path is mapped explicitly.
+     */
+    private fun graphqlUrl(): String {
+        val base = baseUrl.trimEnd('/')
+        if (base.endsWith("/api/v3")) return base.removeSuffix("/v3") + "/graphql"
+        return "$base/graphql"
     }
 
     private suspend fun HttpResponse.orThrow(): HttpResponse {
@@ -581,3 +757,19 @@ private data class ReviewCommentDto(
     @SerialName("node_id") val nodeId: String? = null,
     val body: String? = null,
 )
+
+@Serializable
+private data class IssueCommentDto(
+    val id: Long? = null,
+    val body: String? = null,
+    val user: IssueUserDto? = null,
+)
+
+@Serializable
+private data class IssueUserDto(val login: String? = null, val type: String? = null)
+
+@Serializable
+private data class GraphQlResponseDto(val errors: List<GraphQlErrorDto> = emptyList())
+
+@Serializable
+private data class GraphQlErrorDto(val message: String = "")

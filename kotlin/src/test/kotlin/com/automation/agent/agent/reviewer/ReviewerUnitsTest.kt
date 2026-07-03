@@ -190,8 +190,8 @@ class ReviewerUnitsTest : BehaviorSpec({
 
     Given("instruction composition") {
         Then("the review and glue instructions embed the diff (and prior findings)") {
-            buildReviewInstruction("PROMPT", "DIFF") shouldContain "## Diff under review"
-            val glue = buildGlueInstruction("PROMPT", "DIFF", listOf(Finding(file = "a", line = 1, message = "m")))
+            buildReviewInstruction("PROMPT", "DIFF", null) shouldContain "## Diff under review"
+            val glue = buildGlueInstruction("PROMPT", "DIFF", listOf(Finding(file = "a", line = 1, message = "m")), null)
             glue shouldContain "## Findings already reported by other lenses"
             glue shouldContain "\"file\":\"a\""
         }

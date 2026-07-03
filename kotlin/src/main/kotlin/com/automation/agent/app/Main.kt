@@ -26,12 +26,15 @@ import com.automation.agent.agent.setup.newSessionService
 import com.automation.agent.agent.summary.CommitLister
 import com.automation.agent.agent.summary.SummaryDeps
 import com.automation.agent.agent.summary.buildSummaryAgent
+import com.automation.agent.auth.IdentityResolver
 import com.automation.agent.auth.StaticProvider
 import com.automation.agent.auth.TokenProvider
 import com.automation.agent.auth.newAppProvider
 import com.automation.agent.config.Config
+import com.automation.agent.githubapi.CheckRunInput
 import com.automation.agent.githubapi.Client
 import com.automation.agent.githubapi.PrInput
+import com.automation.agent.githubapi.ReviewInput
 import com.automation.agent.notify.Notifier
 import com.automation.agent.notify.newNotifier
 import com.automation.agent.obs.Config as ObsConfig
@@ -91,7 +94,22 @@ private fun run() {
     // The auth seam: App mode (production) mints/caches installation tokens; otherwise a static PAT
     // (or empty/anonymous). The REST client and the git layer share this one provider.
     val provider = buildTokenProvider(cfg)
-    val client = Client(tokenSource = { provider.token("") })
+    // Resolve the login this service authors comments as (the app's "<slug>[bot]" in App mode, the
+    // PAT user in PAT mode) so the reviewer's marker-comment upsert edits only its own comments.
+    // Best-effort: a lookup failure must not block startup, so warn and let the client fall back to
+    // author-type matching.
+    val authoredLogin =
+        if (provider is IdentityResolver) {
+            try {
+                runBlocking { provider.authoredLogin() }
+            } catch (e: Exception) {
+                rlog.log(Level.WARNING, "could not resolve GitHub comment-author identity; marker upsert falls back to author-type matching err=${e.message}")
+                ""
+            }
+        } else {
+            ""
+        }
+    val client = Client(tokenSource = { provider.token("") }, authoredLogin = authoredLogin, appAuthored = cfg.appMode())
     val commitLister = CommitLister { owner, repo, since -> client.listCommitsSince(owner, repo, since) }
     val gh = githubAdapter(client)
     val notifier = buildNotifier(cfg)
@@ -162,11 +180,21 @@ private fun run() {
         }
 
     // The PR code-review agent (dark by default: REVIEW_ENABLED=false). It reads the PR via the
-    // shared REST client and runs its analysis in-request on Kind.REVIEW; publishing is a follow-up.
+    // shared REST client, runs its analysis in-request on Kind.REVIEW, and publishes the review
+    // (inline comments, the marker summary, and the advisory agent-review check) through the same
+    // client.
     val reviewGh =
         object : ReviewGitHubClient {
             override suspend fun listPRFiles(owner: String, repo: String, num: Int) = client.listPRFiles(owner, repo, num)
             override suspend fun pullRequestHeadSha(owner: String, repo: String, num: Int) = client.pullRequestHeadSha(owner, repo, num)
+            override suspend fun createReview(owner: String, repo: String, num: Int, input: ReviewInput) = client.createReview(owner, repo, num, input)
+            override suspend fun upsertMarkerComment(owner: String, repo: String, num: Int, marker: String, body: String) = client.upsertMarkerComment(owner, repo, num, marker, body)
+            override suspend fun createCheckRun(owner: String, repo: String, input: CheckRunInput) = client.createCheckRun(owner, repo, input)
+            override suspend fun listReviewComments(owner: String, repo: String, num: Int) = client.listReviewComments(owner, repo, num)
+            override suspend fun minimizeComment(subjectId: String) = client.minimizeComment(subjectId)
+            override suspend fun agentCheck(owner: String, repo: String, ref: String, checkName: String) = client.agentCheck(owner, repo, ref, checkName)
+            override suspend fun tree(owner: String, repo: String, ref: String) = client.tree(owner, repo, ref)
+            override suspend fun getFileContent(owner: String, repo: String, path: String, ref: String) = client.getFileContent(owner, repo, path, ref)
         }
     val reviewEngine =
         newReviewEngine(
