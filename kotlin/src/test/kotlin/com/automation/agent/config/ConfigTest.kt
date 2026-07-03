@@ -582,4 +582,74 @@ class ConfigTest : BehaviorSpec({
             }
         }
     }
+
+    Given("the reviewer (REVIEW_*) settings") {
+        When("nothing is set") {
+            Then("the feature is dark by default with the documented defaults") {
+                val c = Config.loadFrom(lookupOf(emptyMap()))
+                c.reviewEnabled shouldBe false
+                c.reviewSkipDrafts shouldBe true
+                c.reviewMaxFiles shouldBe 50
+                c.reviewMaxDiffBytes shouldBe 262144
+                c.reviewStandards shouldBe true
+                c.reviewStandardsMaxBytes shouldBe 262144
+                c.reviewUncitedMode shouldBe "nitpick"
+                c.reviewMinConfidence shouldBe 0.6
+                c.reviewDebounce.inWholeSeconds shouldBe 30L
+                // The exclude + standards defaults are the built-in lists (spot-check both dimensions).
+                c.reviewExcludeGlobs.contains("go.sum") shouldBe true
+                c.reviewExcludeGlobs.contains("vendor/**") shouldBe true
+                c.reviewExcludeGlobs.contains("*.min.js") shouldBe true
+                c.reviewStandardsGlobs.contains("AGENTS.md") shouldBe true
+                c.reviewStandardsGlobs.contains(".cursor/rules/**") shouldBe true
+            }
+        }
+
+        When("the flags and caps are overridden") {
+            Then("they are read") {
+                val c = Config.loadFrom(
+                    lookupOf(
+                        mapOf(
+                            "REVIEW_ENABLED" to "true",
+                            "REVIEW_SKIP_DRAFTS" to "false",
+                            "REVIEW_MAX_FILES" to "10",
+                            "REVIEW_MAX_DIFF_BYTES" to "1000",
+                            "REVIEW_STANDARDS" to "false",
+                            "REVIEW_UNCITED_MODE" to "drop",
+                            "REVIEW_MIN_CONFIDENCE" to "0.9",
+                            "REVIEW_DEBOUNCE" to "45s",
+                            "REVIEW_EXCLUDE_GLOBS" to " a/** , *.foo ",
+                        ),
+                    ),
+                )
+                c.reviewEnabled shouldBe true
+                c.reviewSkipDrafts shouldBe false
+                c.reviewMaxFiles shouldBe 10
+                c.reviewMaxDiffBytes shouldBe 1000
+                c.reviewStandards shouldBe false
+                c.reviewUncitedMode shouldBe "drop"
+                c.reviewMinConfidence shouldBe 0.9
+                c.reviewDebounce.inWholeSeconds shouldBe 45L
+                c.reviewExcludeGlobs shouldBe listOf("a/**", "*.foo")
+            }
+        }
+    }
+
+    Given("an invalid reviewer setting") {
+        listOf(
+            "non-integer max files" to mapOf("REVIEW_MAX_FILES" to "lots"),
+            "non-numeric confidence" to mapOf("REVIEW_MIN_CONFIDENCE" to "high"),
+            "confidence above 1" to mapOf("REVIEW_MIN_CONFIDENCE" to "1.5"),
+            "confidence below 0" to mapOf("REVIEW_MIN_CONFIDENCE" to "-0.1"),
+            "zero standards cap" to mapOf("REVIEW_STANDARDS_MAX_BYTES" to "0"),
+            "unknown uncited mode" to mapOf("REVIEW_UNCITED_MODE" to "keep"),
+            "unparseable debounce" to mapOf("REVIEW_DEBOUNCE" to "soon"),
+        ).forEach { (name, overrides) ->
+            When("loading with $name") {
+                Then("it fails") {
+                    shouldThrow<IllegalArgumentException> { Config.loadFrom(lookupOf(overrides)) }
+                }
+            }
+        }
+    }
 })

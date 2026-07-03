@@ -81,8 +81,8 @@ class WebhookTest : BehaviorSpec({
         }
     }
 
-    Given("a GitHub event with a valid signature") {
-        When("POSTing to /webhooks/github") {
+    Given("a check_run GitHub event with a valid signature") {
+        When("POSTing to /webhooks/github with X-GitHub-Event: check_run") {
             Then("it accepts and emits a CI envelope") {
                 val c = Capture()
                 val body = "{\"action\":\"completed\"}"
@@ -90,11 +90,46 @@ class WebhookTest : BehaviorSpec({
                     application { webhookRoutes(c.ingest, secret = "topsecret") }
                     val resp = client.post("/webhooks/github") {
                         header("X-Hub-Signature-256", sign("topsecret", body))
+                        header("X-GitHub-Event", "check_run")
                         setBody(body)
                     }
                     resp.status shouldBe HttpStatusCode.Accepted
                 }
                 c.env.shouldNotBeNull().kind shouldBe Kind.CI
+            }
+        }
+    }
+
+    Given("a pull_request GitHub event") {
+        When("POSTing to /webhooks/github with X-GitHub-Event: pull_request") {
+            Then("it accepts and emits a REVIEW envelope") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest) }
+                    val resp = client.post("/webhooks/github") {
+                        header("X-GitHub-Event", "pull_request")
+                        setBody("{\"action\":\"opened\"}")
+                    }
+                    resp.status shouldBe HttpStatusCode.Accepted
+                }
+                c.env.shouldNotBeNull().kind shouldBe Kind.REVIEW
+            }
+        }
+    }
+
+    Given("a GitHub event we do not subscribe to (or a probe with no event header)") {
+        When("POSTing to /webhooks/github") {
+            Then("it acks with 200 and dispatches nothing") {
+                val c = Capture()
+                testApplication {
+                    application { webhookRoutes(c.ingest) }
+                    client.post("/webhooks/github") {
+                        header("X-GitHub-Event", "issues")
+                        setBody("{}")
+                    }.status shouldBe HttpStatusCode.OK
+                    client.post("/webhooks/github") { setBody("{}") }.status shouldBe HttpStatusCode.OK
+                }
+                c.env shouldBe null
             }
         }
     }
@@ -116,12 +151,15 @@ class WebhookTest : BehaviorSpec({
     }
 
     Given("a server with no configured secret") {
-        When("POSTing to /webhooks/github") {
+        When("POSTing a routed GitHub event to /webhooks/github") {
             Then("signature verification is skipped and it accepts") {
                 val c = Capture()
                 testApplication {
                     application { webhookRoutes(c.ingest) }
-                    val resp = client.post("/webhooks/github") { setBody("{}") }
+                    val resp = client.post("/webhooks/github") {
+                        header("X-GitHub-Event", "pull_request")
+                        setBody("{}")
+                    }
                     resp.status shouldBe HttpStatusCode.Accepted
                 }
             }

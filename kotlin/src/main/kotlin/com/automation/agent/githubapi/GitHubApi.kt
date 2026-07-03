@@ -95,6 +95,52 @@ data class CheckEvent(
     val outputText: String,
 )
 
+/**
+ * One changed file in a pull request: its path, change status, line counts, and the unified diff
+ * patch. [patch] carries the hunk text the reviewer needs to map a finding to a diff line; GitHub
+ * omits it for binary or very large files, so it is then empty — kept, not an error. Because an empty
+ * patch is ambiguous (binary vs. oversized text), [additions]/[deletions] are reported even when the
+ * patch is omitted, letting an omitted text diff be charged conservatively from its line counts
+ * rather than as zero diff bytes.
+ */
+data class PRFile(
+    val path: String,
+    val previousPath: String = "", // prior path for a rename, else empty
+    val status: String = "", // added | modified | removed | renamed | copied | changed
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val patch: String = "", // unified diff hunks; empty for binary/oversized files
+)
+
+/**
+ * The parsed essentials of a GitHub pull_request webhook event — the reviewer's native-event
+ * kickoff. The diff itself is fetched separately via [Client.listPRFiles] (the event body carries
+ * only metadata).
+ */
+data class PullRequestEvent(
+    val action: String, // opened | reopened | synchronize | ready_for_review | ...
+    val number: Int,
+    val repoFullName: String, // owner/name
+    val headRef: String, // source branch
+    val headSha: String,
+    val baseRef: String, // target branch
+    val draft: Boolean,
+    val labels: List<String>,
+    val authorLogin: String, // PR author login (e.g. "dependabot[bot]")
+)
+
+/** One entry in a repository git tree: its repo-relative path, blob/tree SHA, and type. */
+data class TreeEntry(val path: String, val sha: String, val type: String) // "blob" | "tree"
+
+/** A repository git tree listing plus GitHub's truncation flag (a capped recursive tree may omit entries). */
+data class Tree(val entries: List<TreeEntry>, val truncated: Boolean)
+
+/**
+ * Identifies an existing inline review comment for reconciliation: its GraphQL node id (the
+ * minimize-comment subject) and its body (which carries the hidden fingerprint marker).
+ */
+data class ReviewCommentRef(val nodeId: String, val body: String)
+
 /** Yields a currently-valid GitHub token for the REST client, or `""` for anonymous requests. The
  * githubapi-local view of the `auth.TokenProvider` seam (a narrow interface kept here so githubapi
  * stays decoupled from `auth`; the composition root adapts the real provider to it). */
@@ -228,6 +274,59 @@ class Client(
         return String(Base64.getDecoder().decode(cleaned))
     }
 
+    /**
+     * Returns every changed file in a pull request (following pagination). It is the reviewer's
+     * primary input — changed files + patches — fetched via REST.
+     */
+    suspend fun listPRFiles(owner: String, repo: String, num: Int): List<PRFile> {
+        var url: String? = url("repos/$owner/$repo/pulls/$num/files", "per_page" to "100")
+        val out = mutableListOf<PRFile>()
+        while (url != null) {
+            val resp = http.get(url).orThrow()
+            resp.body<List<PRFileDto>>().forEach { out += it.toPRFile() }
+            url = resp.nextLink()
+        }
+        return out
+    }
+
+    /**
+     * Returns the PR's current head commit SHA. The reviewer compares it to the SHA carried by a
+     * review task to detect a task superseded by a newer push and skip a stale review.
+     */
+    suspend fun pullRequestHeadSha(owner: String, repo: String, num: Int): String {
+        val resp = http.get(url("repos/$owner/$repo/pulls/$num")).orThrow()
+        return resp.body<PrDto>().head?.sha.orEmpty()
+    }
+
+    /**
+     * Lists the repository's git tree at [ref] (a commit SHA, branch, or tag), recursively — how the
+     * reviewer discovers a repo's own standards docs without a clone. The [Tree.truncated] flag is
+     * GitHub's: the API caps a recursive tree (very large repos), and a truncated listing may omit
+     * entries, so the caller can decide whether incomplete discovery is acceptable rather than
+     * silently missing files.
+     */
+    suspend fun tree(owner: String, repo: String, ref: String): Tree {
+        val resp = http.get(url("repos/$owner/$repo/git/trees/$ref", "recursive" to "true")).orThrow()
+        val dto = resp.body<TreeDto>()
+        val entries = dto.tree.map { TreeEntry(path = it.path.orEmpty(), sha = it.sha.orEmpty(), type = it.type.orEmpty()) }
+        return Tree(entries = entries, truncated = dto.truncated)
+    }
+
+    /**
+     * Returns the PR's inline review comments (paginated). Reconciliation parses the fingerprint
+     * marker from each body to decide what to keep, add, or minimize.
+     */
+    suspend fun listReviewComments(owner: String, repo: String, num: Int): List<ReviewCommentRef> {
+        var url: String? = url("repos/$owner/$repo/pulls/$num/comments", "per_page" to "100")
+        val out = mutableListOf<ReviewCommentRef>()
+        while (url != null) {
+            val resp = http.get(url).orThrow()
+            resp.body<List<ReviewCommentDto>>().forEach { out += ReviewCommentRef(nodeId = it.nodeId.orEmpty(), body = it.body.orEmpty()) }
+            url = resp.nextLink()
+        }
+        return out
+    }
+
     private suspend fun HttpResponse.orThrow(): HttpResponse {
         if (!status.isSuccess()) throw IOException("github ${status.value}: ${bodyAsText().take(512)}")
         return this
@@ -287,6 +386,35 @@ private fun parseInstant(s: String?): Instant =
 private fun OutputDto?.text(): String {
     if (this == null) return ""
     return text.orEmpty().ifEmpty { summary.orEmpty() }
+}
+
+/** Parses a pull_request webhook body into the fields the reviewer gates on. */
+fun parsePullRequestEvent(body: ByteArray): PullRequestEvent = parsePullRequestEvent(String(body))
+
+/**
+ * Parses a pull_request webhook body into a [PullRequestEvent]. Missing fields degrade to empty/0
+ * defaults; invalid JSON is an [IllegalArgumentException]. The webhook JSON is decoded in the tooling
+ * layer so the agent consumes a stable projection, never the raw wire type.
+ */
+fun parsePullRequestEvent(body: String): PullRequestEvent {
+    val ev =
+        try {
+            githubJson.decodeFromString<PullRequestEventDto>(body)
+        } catch (e: Exception) {
+            throw IllegalArgumentException("parse pull_request event: ${e.message}", e)
+        }
+    val pr = ev.pullRequest
+    return PullRequestEvent(
+        action = ev.action.orEmpty(),
+        number = pr?.number ?: 0,
+        repoFullName = ev.repository?.fullName.orEmpty(),
+        headRef = pr?.head?.ref.orEmpty(),
+        headSha = pr?.head?.sha.orEmpty(),
+        baseRef = pr?.base?.ref.orEmpty(),
+        draft = pr?.draft ?: false,
+        labels = pr?.labels?.mapNotNull { it.name?.ifEmpty { null } } ?: emptyList(),
+        authorLogin = pr?.user?.login.orEmpty(),
+    )
 }
 
 // --- Serialization DTOs (GitHub wire shapes) ---
@@ -398,4 +526,58 @@ private data class CompareFileDto(
     val status: String? = null,
     val additions: Int = 0,
     val deletions: Int = 0,
+)
+
+@Serializable
+private data class PRFileDto(
+    val filename: String? = null,
+    @SerialName("previous_filename") val previousFilename: String? = null,
+    val status: String? = null,
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val patch: String? = null,
+) {
+    fun toPRFile() = PRFile(
+        path = filename.orEmpty(),
+        previousPath = previousFilename.orEmpty(),
+        status = status.orEmpty(),
+        additions = additions,
+        deletions = deletions,
+        patch = patch.orEmpty(),
+    )
+}
+
+@Serializable
+private data class PullRequestEventDto(
+    val action: String? = null,
+    @SerialName("pull_request") val pullRequest: PullRequestDto? = null,
+    val repository: RepoDto? = null,
+)
+
+@Serializable
+private data class PullRequestDto(
+    val number: Int? = null,
+    val head: RefDto? = null,
+    val base: RefDto? = null,
+    val draft: Boolean = false,
+    val labels: List<LabelDto> = emptyList(),
+    val user: UserDto? = null,
+)
+
+@Serializable
+private data class UserDto(val login: String? = null)
+
+@Serializable
+private data class TreeDto(
+    val tree: List<TreeEntryDto> = emptyList(),
+    val truncated: Boolean = false,
+)
+
+@Serializable
+private data class TreeEntryDto(val path: String? = null, val sha: String? = null, val type: String? = null)
+
+@Serializable
+private data class ReviewCommentDto(
+    @SerialName("node_id") val nodeId: String? = null,
+    val body: String? = null,
 )

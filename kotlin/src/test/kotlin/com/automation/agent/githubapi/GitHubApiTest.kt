@@ -249,4 +249,118 @@ class GitHubApiTest : BehaviorSpec({
             }
         }
     }
+
+    Given("a pull request with changed files") {
+        When("listing the PR files") {
+            Then("it projects path, status, line counts, patch, and a rename's previous path") {
+                val queries = mutableMapOf<String, String>()
+                val c = client(
+                    mapOf(
+                        "GET /repos/o/r/pulls/7/files" to
+                            """[
+                              {"filename":"a.kt","status":"modified","additions":3,"deletions":1,"patch":"@@ -1 +1 @@\n-old\n+new"},
+                              {"filename":"b.kt","previous_filename":"old_b.kt","status":"renamed","additions":0,"deletions":0},
+                              {"filename":"img.png","status":"added","additions":0,"deletions":0}
+                            ]""",
+                    ),
+                    queries = queries,
+                )
+                val files = c.listPRFiles("o", "r", 7)
+                files.size shouldBe 3
+                files[0].path shouldBe "a.kt"
+                files[0].status shouldBe "modified"
+                files[0].additions shouldBe 3
+                files[0].patch shouldBe "@@ -1 +1 @@\n-old\n+new"
+                files[1].previousPath shouldBe "old_b.kt"
+                files[1].status shouldBe "renamed"
+                files[2].patch shouldBe "" // GitHub omits a binary file's patch
+                queries["per_page"] shouldBe "100"
+            }
+        }
+    }
+
+    Given("a pull request head SHA lookup") {
+        When("reading the current head SHA") {
+            Then("it returns the head commit SHA") {
+                val c = client(
+                    mapOf("GET /repos/o/r/pulls/7" to """{"number":7,"head":{"ref":"feature","sha":"headsha123"}}"""),
+                )
+                c.pullRequestHeadSha("o", "r", 7) shouldBe "headsha123"
+            }
+        }
+    }
+
+    Given("a repository git tree") {
+        When("listing the tree recursively") {
+            Then("it projects the entries and the truncation flag") {
+                val queries = mutableMapOf<String, String>()
+                val c = client(
+                    mapOf(
+                        "GET /repos/o/r/git/trees/main" to
+                            """{"truncated":true,"tree":[{"path":"AGENTS.md","sha":"s1","type":"blob"},{"path":"src","sha":"s2","type":"tree"}]}""",
+                    ),
+                    queries = queries,
+                )
+                val t = c.tree("o", "r", "main")
+                t.truncated shouldBe true
+                t.entries.size shouldBe 2
+                t.entries[0].path shouldBe "AGENTS.md"
+                t.entries[0].type shouldBe "blob"
+                queries["recursive"] shouldBe "true"
+            }
+        }
+    }
+
+    Given("a pull request with inline review comments") {
+        When("listing the review comments") {
+            Then("it projects the node id and body (carrying the fingerprint marker)") {
+                val c = client(
+                    mapOf(
+                        "GET /repos/o/r/pulls/7/comments" to
+                            """[{"node_id":"MDI=","body":"a finding <!-- ar-fp:x -->"}]""",
+                    ),
+                )
+                val comments = c.listReviewComments("o", "r", 7)
+                comments.size shouldBe 1
+                comments[0].nodeId shouldBe "MDI="
+                comments[0].body shouldBe "a finding <!-- ar-fp:x -->"
+            }
+        }
+    }
+
+    Given("a pull_request webhook body") {
+        When("parsing the event") {
+            Then("it extracts the fields the reviewer gates on, dropping empty labels") {
+                val body = """
+                    {
+                      "action":"synchronize",
+                      "pull_request":{
+                        "number":42,
+                        "draft":true,
+                        "head":{"ref":"feature","sha":"abc"},
+                        "base":{"ref":"main"},
+                        "user":{"login":"dependabot[bot]"},
+                        "labels":[{"name":"skip-review"},{"name":""}]
+                      },
+                      "repository":{"full_name":"acme/api"}
+                    }
+                """.trimIndent()
+                val ev = parsePullRequestEvent(body)
+                ev.action shouldBe "synchronize"
+                ev.number shouldBe 42
+                ev.repoFullName shouldBe "acme/api"
+                ev.headRef shouldBe "feature"
+                ev.headSha shouldBe "abc"
+                ev.baseRef shouldBe "main"
+                ev.draft shouldBe true
+                ev.authorLogin shouldBe "dependabot[bot]"
+                ev.labels shouldBe listOf("skip-review")
+            }
+        }
+        When("the body is not valid JSON") {
+            Then("it throws IllegalArgumentException") {
+                io.kotest.assertions.throwables.shouldThrow<IllegalArgumentException> { parsePullRequestEvent("not json") }
+            }
+        }
+    }
 })

@@ -23,6 +23,7 @@ enum class Kind(val value: String) {
     LINT("lint"), // agnostic lint payload -> lint-fixer
     COVERAGE("coverage"), // agnostic coverage payload -> coverage-fixer
     CI("ci"), // GitHub check_run -> resume lint/coverage fixer
+    REVIEW("review"), // GitHub pull_request -> PR code-review agent
     ;
 
     override fun toString(): String = value

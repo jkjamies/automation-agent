@@ -8,8 +8,12 @@ class EnvelopeTest : BehaviorSpec({
     Given("the recognized ingest kinds") {
         When("checking validity") {
             Then("each known kind is valid") {
-                listOf(Kind.CRON_DAILY, Kind.LINT, Kind.COVERAGE, Kind.CI)
+                listOf(Kind.CRON_DAILY, Kind.LINT, Kind.COVERAGE, Kind.CI, Kind.REVIEW)
                     .forEach { Kind.valid(it.value) shouldBe true }
+            }
+            Then("the review kind's wire value is the external contract \"review\"") {
+                Kind.REVIEW.value shouldBe "review"
+                Kind.from("review") shouldBe Kind.REVIEW
             }
             Then("an unknown kind is invalid") {
                 Kind.valid("jira") shouldBe false
