@@ -31,7 +31,7 @@ flowchart TD
     Par --> Smz["summarize (LLM, OutputKey=digest)"]
     Smz --> Ntf["notify"] --> Chat[("Slack / Teams")]
 
-    LFK -->|"triage -> analyze(parallel/file) -> apply_fix -> await_ci (long-running)"| PR[("GitHub PR: automation-agent/* branch + label")]
+    LFK -->|"triage -> analyze(parallel/file) -> apply_fix -> await_ci (request-input pause)"| PR[("GitHub PR: automation-agent/* branch + label")]
     CFK -->|"triage -> explore -> execute -> apply_fix -> await_ci"| PR
     PR -->|"agent-*-verify check"| WCI
     LFR --> Dec{conclusion}
@@ -78,7 +78,7 @@ flowchart TD
     CONC -->|success| OK["status-aware summary (success) + clear:<br/>delete ParkRecord + ADK session"]
     CONC -->|"failure & attempts ≥ MaxIter"| REV["status-aware summary (needs review) + clear"]
     CONC -->|"failure & attempts < MaxIter"| RT["resume ADK session → apply_fix again → re-park (attempts+1)"]
-    RT --> SUS(["suspend (IsLongRunning; durable — survives restart)"])
+    RT --> SUS(["pause (request-input interrupt; durable — survives restart)"])
     SUS -.->|"next check_run for this PR"| CR
 
     TO["per-run CI_TIMEOUT (soft in-process timer, lost on restart)"] -.->|"CI never reports"| FREE["onTimeout: claim + summary + clear"]
@@ -98,8 +98,9 @@ racing the timeout timer or the sweep resolves the run at most once.
 Ingest (cron / webhook / future hooks) → **root agent** (dispatcher) → one of three
 workflow agents: **summary** (commit digests), **lintfixer** (autonomous lint
 remediation with a PR + CI loop), or **covfixer** (test-coverage remediation, sharing
-the `fixflow` engine). The PR + CI suspend/resume loop runs on ADK long-running tools
-plus a `setup.ParkStore` of parked runs. Both the ADK `session.Service` and the
+the `fixflow` engine). The PR + CI suspend/resume loop runs on a workflow graph whose
+`await_ci` node pauses on a request-input interrupt, plus a `setup.ParkStore` of parked
+runs. Both the ADK `session.Service` and the
 `ParkStore` are selected by `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`,
 default `memory`) and built once at startup in `internal/agent/setup`: with a durable
 backend (sqlite/firestore) a restart no longer strands in-flight runs; `memory` keeps

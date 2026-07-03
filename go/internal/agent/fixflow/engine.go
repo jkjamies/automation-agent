@@ -124,8 +124,8 @@ type Deps struct {
 	SSHKey string
 }
 
-// Engine runs one Spec's event-driven fix loop. The CI-wait suspend/resume itself is
-// owned by the Driver (ADK IsLongRunning + an injected setup.ParkStore backend).
+// Engine runs one Spec's event-driven fix loop. The CI-wait pause/resume itself is
+// owned by the Driver (a parking workflow graph + an injected setup.ParkStore backend).
 type Engine struct {
 	spec   Spec
 	d      Deps

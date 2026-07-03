@@ -257,7 +257,7 @@ automation-agent/
 │       │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
 │       │       ├── analyze.go         # analyze step
 │       │       ├── explore.go         # repo exploration helper
-│       │       ├── tools.go           # apply_fix + long-running await_ci tools
+│       │       ├── tools.go           # read_file/list_dir repo tools for the analyze agents
 │       │       ├── files.go
 │       │       ├── util.go
 │       │       ├── envelope.go
@@ -359,9 +359,10 @@ fan-out is built from config at setup time. Fetchers use go-github `ListCommits`
 `NOTIFY_PROVIDER`.
 
 **Lint-fixer** (`lintfixer/`) and **Coverage-fixer** (`covfixer/`): both are thin `Spec`s
-over the shared `fixflow` engine. A deterministic **Sequencer** model drives a "fixer"
-`LlmAgent` to emit a fixed `apply_fix → await_ci` sequence; `await_ci` is a long-running
-(`IsLongRunning`) tool, so the run suspends and resumes on a GitHub `check_run` webhook.
+over the shared `fixflow` engine. The fixer is a deterministic **workflow graph**
+(`Start → apply_fix → await_ci`, a conditional `failure` edge cycling back to `apply_fix`,
+and a shared `conclude` terminal); `await_ci` pauses on a request-input interrupt, so the
+run suspends and resumes on a GitHub `check_run` webhook.
 See the dedicated section below — this is the complex one. Both workflows share the single
 `AGENT_PR_LABEL` (`automation-agent`, write-only) and are told apart by branch + verify
 check: lint uses branch `automation-agent/lint-fix`, check `agent-lint-verify`; coverage
@@ -392,7 +393,7 @@ webhook. Where that suspended state lives is a config choice, not a hardcoded "i
 - a durable ADK **`session.Service`** — the suspend/resume *event history* the agent needs to
   continue a parked run, and
 - a custom **`setup.ParkStore`** — the *park record*: `prKey→sessionID`, attempt count, the
-  parked long-running call id, and the run's serialized params (so a retry — or a restart —
+  parked interrupt id, and the run's serialized params (so a retry — or a restart —
   can reconstruct exactly what to apply). `Params` is an opaque blob the store never
   interprets, which keeps it free of fixflow types and lets one interface back all three
   backends.
@@ -441,16 +442,17 @@ PR key) and arms a per-run `CI_TIMEOUT` timer. Consequences:
 ### Flow
 
 ```
-lint payload ──▶ root ──▶ fixflow Driver (Sequencer-driven fixer, holds a ParkStore)
+lint payload ──▶ root ──▶ fixflow Driver (workflow-graph fixer, holds a ParkStore)
    │
    │  Kickoff: mint sessionID (UUID); Put run params in the ParkStore
    │  attempt i:
-   │   1. apply_fix(code): load run params from ParkStore by sessionID (never model-supplied);
+   │   1. apply_fix node : load run params from ParkStore by sessionID (never event-supplied);
    │                       analyze + go-git clone/branch/edit/commit/push; go-github open/update PR
-   │   2. await_ci       : LONG-RUNNING tool (IsLongRunning()=true) — returns "pending" now,
-   │                       run SUSPENDS; Driver parks the record {sessionID, prKey, callID,
+   │   2. await_ci node  : request-input PAUSE — the run SUSPENDS on an interrupt id;
+   │                       Driver parks the record {sessionID, prKey, callID (interrupt id),
    │                       attempts, params} in the ParkStore and arms a CI_TIMEOUT timer.
-   │                       The session.Service holds the suspend/resume event history.
+   │                       The session.Service holds the paused run's event history (the
+   │                       engine rebuilds the paused graph state from it on resume).
    │                       (sqlite/firestore: both persist → a restart can resume.)
    │
    ▼ (20–40+ min later)
@@ -568,16 +570,20 @@ three layers, all funnelling through the `ParkStore`'s atomic single-winner clai
 
 ### ADK mechanics
 
-- `await_ci` is implemented as a tool whose `IsLongRunning()` returns `true` — ADK's contract
-  for "return a status now, finish later." The run suspends after dispatching it. A
-  deterministic Sequencer model drives the fixer agent to emit a fixed `apply_fix → await_ci`
-  sequence.
-- Resume feeds the CI outcome back into the suspended run (by session id + call id) and drives
-  the next `apply_fix → await_ci` step. adk-go has **no** durable *workflow* engine; we supply
-  durability at the **session** layer instead — `IsLongRunning` over a `SESSION_BACKEND`-selected
-  `session.Service`, plus the `ParkStore` for the run record, is the suspend/resume mechanism.
-  The `LongRunDriver` (`setup/longrun.go`) is the generic plumbing: `Start` runs to a park,
-  `Resume` feeds a result back, `DeleteSession` cleans up; it carries no fixflow policy.
+- The fixer is a workflow agent over a declarative graph: `Start → apply_fix`,
+  `apply_fix ─"fix_applied"→ await_ci`, a conditional `await_ci ─"failure"→ apply_fix`
+  cycle for retries, and a shared `conclude` terminal for every other route. `await_ci`
+  pauses via a request-input interrupt (`ResumeOrRequestInput`) — the engine's contract
+  for "ask now, get the answer on a later turn." The run suspends on that interrupt.
+- Resume feeds the CI outcome back as a response to the parked interrupt (by session id +
+  interrupt id); the engine rebuilds the paused graph state from the session's persisted
+  events, re-runs `await_ci` (re-entry mode), and routes on the conclusion. Durability is
+  supplied at the **session** layer — the graph pause over a `SESSION_BACKEND`-selected
+  `session.Service`, plus the `ParkStore` for the run record, is the suspend/resume
+  mechanism. The `LongRunDriver` (`setup/longrun.go`) is the generic plumbing: `Start`
+  runs to a park, `Resume` feeds a result back, `DeleteSession` cleans up; it carries no
+  fixflow policy. The wall-clock wait itself stays outside the engine: timers and the
+  durable sweep own "CI never reported."
 
 ### Status-aware terminal summaries
 
@@ -889,11 +895,13 @@ Notes:
 - `loopagent` shape is verified from the official example
   (`examples/workflowagents/loop/main.go`). Sequential/parallel are assumed to share the
   embedded-`agent.Config` shape — to confirm against their example dirs.
-- adk-go has **no** durable *workflow* engine; durability is supplied at the session layer
-  instead. `IsLongRunning` (the long-running `await_ci` tool) over a `SESSION_BACKEND`-selected
+- The workflow engine's pause is in-process; durability is supplied at the session layer.
+  The graph's request-input pause (the `await_ci` node) over a `SESSION_BACKEND`-selected
   `session.Service`, plus the `setup.ParkStore` for the run record, is the suspend/resume
-  mechanism. adk-go ships inmemory/database/vertexai session services; the **firestore**
-  `session.Service` is a custom impl in `internal/agent/setup`.
+  mechanism — a paused run is reconstructed entirely from persisted session events.
+  adk-go ships inmemory/database/vertexai session services; the **firestore**
+  `session.Service` is a custom impl in `internal/agent/setup` (its whole-event JSON blob
+  encoding round-trips the workflow event fields; guarded by a dedicated round-trip test).
 
 ### ADK Sessions — concept references
 

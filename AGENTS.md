@@ -5,29 +5,33 @@ The **Go** implementation in [`go/`](go/) is the canonical reference; sibling po
 live in their own top-level folders. Read [`.agents/standards/architecture-design.md`](.agents/standards/architecture-design.md)
 first — it is the authoritative, language-neutral design.
 
-## Language parity (Go · Kotlin · Python · TypeScript)
+## Language parity — two pairs (Go · Python — modern | Kotlin · TypeScript — frozen)
 
-This service is maintained as parallel ports that **must all stay 1:1 in functionality**:
+This service is maintained as parallel ports organized as **two parity pairs**:
 
-| Language | Location | ADK | Status |
-|---|---|---|---|
-| Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | reference |
-| Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | functional 1:1 port — `gradle build` green |
-| Python | [`python/`](python/) | `google-adk` (PyPI) | functional 1:1 port — `make ci` green |
-| TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | functional 1:1 port — `make ci` green |
+| Pair | Language | Location | ADK | Status |
+|---|---|---|---|---|
+| Modern | Go | [`go/`](go/) (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | reference |
+| Modern | Python | [`python/`](python/) | `google-adk` (PyPI, 2.x line) | functional 1:1 with Go — `make ci` green |
+| Frozen | Kotlin | [`kotlin/`](kotlin/) | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | frozen — 1:1 with TypeScript |
+| Frozen | TypeScript | [`javascript/`](javascript/) | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | frozen — 1:1 with Kotlin |
 
-Each language uses its own native ADK; parity is **functional, not version-matched**
-(adk-go is v2.x, adk-kotlin is 0.4.x, adk-js is v1.x).
+Each language uses its own native ADK; parity is **functional, not version-matched**.
+The **modern pair** carries the design forward on the ADK 2.x line (graph workflows,
+request-input pause/resume). The **frozen pair** is feature-frozen at its current 1:1
+behavior (their ADKs have no 2.x line); a critical fix that must touch one frozen port
+lands in both. There is **no parity requirement across the pairs** — but external
+contracts (webhook routes, check names, notify payloads) match across all four.
 
 **The parity contract** (full rules: [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
 
 - Go is the source of truth. A behavior change lands in Go first, then is mirrored
-  into every existing port **in the same logical change** — ports never silently drift.
+  into Python **in the same logical change** — the modern pair never silently drifts.
 - Parity is about *observable behavior and structure*, not syntax: same packages/dirs,
   same public surface, same config keys, env vars, defaults, routes, and payloads.
 - Each port keeps the same conventions (per-directory `AGENTS.md`, build-agent pattern,
   prompts-as-markdown, ≥80% coverage, no asserting on LLM output).
-- When you touch any port, check the others and update them, or record the gap in the
+- When you touch a modern port, check its pair and update it, or record the gap in the
   PR description — parity is tracked per-PR (see
   [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)).
 
@@ -61,7 +65,7 @@ flowchart TD
     Par --> Smz["summarize (LLM, OutputKey=digest)"]
     Smz --> Ntf["notify"] --> Chat[("Slack / Teams")]
 
-    LFK -->|"triage -> analyze(parallel/file) -> apply_fix -> await_ci (long-running)"| PR[("GitHub PR: automation-agent/* branch + label")]
+    LFK -->|"triage -> analyze(parallel/file) -> apply_fix -> await_ci (durable pause)"| PR[("GitHub PR: automation-agent/* branch + label")]
     CFK -->|"triage -> explore -> execute -> apply_fix -> await_ci"| PR
     PR -->|"agent-*-verify check"| WCI
     LFR --> Dec{conclusion}
@@ -111,7 +115,7 @@ flowchart TD
     CONC -->|success| OK["status-aware summary (success) + clear:<br/>delete ParkRecord + ADK session"]
     CONC -->|"failure & attempts ≥ MaxIter"| REV["status-aware summary (needs review) + clear"]
     CONC -->|"failure & attempts < MaxIter"| RT["resume ADK session → apply_fix again → re-park (attempts+1)"]
-    RT --> SUS(["suspend (IsLongRunning; durable — survives restart)"])
+    RT --> SUS(["pause awaiting CI (durable — survives restart)"])
     SUS -.->|"next check_run for this PR"| CR
 
     TO["per-run CI_TIMEOUT (soft in-process timer, lost on restart)"] -.->|"CI never reports"| FREE["onTimeout: claim + summary + clear"]
@@ -134,7 +138,7 @@ remediation with a PR + CI loop), **covfixer** (test-coverage remediation, shari
 the `fixflow` engine), or **reviewer** (PR code review on the native `pull_request`
 event — one-shot/in-request, no suspend/resume; fans out category lenses → glue →
 count-based scorecard → an advisory, comment-only review). The PR + CI suspend/resume loop
-(fixers only) runs on ADK long-running tools
+(fixers only) runs on a durable ADK pause awaiting the CI result
 plus a `setup.ParkStore` of parked runs, both backed by `SESSION_BACKEND`
 (`memory` | `sqlite` | `firestore`, default `memory`): with a durable backend a restart
 no longer strands in-flight runs; `memory` keeps the old ephemeral behavior.

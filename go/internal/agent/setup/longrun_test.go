@@ -3,30 +3,107 @@ package setup
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/agent/workflowagent"
 	"google.golang.org/adk/v2/session"
-	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
-	"google.golang.org/genai"
+	"google.golang.org/adk/v2/workflow"
 )
 
-// TestLongRunDriverDeleteSession proves terminal cleanup (E-eager) actually removes the
-// stored session, so a durable backend does not leak completed runs.
-func TestLongRunDriverDeleteSession(t *testing.T) {
-	apply, await, _, _ := lrTools(t)
-	model := NewSequencerModel(SequencerConfig{Action: "apply", Wait: "await"})
-	ag, err := llmagent.New(llmagent.Config{
-		Name: "lr", Model: model, Instruction: "apply then await", Tools: []tool.Tool{apply, await},
+// lrApplyOutcome is the scripted result of one lrGraph apply activation.
+type lrApplyOutcome struct {
+	out   map[string]any
+	route string
+}
+
+// lrGraph builds the canonical parking loop the driver is designed for —
+//
+//	Start → apply ─"go_wait"→ await (pause) ─"failure"→ apply (cycle)
+//	  apply/await ─Default→ conclude
+//
+// — with the apply node scripted by outcomes (one per activation) and a counter of apply
+// activations. It is the test double for a fix-loop workflow: deterministic node bodies,
+// real engine routing/pausing.
+func lrGraph(t *testing.T, outcomes []lrApplyOutcome, calls *int) agent.Agent {
+	t.Helper()
+	apply := workflow.NewEmittingFunctionNode[any, any]("apply",
+		func(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+			i := *calls
+			*calls++
+			if i >= len(outcomes) {
+				t.Errorf("apply activation %d exceeds scripted outcomes", i)
+				return nil, fmt.Errorf("unscripted apply activation %d", i)
+			}
+			ev := session.NewEvent(nc, nc.InvocationID())
+			ev.Output = outcomes[i].out
+			ev.Routes = []string{outcomes[i].route}
+			if err := emit(ev); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}, workflow.NodeConfig{})
+	rerun := true
+	await := workflow.NewEmittingFunctionNode[any, any]("await",
+		func(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+			reply, err := workflow.ResumeOrRequestInput(nc, emit, session.RequestInput{
+				InterruptID: "await-" + nc.InvocationID(),
+				Message:     "waiting",
+			})
+			if err != nil {
+				return nil, err
+			}
+			out := map[string]any{NodeOutputKey: "await"}
+			route := "conclude"
+			if m, ok := reply.(map[string]any); ok {
+				for k, v := range m {
+					out[k] = v
+				}
+				if fmt.Sprint(m["conclusion"]) == "failure" {
+					route = "failure"
+				}
+			}
+			ev := session.NewEvent(nc, nc.InvocationID())
+			ev.Output = out
+			ev.Routes = []string{route}
+			if err := emit(ev); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}, workflow.NodeConfig{RerunOnResume: &rerun})
+	conclude := workflow.NewFunctionNode[any, string]("conclude",
+		func(_ agent.Context, _ any) (string, error) { return "done", nil },
+		workflow.NodeConfig{})
+	ag, err := workflowagent.New(workflowagent.Config{
+		Name:        "lr",
+		Description: "test parking loop",
+		Edges: []workflow.Edge{
+			{From: workflow.Start, To: apply},
+			{From: apply, To: await, Route: workflow.StringRoute("go_wait")},
+			{From: apply, To: conclude, Route: workflow.Default},
+			{From: await, To: apply, Route: workflow.StringRoute("failure")},
+			{From: await, To: conclude, Route: workflow.Default},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ag
+}
+
+func applyOK() lrApplyOutcome {
+	return lrApplyOutcome{
+		out:   map[string]any{NodeOutputKey: "apply", "pr_number": 7, "head_sha": "abc"},
+		route: "go_wait",
+	}
+}
+
+// TestLongRunDriverDeleteSession proves terminal cleanup (E-eager) actually removes the
+// stored session, so a durable backend does not leak completed runs.
+func TestLongRunDriverDeleteSession(t *testing.T) {
+	calls := 0
 	sess := session.InMemoryService()
-	d, err := NewLongRunDriver("lr-app", "u", ag, sess)
+	d, err := NewLongRunDriver("lr-app", "u", lrGraph(t, []lrApplyOutcome{applyOK()}, &calls), sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,40 +127,12 @@ func TestLongRunDriverDeleteSession(t *testing.T) {
 	}
 }
 
-// TestSequencerStopWhen proves that when the Action result satisfies StopWhen, the loop
-// concludes immediately without ever calling Wait (so a terminal Action result is never
-// forwarded to a Wait tool whose schema would reject it).
-func TestSequencerStopWhen(t *testing.T) {
-	applied := 0
-	awaited := 0
-	apply, err := functiontool.New(functiontool.Config{Name: "apply", Description: "apply a fix"},
-		func(_ agent.Context, _ lrEmpty) (map[string]any, error) {
-			applied++
-			return map[string]any{"clean": true}, nil
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	await, err := functiontool.New(functiontool.Config{Name: "await", Description: "await CI", IsLongRunning: true},
-		func(_ agent.Context, _ lrArgs) (map[string]any, error) {
-			awaited++
-			return map[string]any{"status": "pending"}, nil
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := NewSequencerModel(SequencerConfig{
-		Action:   "apply",
-		Wait:     "await",
-		StopWhen: func(r map[string]any) bool { clean, _ := r["clean"].(bool); return clean },
-	})
-	ag, err := llmagent.New(llmagent.Config{
-		Name: "lr", Model: model, Instruction: "apply then await", Tools: []tool.Tool{apply, await},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := NewLongRunDriver("lr-app", "u", ag, nil)
+// TestLongRunDriverCleanStop proves a terminal apply result (routes to conclude, never to
+// the wait node) finishes the run without parking, and its output is readable by tag.
+func TestLongRunDriverCleanStop(t *testing.T) {
+	calls := 0
+	clean := lrApplyOutcome{out: map[string]any{NodeOutputKey: "apply", "clean": true}, route: "conclude"}
+	d, err := NewLongRunDriver("lr-app", "u", lrGraph(t, []lrApplyOutcome{clean}, &calls), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,76 +142,24 @@ func TestSequencerStopWhen(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	if res.ParkedCallID != "" {
-		t.Error("a clean (StopWhen) apply must not park")
+		t.Error("a clean (terminal) apply must not park")
 	}
-	if clean, _ := res.ToolResponses["apply"]["clean"].(bool); !clean {
-		t.Errorf("expected clean apply response, got %+v", res.ToolResponses["apply"])
+	if cleanOut, _ := res.NodeOutput("apply")["clean"].(bool); !cleanOut {
+		t.Errorf("expected clean apply output, got %+v", res.NodeOutput("apply"))
 	}
-	if applied != 1 || awaited != 0 {
-		t.Errorf("StopWhen should run apply once and never await; applied=%d awaited=%d", applied, awaited)
+	if calls != 1 {
+		t.Errorf("apply should run exactly once, ran %d times", calls)
 	}
-}
-
-type lrEmpty struct{}
-
-type lrArgs struct {
-	PRNumber int    `json:"pr_number"`
-	HeadSHA  string `json:"head_sha"`
-}
-
-// lrTools builds an apply/await tool pair plus a pointer to the apply call counter and a
-// switch to force apply to fail, for driving the sequencer through its states.
-func lrTools(t *testing.T) (apply, await tool.Tool, calls *int, fail *bool) {
-	t.Helper()
-	n := 0
-	boom := false
-	a, err := functiontool.New(functiontool.Config{Name: "apply", Description: "apply a fix"},
-		func(_ agent.Context, _ lrEmpty) (map[string]any, error) {
-			n++
-			if boom {
-				return nil, fmt.Errorf("apply boom")
-			}
-			return map[string]any{"pr_number": 7, "head_sha": "abc"}, nil
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, err := functiontool.New(functiontool.Config{Name: "await", Description: "await CI", IsLongRunning: true},
-		func(_ agent.Context, _ lrArgs) (map[string]any, error) {
-			return map[string]any{"status": "pending"}, nil
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a, w, &n, &boom
-}
-
-func newLRDriver(t *testing.T, apply, await tool.Tool) *LongRunDriver {
-	t.Helper()
-	model := NewSequencerModel(SequencerConfig{
-		Action:    "apply",
-		Wait:      "await",
-		RetryWhen: func(r map[string]any) bool { return fmt.Sprint(r["conclusion"]) == "failure" },
-	})
-	ag, err := llmagent.New(llmagent.Config{
-		Name: "lr", Model: model, Instruction: "apply then await",
-		Tools: []tool.Tool{apply, await},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := NewLongRunDriver("lr-app", "u", ag, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return d
 }
 
 // TestLongRunDriverLoop drives the full Start → park → resume(failure) → re-park →
 // resume(success) cycle and asserts apply runs once per attempt and the loop concludes.
 func TestLongRunDriverLoop(t *testing.T) {
-	apply, await, calls, _ := lrTools(t)
-	d := newLRDriver(t, apply, await)
+	calls := 0
+	d, err := NewLongRunDriver("lr-app", "u", lrGraph(t, []lrApplyOutcome{applyOK(), applyOK()}, &calls), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	start, err := d.Start(ctx, "s1", "go")
@@ -172,50 +169,51 @@ func TestLongRunDriverLoop(t *testing.T) {
 	if start.ParkedCallID == "" {
 		t.Fatal("Start did not park on await")
 	}
-	if got := start.ToolResponses["apply"]["pr_number"]; fmt.Sprint(got) != "7" {
+	if got := start.NodeOutput("apply")["pr_number"]; fmt.Sprint(got) != "7" {
 		t.Errorf("apply pr_number = %v, want 7", got)
 	}
-	if *calls != 1 {
-		t.Errorf("apply calls after start = %d, want 1", *calls)
+	if calls != 1 {
+		t.Errorf("apply calls after start = %d, want 1", calls)
 	}
 
 	// CI failed → resume should re-apply and re-park.
-	retry, err := d.Resume(ctx, "s1", start.ParkedCallID, "await", map[string]any{"conclusion": "failure"})
+	retry, err := d.Resume(ctx, "s1", start.ParkedCallID, map[string]any{"conclusion": "failure"})
 	if err != nil {
 		t.Fatalf("Resume failure: %v", err)
 	}
 	if retry.ParkedCallID == "" {
 		t.Fatal("failure resume did not re-park")
 	}
-	if retry.ParkedCallID == start.ParkedCallID {
-		t.Error("re-park should use a fresh call id")
-	}
-	if *calls != 2 {
-		t.Errorf("apply calls after retry = %d, want 2", *calls)
+	if calls != 2 {
+		t.Errorf("apply calls after retry = %d, want 2", calls)
 	}
 
 	// CI passed → resume should conclude without re-parking.
-	done, err := d.Resume(ctx, "s1", retry.ParkedCallID, "await", map[string]any{"conclusion": "success"})
+	done, err := d.Resume(ctx, "s1", retry.ParkedCallID, map[string]any{"conclusion": "success"})
 	if err != nil {
 		t.Fatalf("Resume success: %v", err)
 	}
 	if done.ParkedCallID != "" {
 		t.Error("success resume should not re-park")
 	}
-	if *calls != 2 {
-		t.Errorf("apply must not run again on success, calls = %d", *calls)
+	if calls != 2 {
+		t.Errorf("apply must not run again on success, calls = %d", calls)
 	}
-	if !strings.Contains(done.Final, "done") {
-		t.Errorf("final = %q, want it to conclude", done.Final)
+	if got := done.NodeOutput("await")["conclusion"]; fmt.Sprint(got) != "success" {
+		t.Errorf("await output conclusion = %v, want success", got)
 	}
 }
 
-// TestLongRunDriverApplyError proves an apply failure surfaces (as an "error" response
-// and final text) and does not park a run.
+// TestLongRunDriverApplyError proves an apply failure surfaces as an "error" output and
+// concludes the run without parking it — the caller (not the engine) owns notifying a
+// human, so the error must come back as data, not a failed run.
 func TestLongRunDriverApplyError(t *testing.T) {
-	apply, await, _, fail := lrTools(t)
-	*fail = true
-	d := newLRDriver(t, apply, await)
+	calls := 0
+	boom := lrApplyOutcome{out: map[string]any{NodeOutputKey: "apply", "error": "apply boom"}, route: "conclude"}
+	d, err := NewLongRunDriver("lr-app", "u", lrGraph(t, []lrApplyOutcome{boom}, &calls), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := d.Start(context.Background(), "s1", "go")
 	if err != nil {
@@ -224,53 +222,26 @@ func TestLongRunDriverApplyError(t *testing.T) {
 	if res.ParkedCallID != "" {
 		t.Error("a failed apply must not park")
 	}
-	if _, ok := res.ToolResponses["apply"]["error"]; !ok {
-		t.Errorf("expected an error response, got %+v", res.ToolResponses["apply"])
-	}
-	if !strings.Contains(res.Final, "failed") {
-		t.Errorf("final = %q, want it to report the failure", res.Final)
+	if _, ok := res.NodeOutput("apply")["error"]; !ok {
+		t.Errorf("expected an error output, got %+v", res.NodeOutput("apply"))
 	}
 }
 
-// TestSequencerDecide exercises the pure decision logic over crafted histories.
-func TestSequencerDecide(t *testing.T) {
-	s := &sequencer{cfg: SequencerConfig{
-		Action:    "apply",
-		Wait:      "await",
-		RetryWhen: func(r map[string]any) bool { return fmt.Sprint(r["conclusion"]) == "failure" },
+// TestDriveResultNodeOutput exercises the tag-based selection: latest per tag wins, and
+// an unknown tag yields nil.
+func TestDriveResultNodeOutput(t *testing.T) {
+	res := DriveResult{NodeOutputs: []map[string]any{
+		{NodeOutputKey: "apply", "attempt": 1},
+		{NodeOutputKey: "await", "conclusion": "failure"},
+		{NodeOutputKey: "apply", "attempt": 2},
 	}}
-
-	fcName := func(resp *genai.Content) (name, text string) {
-		for _, p := range resp.Parts {
-			if p.FunctionCall != nil {
-				return p.FunctionCall.Name, ""
-			}
-			text += p.Text
-		}
-		return "", text
+	if got := res.NodeOutput("apply")["attempt"]; got != 2 {
+		t.Errorf("NodeOutput(apply) attempt = %v, want the latest (2)", got)
 	}
-	resp := func(name string, body map[string]any) *genai.Content {
-		return &genai.Content{Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{Name: name, Response: body}}}}
+	if got := res.NodeOutput("await")["conclusion"]; got != "failure" {
+		t.Errorf("NodeOutput(await) conclusion = %v, want failure", got)
 	}
-
-	// No history → call apply.
-	if name, _ := fcName(s.decide(nil).Content); name != "apply" {
-		t.Errorf("empty history should call apply, got %q", name)
-	}
-	// apply ok → call await.
-	if name, _ := fcName(s.decide([]*genai.Content{resp("apply", map[string]any{"pr_number": 7})}).Content); name != "await" {
-		t.Errorf("apply success should call await, got %q", name)
-	}
-	// apply error → conclude.
-	if name, text := fcName(s.decide([]*genai.Content{resp("apply", map[string]any{"error": "x"})}).Content); name != "" || !strings.Contains(text, "failed") {
-		t.Errorf("apply error should conclude, got name=%q text=%q", name, text)
-	}
-	// await failure → retry apply.
-	if name, _ := fcName(s.decide([]*genai.Content{resp("await", map[string]any{"conclusion": "failure"})}).Content); name != "apply" {
-		t.Errorf("await failure should retry apply, got %q", name)
-	}
-	// await success → conclude.
-	if name, text := fcName(s.decide([]*genai.Content{resp("await", map[string]any{"conclusion": "success"})}).Content); name != "" || text == "" {
-		t.Errorf("await success should conclude, got name=%q text=%q", name, text)
+	if got := res.NodeOutput("nope"); got != nil {
+		t.Errorf("NodeOutput(nope) = %v, want nil", got)
 	}
 }

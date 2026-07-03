@@ -12,17 +12,27 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
+	"google.golang.org/adk/v2/agent/workflowagent"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/workflow"
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/githubapi"
 )
 
 const (
-	toolApplyFix = "apply_fix"
-	toolAwaitCI  = "await_ci"
+	nodeApplyFix = "apply_fix"
+	nodeAwaitCI  = "await_ci"
+	nodeConclude = "conclude"
+
+	// routeFixApplied is the one concrete route out of apply_fix: a fix landed on a PR, so
+	// proceed to the CI park. Every other apply outcome (clean, error) falls through the
+	// Default edge to conclude.
+	routeFixApplied = "fix_applied"
+	// routeRetry is the one concrete route out of await_ci: CI failed and the caller
+	// resumed the run for another attempt, so cycle back to apply_fix. Any other resumed
+	// conclusion falls through the Default edge to conclude.
+	routeRetry = "failure"
 )
 
 // runParams are the per-run inputs the apply_fix tool needs. They are looked up by session
@@ -71,10 +81,15 @@ func unmarshalRunParams(s string) (*runParams, error) {
 	}, nil
 }
 
-// Driver runs a Spec's CI-wait loop on ADK's IsLongRunning suspend/resume. It owns the
-// long-run agent and a ParkStore of suspended runs; all policy — retry vs give up, attempt
-// counting, the per-run timeout — lives here, while the agent's sequencer model only emits
-// a fixed apply_fix→await_ci sequence.
+// Driver runs a Spec's CI-wait loop on the workflow engine's pause/resume. It owns the
+// fixer workflow agent and a ParkStore of parked runs; all policy — retry vs give up,
+// attempt counting, the per-run timeout — lives here, while the workflow graph only
+// encodes the fixed apply_fix → await_ci shape:
+//
+//	Start → apply_fix ─"fix_applied"→ await_ci (pause)
+//	  apply_fix  ─Default→ conclude   (clean, or the attempt errored)
+//	  await_ci   ─"failure"→ apply_fix (the caller resumed for another attempt)
+//	  await_ci   ─Default→ conclude   (any other resumed conclusion)
 //
 // Lifecycle: Kickoff applies a fix and parks on await_ci (recorded in the store). A
 // check_run webhook drives Resume, which atomically claims the parked run and either
@@ -82,7 +97,12 @@ func unmarshalRunParams(s string) (*runParams, error) {
 // reports, a soft per-run timer fires onTimeout, which frees the run and asks for human
 // review. The timer is in-memory (lost on restart); the durable catch-all is the
 // ParkStore sweep (wired in a later step). With a durable ParkStore + session backend a
-// parked run survives a restart; with the default in-memory ones it does not.
+// parked run survives a restart (its paused graph state is rebuilt from the persisted
+// session events); with the default in-memory ones it does not.
+//
+// The ParkStore's atomic claim is the only guard against stale or duplicate CI results:
+// a resume fed to a session whose park was already resolved starts a fresh run rather
+// than erroring, so Resume must never bypass the claim.
 type Driver struct {
 	engine  *Engine
 	lr      *setup.LongRunDriver
@@ -104,26 +124,7 @@ func newDriver(e *Engine) (*Driver, error) {
 		timeout: e.d.CITimeout,
 		timers:  map[string]*time.Timer{},
 	}
-	tools, err := dr.tools()
-	if err != nil {
-		return nil, err
-	}
-	seqModel := setup.NewSequencerModel(setup.SequencerConfig{
-		Action: toolApplyFix,
-		Wait:   toolAwaitCI,
-		// The Driver only resumes a run when it has already decided to retry, so a
-		// resumed failure always means "apply again". (success/timeout never resume.)
-		RetryWhen: func(resp map[string]any) bool { return fmt.Sprint(resp["conclusion"]) == "failure" },
-		// A clean apply (triage found nothing) is already terminal: conclude without
-		// parking on CI so the result is never forwarded to await_ci.
-		StopWhen: func(resp map[string]any) bool { clean, _ := resp["clean"].(bool); return clean },
-	})
-	fixer, err := llmagent.New(llmagent.Config{
-		Name:        "fixer-" + e.spec.Name,
-		Model:       seqModel,
-		Instruction: "Apply the fix, then wait for CI. If CI fails, apply again.",
-		Tools:       tools,
-	})
+	fixer, err := newFixerAgent("fixer-"+e.spec.Name, dr.applyNode, dr.awaitNode)
 	if err != nil {
 		return nil, err
 	}
@@ -135,78 +136,143 @@ func newDriver(e *Engine) (*Driver, error) {
 	return dr, nil
 }
 
-func (dr *Driver) tools() ([]tool.Tool, error) {
-	apply, err := functiontool.New(functiontool.Config{
-		Name:        toolApplyFix,
-		Description: "Apply the fix, commit it, and open or update the PR.",
-	}, dr.applyFix)
-	if err != nil {
-		return nil, err
-	}
-	await, err := functiontool.New(functiontool.Config{
-		Name:          toolAwaitCI,
-		Description:   "Wait for CI to report on the PR. Returns a pending status, then the real result later.",
-		IsLongRunning: true,
-	}, dr.awaitCI)
-	if err != nil {
-		return nil, err
-	}
-	return []tool.Tool{apply, await}, nil
+// nodeFunc is the body of an emitting workflow node: it emits its own routing/output
+// event and returns nil to suppress the engine's default terminal event.
+type nodeFunc = func(agent.Context, any, func(*session.Event) error) (any, error)
+
+// newFixerAgent assembles the fix-loop workflow agent from the apply/await node bodies.
+// conclude is the shared terminal node: every non-parked path ends there, so the graph
+// always has a terminal and the retry cycle (await_ci → apply_fix) stays conditional.
+func newFixerAgent(name string, applyFn, awaitFn nodeFunc) (agent.Agent, error) {
+	apply := workflow.NewEmittingFunctionNode[any, any](nodeApplyFix, applyFn, workflow.NodeConfig{})
+	rerun := true
+	await := workflow.NewEmittingFunctionNode[any, any](nodeAwaitCI, awaitFn, workflow.NodeConfig{
+		// Re-entry mode: on resume the node re-runs from scratch and picks the reply up
+		// via ResumeOrRequestInput, which is what lets it route on the CI conclusion.
+		RerunOnResume: &rerun,
+	})
+	conclude := workflow.NewFunctionNode[any, string](nodeConclude, func(_ agent.Context, _ any) (string, error) {
+		return "done", nil
+	}, workflow.NodeConfig{})
+	return workflowagent.New(workflowagent.Config{
+		Name:        name,
+		Description: "Applies a fix, then waits for CI; a resumed failure loops back for another attempt.",
+		Edges: []workflow.Edge{
+			{From: workflow.Start, To: apply},
+			{From: apply, To: await, Route: workflow.StringRoute(routeFixApplied)},
+			{From: apply, To: conclude, Route: workflow.Default},
+			{From: await, To: apply, Route: workflow.StringRoute(routeRetry)},
+			{From: await, To: conclude, Route: workflow.Default},
+		},
+	})
 }
 
-type applyFixArgs struct{}
-
-type applyFixResult struct {
-	PRNumber int    `json:"pr_number"`
-	HeadSHA  string `json:"head_sha"`
-	// Clean is true when triage found nothing to address: no PR was opened, the sequencer
-	// concludes without parking on CI (StopWhen), and afterDrive reports a positive
-	// "already clean" outcome instead of asking for human review.
-	Clean bool `json:"clean"`
+// applyFixOutcome is the wire shape of apply_fix's node output (tagged with
+// setup.NodeOutputKey). Clean is true when triage found nothing to address: no PR was
+// opened, the run concludes without parking on CI, and afterDrive reports a positive
+// "already clean" outcome instead of asking for human review. An attempt that errored
+// carries an "error" key instead, so afterDrive can notify a human rather than the
+// failure vanishing into a failed run.
+type applyFixOutcome struct {
+	PRNumber int
+	HeadSHA  string
+	Clean    bool
+	Err      error
 }
 
-// applyFix runs one fix attempt for the calling session. The run params are loaded from the
-// store by session id (never model-supplied), so the model's (empty) args cannot influence
-// the target.
-func (dr *Driver) applyFix(tc agent.Context, _ applyFixArgs) (applyFixResult, error) {
-	rec, ok, err := dr.store.Get(tc, tc.SessionID())
+func (o applyFixOutcome) output() map[string]any {
+	out := map[string]any{setup.NodeOutputKey: nodeApplyFix}
+	switch {
+	case o.Err != nil:
+		out["error"] = o.Err.Error()
+	case o.Clean:
+		out["clean"] = true
+	default:
+		out["pr_number"] = o.PRNumber
+		out["head_sha"] = o.HeadSHA
+	}
+	return out
+}
+
+func (o applyFixOutcome) route() string {
+	if o.Err != nil || o.Clean {
+		return "conclude" // no matching concrete route: falls through the Default edge
+	}
+	return routeFixApplied
+}
+
+// applyNode runs one fix attempt for the calling session and emits the outcome as the
+// node's routing event. The run params are loaded from the store by session id (never
+// model- or event-supplied), so nothing in the run's history can redirect which repo or
+// branch is edited. An attempt error is reported as an "error" output rather than a node
+// failure: the run must conclude (so afterDrive notifies a human), not fail mid-graph.
+func (dr *Driver) applyNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+	outcome := dr.applyFix(nc)
+	ev := session.NewEvent(nc, nc.InvocationID())
+	ev.Output = outcome.output()
+	ev.Routes = []string{outcome.route()}
+	if err := emit(ev); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// applyFix performs the attempt and folds every outcome — including load/decode errors —
+// into an applyFixOutcome.
+func (dr *Driver) applyFix(nc agent.Context) applyFixOutcome {
+	rec, ok, err := dr.store.Get(nc, nc.SessionID())
 	if err != nil {
-		return applyFixResult{}, fmt.Errorf("apply_fix: load run %q: %w", tc.SessionID(), err)
+		return applyFixOutcome{Err: fmt.Errorf("apply_fix: load run %q: %w", nc.SessionID(), err)}
 	}
 	if !ok {
-		return applyFixResult{}, fmt.Errorf("apply_fix: no run params for session %q", tc.SessionID())
+		return applyFixOutcome{Err: fmt.Errorf("apply_fix: no run params for session %q", nc.SessionID())}
 	}
 	rp, err := unmarshalRunParams(rec.Params)
 	if err != nil {
-		return applyFixResult{}, fmt.Errorf("apply_fix: decode run %q: %w", tc.SessionID(), err)
+		return applyFixOutcome{Err: fmt.Errorf("apply_fix: decode run %q: %w", nc.SessionID(), err)}
 	}
-	res, err := dr.engine.attemptOnce(tc, rp)
+	res, err := dr.engine.attemptOnce(nc, rp)
 	if err != nil {
 		// Triage finding nothing actionable is not a failure: report it as a clean result
-		// so the sequencer concludes (StopWhen) and afterDrive sends a positive notice.
+		// so the run concludes and afterDrive sends a positive notice.
 		if errors.Is(err, ErrNoWork) {
-			return applyFixResult{Clean: true}, nil
+			return applyFixOutcome{Clean: true}
 		}
-		return applyFixResult{}, err
+		return applyFixOutcome{Err: err}
 	}
-	return applyFixResult{PRNumber: res.PR.Number, HeadSHA: res.HeadSHA}, nil
+	return applyFixOutcome{PRNumber: res.PR.Number, HeadSHA: res.HeadSHA}
 }
 
-// awaitCIArgs mirrors applyFixResult: the sequencer forwards apply_fix's result as
-// await_ci's args, so these fields must stay in sync (strict schema rejects extras).
-type awaitCIArgs struct {
-	PRNumber int    `json:"pr_number"`
-	HeadSHA  string `json:"head_sha"`
-}
-
-type awaitCIResult struct {
-	Status string `json:"status"`
-}
-
-// awaitCI is the long-running park point: it records that the run is waiting and returns
-// immediately with a pending status. The real CI result is fed back later via Resume.
-func (dr *Driver) awaitCI(_ agent.Context, _ awaitCIArgs) (awaitCIResult, error) {
-	return awaitCIResult{Status: "pending"}, nil
+// awaitNode is the park point. On its first pass it emits a request-input pause and the
+// run suspends until Resume feeds the real CI result back; on the resumed re-entry it
+// routes on the conclusion — "failure" cycles back to apply_fix, anything else concludes.
+// The interrupt id is derived from the invocation so the re-entered node can correlate
+// its own pause; it is unique per run because each fix run owns its session/invocation.
+func (dr *Driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+	reply, err := workflow.ResumeOrRequestInput(nc, emit, session.RequestInput{
+		InterruptID: nodeAwaitCI + "-" + nc.InvocationID(),
+		Message:     "Waiting for CI to report on the fix PR.",
+	})
+	if err != nil {
+		return nil, err // first pass: the pause was emitted; the run suspends here
+	}
+	out := map[string]any{setup.NodeOutputKey: nodeAwaitCI}
+	route := "conclude"
+	if m, ok := reply.(map[string]any); ok {
+		for k, v := range m {
+			out[k] = v
+		}
+		if fmt.Sprint(m["conclusion"]) == "failure" {
+			route = routeRetry
+		}
+	}
+	ev := session.NewEvent(nc, nc.InvocationID())
+	ev.Output = out
+	ev.Routes = []string{route}
+	if err := emit(ev); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // Kickoff starts a new suspended run: apply the fix, then park awaiting CI.
@@ -273,7 +339,7 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 		dr.clear(ctx, run.SessionID)
 		return err
 	}
-	res, err := dr.lr.Resume(ctx, run.SessionID, run.CallID, toolAwaitCI, map[string]any{
+	res, err := dr.lr.Resume(ctx, run.SessionID, run.CallID, map[string]any{
 		"conclusion": in.Conclusion, "output": in.OutputText,
 	})
 	if err != nil {
@@ -356,7 +422,8 @@ func (dr *Driver) terminalNotify(ctx context.Context, outcome terminalOutcome, t
 // afterDrive inspects a drive's outcome and either surfaces an apply error or parks the
 // run (and arms its timeout) under its PR key.
 func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setup.DriveResult, attempt int) error {
-	if apply := res.ToolResponses[toolApplyFix]; apply != nil {
+	apply := res.NodeOutput(nodeApplyFix)
+	if apply != nil {
 		if msg, bad := apply["error"]; bad {
 			return dr.failApply(ctx, sid, fullRepo, fmt.Sprintf("%v", msg))
 		}
@@ -367,7 +434,7 @@ func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setu
 	if res.ParkedCallID == "" {
 		return dr.failApply(ctx, sid, fullRepo, "run did not park on CI wait")
 	}
-	pr := prNumberFrom(res.ToolResponses[toolApplyFix])
+	pr := prNumberFrom(apply)
 	if pr == 0 {
 		return dr.failApply(ctx, sid, fullRepo, "parked without a PR number")
 	}

@@ -37,11 +37,12 @@ flowchart TD
 - `events.go` — small genai content helpers (`UserText`, `ContentText`, `LastText`).
 - `runner.go` — runner helpers (`NewRunner` over an in-memory session for the ephemeral
   explore/analyze/root runs, `Drive`, `DriveText`, `DriveCollectState`).
-- `longrun.go` — generic ADK **IsLongRunning** suspend/resume plumbing: `LongRunDriver`
+- `longrun.go` — generic workflow **pause/resume** plumbing: `LongRunDriver`
   (`Start`/`Resume` returning a plain `DriveResult`, over an injected `session.Service`;
-  `DeleteSession` for terminal cleanup) and `NewSequencerModel`, a deterministic
-  Action→Wait `model.LLM` for two-phase wait loops. Lives here because it touches `genai`;
-  callers (e.g. `fixflow`) stay genai-free.
+  `DeleteSession` for terminal cleanup). Drives a parking workflow agent to its
+  request-input pause and feeds the real result back; node outputs are attributed via the
+  `NodeOutputKey` tag. Lives here because it touches `genai`; callers (e.g. `fixflow`)
+  stay genai-free.
 - `session.go` — `NewSessionService(ctx, cfg)`: the durable suspend/resume **history**
   backend switch (`memory` = `InMemoryService`; `sqlite` = adk `session/database`;
   `firestore` = `session_firestore.go`).

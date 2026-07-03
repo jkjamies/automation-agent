@@ -8,13 +8,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/session/database"
-	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
 )
 
 // newSQLiteService builds a durable (file-backed) session service over dsn and runs the
@@ -40,46 +36,25 @@ func newSQLiteService(t *testing.T, dsn string) session.Service {
 
 // newDurableCIWaiter mirrors newCIWaiter (suspend_resume_test.go) but runs over the
 // supplied session service instead of an in-memory one, so the same await_ci parking
-// agent can be driven against a durable backend.
+// workflow can be driven against a durable backend.
 func newDurableCIWaiter(t *testing.T, appName string, svc session.Service) *runner.Runner {
 	t.Helper()
-	awaitCI, err := functiontool.New(functiontool.Config{
-		Name:          "await_ci",
-		Description:   "Open the PR and wait for CI to report.",
-		IsLongRunning: true,
-	}, func(_ agent.Context, _ struct {
-		PR int `json:"pr"`
-	}) (map[string]any, error) {
-		return map[string]any{"status": "pending"}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, err := llmagent.New(llmagent.Config{
-		Name:        "ci-waiter",
-		Model:       suspendStub{},
-		Instruction: "Call await_ci and report the result.",
-		Tools:       []tool.Tool{awaitCI},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := runner.New(runner.Config{AppName: appName, Agent: a, SessionService: svc, AutoCreateSession: true})
+	r, err := runner.New(runner.Config{AppName: appName, Agent: newCIWaiterAgent(t), SessionService: svc, AutoCreateSession: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
-// TestDurableCrossProcessResume is the spike that gates the durable-sessions work: it proves
-// adk-go's session/database backend round-trips a *long-running park* across what is
-// effectively a process restart.
+// TestDurableCrossProcessResume gates the durable-sessions design: it proves the
+// session/database backend round-trips a *paused workflow run* across what is
+// effectively a process restart — the paused graph state is rebuilt entirely from the
+// persisted session events.
 //
 // A run parks on await_ci against a SQLite file; the runner + session service are then
-// discarded and rebuilt from scratch over the SAME file, and the parked call is resumed
-// with its CI result. If the run concludes (rather than restarting at triage or failing
-// to find the parked call), durable suspend/resume in adk-go is real and Design A is
-// safe to build on.
+// discarded and rebuilt from scratch over the SAME file, and the parked interrupt is
+// resumed with its CI result. If the run concludes (rather than restarting or failing to
+// find the pause), durable pause/resume is real and safe to build on.
 func TestDurableCrossProcessResume(t *testing.T) {
 	// busy_timeout lets the second connection wait briefly rather than fail if the first
 	// pool (never explicitly closed) still holds the file.
