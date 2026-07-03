@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/runner"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
 )
 
 // NewRunner builds an in-memory runner rooted at root, suitable for ephemeral one-shot

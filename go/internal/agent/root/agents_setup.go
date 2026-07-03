@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/runner"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/runner"
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/ingest"

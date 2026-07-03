@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 )
 
@@ -56,7 +57,7 @@ func TestSequencerStopWhen(t *testing.T) {
 	applied := 0
 	awaited := 0
 	apply, err := functiontool.New(functiontool.Config{Name: "apply", Description: "apply a fix"},
-		func(_ tool.Context, _ lrEmpty) (map[string]any, error) {
+		func(_ agent.Context, _ lrEmpty) (map[string]any, error) {
 			applied++
 			return map[string]any{"clean": true}, nil
 		})
@@ -64,7 +65,7 @@ func TestSequencerStopWhen(t *testing.T) {
 		t.Fatal(err)
 	}
 	await, err := functiontool.New(functiontool.Config{Name: "await", Description: "await CI", IsLongRunning: true},
-		func(_ tool.Context, _ lrArgs) (map[string]any, error) {
+		func(_ agent.Context, _ lrArgs) (map[string]any, error) {
 			awaited++
 			return map[string]any{"status": "pending"}, nil
 		})
@@ -116,7 +117,7 @@ func lrTools(t *testing.T) (apply, await tool.Tool, calls *int, fail *bool) {
 	n := 0
 	boom := false
 	a, err := functiontool.New(functiontool.Config{Name: "apply", Description: "apply a fix"},
-		func(_ tool.Context, _ lrEmpty) (map[string]any, error) {
+		func(_ agent.Context, _ lrEmpty) (map[string]any, error) {
 			n++
 			if boom {
 				return nil, fmt.Errorf("apply boom")
@@ -127,7 +128,7 @@ func lrTools(t *testing.T) (apply, await tool.Tool, calls *int, fail *bool) {
 		t.Fatal(err)
 	}
 	w, err := functiontool.New(functiontool.Config{Name: "await", Description: "await CI", IsLongRunning: true},
-		func(_ tool.Context, _ lrArgs) (map[string]any, error) {
+		func(_ agent.Context, _ lrArgs) (map[string]any, error) {
 			return map[string]any{"status": "pending"}, nil
 		})
 	if err != nil {

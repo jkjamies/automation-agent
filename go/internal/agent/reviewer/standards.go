@@ -11,8 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 
 	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/githubapi"
@@ -395,7 +396,7 @@ func standardsTools(std *standards) ([]tool.Tool, error) {
 	getRule, err := functiontool.New(functiontool.Config{
 		Name:        "get_rule",
 		Description: "Return the full source text of a repo standard rule by its id (e.g. \"R3\") so you can read the exact wording before flagging a conformance issue.",
-	}, func(_ tool.Context, args getRuleArgs) (getRuleResult, error) {
+	}, func(_ agent.Context, args getRuleArgs) (getRuleResult, error) {
 		return getRuleResult{Rule: std.ruleDoc(strings.TrimSpace(args.ID))}, nil
 	})
 	if err != nil {

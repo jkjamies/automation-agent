@@ -133,11 +133,12 @@ type findingWire struct {
 }
 
 // parseFindings extracts findings from a category agent's raw output. Local models wrap JSON
-// in prose or ``` fences and occasionally emit nothing, and adk-go's OutputSchema does not
-// enforce a shape (v1.4.0 leaves validation a TODO) — so this is best-effort by design: it
-// pulls the first JSON array out of the text and tolerates a malformed body by returning no
-// findings (empty = success, spec Decisions 2/13). It never errors, so a garbled response
-// degrades to "no findings for this lens" rather than failing the whole review.
+// in prose or ``` fences and occasionally emit nothing, and the agents deliberately do not
+// set OutputSchema (schema validation errors the run on a malformed body, while the spec
+// wants malformed → no findings) — so this is best-effort by design: it pulls the first JSON
+// array out of the text and tolerates a malformed body by returning no findings (empty =
+// success, spec Decisions 2/13). It never errors, so a garbled response degrades to "no
+// findings for this lens" rather than failing the whole review.
 func parseFindings(raw string) []Finding {
 	wires := decodeFirstFindingArray(raw)
 	if len(wires) == 0 {

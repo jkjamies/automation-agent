@@ -110,9 +110,9 @@ everything in-process.
 
 | Concern | Library | Notes |
 |---|---|---|
-| Agent framework | `google.golang.org/adk` | v1.x; agents, workflow agents, runner, model interface |
+| Agent framework | `google.golang.org/adk/v2` | v2.x; agents, workflow agents, runner, model interface |
 | Local LLM | `github.com/ollama/ollama/api` | native typed client; `Chat(ctx, *ChatRequest, fn)` |
-| Cloud LLM | `google.golang.org/adk/model/gemini` | prod path |
+| Cloud LLM | `google.golang.org/adk/v2/model/gemini` | prod path |
 | HTTP | `net/http` (`ServeMux`, Go 1.22 method routing) | stdlib is enough; chi only if we outgrow it |
 | GitHub API | `github.com/google/go-github` | list commits, create PR |
 | Git working tree | `github.com/go-git/go-git/v5` | clone/branch/commit/push (pure Go) |
@@ -848,7 +848,7 @@ Firestore emulator — see [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 ## 16. Verified ADK-Go API reference
 
-Import root is `google.golang.org/adk/...` (repo `github.com/google/adk-go`).
+Import root is `google.golang.org/adk/v2/...` (repo `github.com/google/adk-go`).
 
 ```go
 // LLM agent
@@ -869,20 +869,20 @@ agent.New(agent.Config{
     Run func(InvocationContext) iter.Seq2[*session.Event, error]
 })
 
-// Workflow agents (package google.golang.org/adk/agent/workflowagents/...)
+// Workflow agents (package google.golang.org/adk/v2/agent/workflowagents/...)
 loopagent.New(loopagent.Config{ MaxIterations: 3, AgentConfig: agent.Config{...} })
 sequentialagent.New(sequentialagent.Config{ AgentConfig: agent.Config{...} })   // shape to confirm
 parallelagent.New(parallelagent.Config{ AgentConfig: agent.Config{...} })       // shape to confirm
 
-// Model interface (package google.golang.org/adk/model)
+// Model interface (package google.golang.org/adk/v2/model)
 type LLM interface {
     Name() string
     GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error]
 }
 
-// Long-running tool hook (package google.golang.org/adk/tool)
+// Long-running tool hook (package google.golang.org/adk/v2/tool)
 type Tool interface { /* ... */ IsLongRunning() bool }
-// ToolContext.RequestConfirmation(hint, payload) exists for human-in-the-loop pauses.
+// agent.Context.RequestConfirmation(hint, payload) exists for human-in-the-loop pauses.
 ```
 
 Notes:
