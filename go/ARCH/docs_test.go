@@ -3,35 +3,56 @@ package arch
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// TestEveryDirHasAgentsDoc asserts that every meaningful directory carries an
-// AGENTS.md. specs/ and hidden dirs (except .agents) are exempt.
-func TestEveryDirHasAgentsDoc(t *testing.T) {
-	root := repoRoot(t)
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
+// The system's knowledge lives in the repo-root /okf bundle (Open Knowledge Format).
+// These tests are the bundle's conformance gate: structural rules only, never content.
+
+// okfRoot resolves the repo-root okf/ bundle directory.
+func okfRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "okf"))
+	if err != nil {
+		t.Fatalf("okfRoot: %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("okf bundle missing at %s: %v", root, err)
+	}
+	return root
+}
+
+// TestOKFConceptsHaveFrontmatterType asserts every concept document (any .md that is not
+// a reserved index.md/log.md) opens with a YAML frontmatter block declaring a non-empty
+// type — the one hard requirement of OKF conformance.
+func TestOKFConceptsHaveFrontmatterType(t *testing.T) {
+	typeLine := regexp.MustCompile(`(?m)^type:\s*\S`)
+	err := filepath.WalkDir(okfRoot(t), func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
 			return err
 		}
-		if !d.IsDir() {
+		base := filepath.Base(p)
+		if base == "index.md" || base == "log.md" || base == "AGENTS.md" {
 			return nil
 		}
-		if p != root && skipDocDir(d.Name()) {
-			return filepath.SkipDir
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
 		}
-		if _, statErr := os.Stat(filepath.Join(p, "AGENTS.md")); statErr != nil {
-			r := rel(root, p)
-			if r == "." {
-				r = "(root)"
-			}
-			t.Errorf("missing AGENTS.md in %s", r)
+		s := string(b)
+		if !strings.HasPrefix(s, "---\n") {
+			t.Errorf("%s: concept missing YAML frontmatter block", p)
+			return nil
 		}
-		// The .agents tree is documented by a single top-level AGENTS.md; its
-		// subdirectories are intentionally exempt, so don't descend into them.
-		if d.Name() == ".agents" {
-			return filepath.SkipDir
+		end := strings.Index(s[4:], "\n---")
+		if end < 0 {
+			t.Errorf("%s: frontmatter block not closed", p)
+			return nil
+		}
+		if !typeLine.MatchString(s[4 : 4+end]) {
+			t.Errorf("%s: frontmatter missing required non-empty type field", p)
 		}
 		return nil
 	})
@@ -40,17 +61,64 @@ func TestEveryDirHasAgentsDoc(t *testing.T) {
 	}
 }
 
-func skipDocDir(base string) bool {
-	switch base {
-	case ".git", ".claude", "node_modules", "vendor", "specs":
-		return true
-	// Content subdirs of an agent are documented by the agent's shared AGENTS.md.
-	case "prompts", "models", "tasks", "testdata":
-		return true
+// TestOKFEveryDirHasIndex asserts every bundle directory carries an index.md for
+// progressive disclosure.
+func TestOKFEveryDirHasIndex(t *testing.T) {
+	err := filepath.WalkDir(okfRoot(t), func(p string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		if _, statErr := os.Stat(filepath.Join(p, "index.md")); statErr != nil {
+			t.Errorf("missing index.md in %s", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
 	}
-	// Hidden directories are exempt, except the .agents open-standard dir.
-	if strings.HasPrefix(base, ".") && base != ".agents" {
-		return true
+}
+
+// TestOKFBundleLinksResolve asserts every bundle-absolute markdown link (/path/file.md,
+// with or without a #fragment) resolves to a file within the bundle. Anchor existence
+// inside the target is content, not structure, and is deliberately not validated.
+// Relative and external links are out of scope (OKF consumers tolerate them; the
+// absolute form is the house convention).
+func TestOKFBundleLinksResolve(t *testing.T) {
+	root := okfRoot(t)
+	link := regexp.MustCompile(`\]\((/[^)#]+\.md)(?:#[^)]*)?\)`)
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
+			return err
+		}
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		for _, m := range link.FindAllStringSubmatch(string(b), -1) {
+			target := filepath.Join(root, filepath.FromSlash(m[1]))
+			if _, statErr := os.Stat(target); statErr != nil {
+				t.Errorf("%s: bundle-absolute link %s does not resolve", p, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
 	}
-	return false
+}
+
+// TestOKFRootAgentsDocPointsAtBundle asserts the repo-root AGENTS.md (the one auto-loaded
+// discovery surface) still points agents at the bundle's index.
+func TestOKFRootAgentsDocPointsAtBundle(t *testing.T) {
+	p, err := filepath.Abs(filepath.Join("..", "..", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("repo-root AGENTS.md missing: %v", err)
+	}
+	if !strings.Contains(string(b), "okf/index.md") {
+		t.Error("repo-root AGENTS.md no longer points at okf/index.md")
+	}
 }

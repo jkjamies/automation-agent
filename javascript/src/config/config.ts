@@ -2,7 +2,7 @@
  * Runtime configuration for automation-agent, loaded from the environment.
  *
  * This module is the single source of truth for settings; no other module should
- * read `process.env` directly. See .agents/standards/architecture-design.md §12.
+ * read `process.env` directly. See okf/standards/architecture-design.md §12.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -59,7 +59,7 @@ export type TasksBackend = (typeof TasksBackend)[keyof typeof TasksBackend];
 /**
  * Selects the OpenTelemetry trace sink. The app speaks exactly these four and never names a
  * vendor: any OTLP-native backend is reached with `otlp` + an endpoint. See
- * .agents/standards/observability.md.
+ * okf/standards/observability.md.
  *
  * - `none` (default): tracing is off; nothing is registered and the service is unchanged.
  * - `console`: spans as text on stdout (local dev, the playground).
@@ -224,7 +224,7 @@ export interface Config {
 
   // Observability (OpenTelemetry tracing). Off by default (otelTracesExporter=none): nothing is
   // registered and the service is unchanged. config is the single place that reads OTEL_*; the obs
-  // package takes these as a typed struct. See obs and .agents/standards/observability.md.
+  // package takes these as a typed struct. See obs and okf/standards/observability.md.
   // otelTracesExporter selects the sink: none | console | otlp | gcp.
   otelTracesExporter: TracesExporter;
   // otelTracesExporterSet records whether OTEL_TRACES_EXPORTER was explicitly provided in the

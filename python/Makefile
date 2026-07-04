@@ -38,7 +38,7 @@ typecheck: ## Run mypy (the go vet analogue)
 arch: ## Run architecture conformance tests
 	$(UV) run pytest arch -q
 
-docs-check: ## Verify every directory has an AGENTS.md
+docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, links)
 	$(UV) run pytest arch/test_docs.py -q
 
 tidy: ## Resolve/lock dependencies

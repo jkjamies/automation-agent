@@ -1,5 +1,5 @@
 // Kotlin port of automation-agent. Mirrors the Go reference at the repo root 1:1 in
-// functionality (see ../.agents/standards/language-parity.md). Built on ADK for Kotlin.
+// functionality (see ../okf/standards/language-parity.md). Built on ADK for Kotlin.
 //
 // This root project is the service module (mirrors Go cmd/ + internal/). Architecture
 // tests live in the separate :konsist module, run via `./gradlew arch`.
@@ -77,7 +77,7 @@ dependencies {
     // the ADK span tree (which resolves GlobalOpenTelemetry) is exported instead of discarded. The
     // BOM aligns api/sdk/exporter/extension versions; the extension-kotlin bridge carries the OTel
     // Context across coroutine suspension (span parenting + the in-process trace passthrough). See
-    // obs/AGENTS.md and .agents/standards/observability.md.
+    // obs/AGENTS.md and okf/standards/observability.md.
     implementation(platform("io.opentelemetry:opentelemetry-bom:$otelVersion"))
     implementation("io.opentelemetry:opentelemetry-api")
     implementation("io.opentelemetry:opentelemetry-sdk")
@@ -122,7 +122,7 @@ tasks.test {
     useJUnitPlatform() // Kotest runs on the JUnit platform.
 }
 
-// Enforce an 80% line-coverage floor (see .agents/standards/testing.md).
+// Enforce an 80% line-coverage floor (see okf/standards/testing.md).
 kover {
     reports {
         // The Firestore backends are emulator-gated (validated under a real Firestore emulator, not

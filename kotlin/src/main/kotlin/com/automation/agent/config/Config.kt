@@ -1,7 +1,7 @@
 /*
  * Package config loads the automation-agent runtime configuration from the
  * environment. It is the single source of truth for settings; no other package
- * should read the environment directly. See ../.agents/standards/architecture-design.md §12.
+ * should read the environment directly. See ../okf/standards/architecture-design.md §12.
  */
 package com.automation.agent.config
 
@@ -18,7 +18,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /*
  * Trace-exporter values for [Config.otelTracesExporter]. The app speaks exactly these four sinks and
- * never names a vendor; obs mirrors them. See obs and .agents/standards/observability.md.
+ * never names a vendor; obs mirrors them. See obs and okf/standards/observability.md.
  */
 const val OTEL_EXPORTER_NONE = "none"
 const val OTEL_EXPORTER_CONSOLE = "console"
@@ -233,7 +233,7 @@ data class Config(
     // otelTracesExporter=none nothing is registered and the service is unchanged. The agent
     // framework emits the spans natively; obs only wires the provider. These are read here (the
     // single place that reads OTEL_*) and handed to obs as a typed struct. See obs and
-    // .agents/standards/observability.md.
+    // okf/standards/observability.md.
     // otelTracesExporter selects the sink: none | console | otlp | gcp.
     val otelTracesExporter: String,
     // otelTracesExporterSet records whether OTEL_TRACES_EXPORTER was explicitly provided, so the

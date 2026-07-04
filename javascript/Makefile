@@ -38,7 +38,7 @@ typecheck: ## Run tsc --noEmit
 arch: ## Run architecture conformance tests
 	$(NPM) run arch
 
-docs-check: ## Verify every directory has an AGENTS.md
+docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, links)
 	$(NPM) run arch -- arch/docs.test.ts
 
 tidy: ## Resolve/lock dependencies
