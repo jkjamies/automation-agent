@@ -3,7 +3,7 @@
  *
  * Cloud Scheduler, webhooks, and future hooks (GitHub/Jira/Confluence) are all
  * normalized to an {@link Envelope} before being handed to the root agent. See
- * .agents/standards/architecture-design.md §2.
+ * okf/standards/architecture-design.md §2.
  */
 
 /** Identifies what triggered an ingest, so the root agent can route it. */

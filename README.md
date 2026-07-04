@@ -20,7 +20,7 @@ Built on the [Agent Development Kit for Go](https://github.com/google/adk-go),
 local-first on **Ollama + Gemma**, with a config switch to **Gemini/Vertex** for
 cloud deployment.
 
-> **Design doc:** [`.agents/standards/architecture-design.md`](.agents/standards/architecture-design.md) is the source of
+> **Design doc:** [`okf/standards/architecture-design.md`](okf/standards/architecture-design.md) is the source of
 > truth for the architecture and decisions.
 
 ## Ports (Go · Kotlin · Python · TypeScript)
@@ -29,7 +29,7 @@ The Go implementation in [`go/`](go/) is the canonical reference. It is mirrored
 sibling ports that must **all stay 1:1 in functionality** — same structure, public
 surface, config, and external contracts. Every language is held to the same parity
 contract; a behavior change lands in Go first and is mirrored into every existing port in
-the same change (see [`.agents/standards/language-parity.md`](.agents/standards/language-parity.md)):
+the same change (see [`okf/standards/language-parity.md`](okf/standards/language-parity.md)):
 
 - **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
   (`com.google.adk:google-adk-kotlin-core:0.4.0`). A functional 1:1 port (`./gradlew build`
@@ -53,10 +53,10 @@ make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
 
 How-to guides:
-[`local-development.md`](.agents/standards/local-development.md) (run modes, env vars,
-container), [`testing.md`](.agents/standards/testing.md) (every test kind + the Firestore
-emulator), [`deployment.md`](.agents/standards/deployment.md) (cloud architecture + GCP
-setup — source of truth), and [`ci-integration.md`](.agents/standards/ci-integration.md)
+[`local-development.md`](okf/standards/local-development.md) (run modes, env vars,
+container), [`testing.md`](okf/standards/testing.md) (every test kind + the Firestore
+emulator), [`deployment.md`](okf/standards/deployment.md) (cloud architecture + GCP
+setup — source of truth), and [`ci-integration.md`](okf/standards/ci-integration.md)
 (how CI drives the fixers). [`DEPLOYMENT.md`](DEPLOYMENT.md) is the short status/checklist.
 
 ### Durable sessions
@@ -82,7 +82,7 @@ To run against live repos and cloud infrastructure you supply the surrounding pi
 
 - An **`agent-lint-verify` GitHub Action** in each target repo (a label-triggered check that
   reports lint results back to `/webhooks/github`; template in
-  [`.agents/standards/ci-integration.md`](.agents/standards/ci-integration.md)). The
+  [`okf/standards/ci-integration.md`](okf/standards/ci-integration.md)). The
   lint-fixer opens a PR but the loop only resumes once this check reports.
 - `GITHUB_TOKEN` (repo scope) so the lint-fixer can open/label PRs and read private repos.
   This is the **GitHub REST API** credential — it is always required, even over SSH. For
@@ -90,7 +90,7 @@ To run against live repos and cloud infrastructure you supply the surrounding pi
   `GIT_TRANSPORT=ssh` (uses your ssh-agent / `~/.ssh` keys, with `GIT_SSH_KEY` to pin a
   specific key) — but SSH only authenticates the git transport, so you **still** need a
   token or `gh auth login` for the PR operations. See
-  [`local-development.md`](.agents/standards/local-development.md).
+  [`local-development.md`](okf/standards/local-development.md).
 - A notifier (`SLACK_WEBHOOK_URL` or `TEAMS_WEBHOOK_URL`) so the digest and fix results post.
 - For cloud: Cloud Run + Firestore (`SESSION_BACKEND=firestore`), Secret Manager, and
   `LLM_PROVIDER=gemini` (or Ollama on a GPU VM). Durable sessions let a restart resume
@@ -121,4 +121,6 @@ Inside `go/` (mirrored by each port):
 | `go/internal/{config,ingest}` | configuration + normalized event envelope |
 | `go/ARCH/` | architecture-conformance tests |
 
-Every directory carries an `AGENTS.md`; the ARCH suite enforces it.
+System knowledge lives in the [`okf/`](okf/index.md) bundle (Open Knowledge Format);
+the ARCH suite enforces its conformance. The repo-root `AGENTS.md` is the guardrail
+sheet + entry pointer.

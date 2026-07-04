@@ -45,8 +45,8 @@ vet: ## Run go vet
 arch: ## Run architecture conformance tests
 	go test ./ARCH/...
 
-docs-check: ## Verify every directory has an AGENTS.md
-	go test ./ARCH/ -run TestEveryDirHasAgentsDoc
+docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, links)
+	go test ./ARCH/ -run TestOKF
 
 tidy: ## Tidy go.mod
 	go mod tidy

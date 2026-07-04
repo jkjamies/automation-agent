@@ -28,4 +28,4 @@ How it ships and how to back it out if needed.
 - [ ] ARCH boundaries respected (`make arch`)
 - [ ] `make ci` green
 - [ ] Prompts (if any) are markdown under `prompts/`
-- [ ] `.agents/standards/architecture-design.md` updated if the design changed
+- [ ] `okf/standards/architecture-design.md` updated if the design changed

@@ -6,7 +6,7 @@ under the GenAI semantic conventions) for every run, but the spans go nowhere un
 registers a tracer provider + exporter once at startup. This package is that registration,
 plus the propagation and flush plumbing that stitches the trace across the Cloud Tasks
 boundary. Off by default (``OTEL_TRACES_EXPORTER=none``). Deterministic tooling — no agent
-imports; only ``config`` reads ``OTEL_*``. See ``.agents/standards/observability.md``.
+imports; only ``config`` reads ``OTEL_*``. See ``okf/standards/observability.md``.
 """
 
 from automation_agent.obs.exporters import new_exporter, parse_otlp_headers
