@@ -18,7 +18,7 @@ contract each pair obeys.
 
 | Pair | Language | Location | ADK | Role |
 |---|---|---|---|---|
-| **Modern** | Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk/v2` v2.0.0 | **reference (source of truth)** |
+| **Modern** | Go | `go/` (`cmd/`, `internal/`) | `google.golang.org/adk/v2` (2.x line) | **reference (source of truth)** |
 | **Modern** | Python | `python/` | `google-adk` (PyPI, 2.x line) | port of the reference |
 | **Frozen** | Kotlin | `kotlin/` | `com.google.adk:google-adk-kotlin-core` 0.4.0 ([adk-kotlin](https://github.com/google/adk-kotlin)) | frozen — 1:1 with TypeScript |
 | **Frozen** | TypeScript | `javascript/` | `@google/adk` ([adk-js](https://github.com/google/adk-js)) | frozen — 1:1 with Kotlin |

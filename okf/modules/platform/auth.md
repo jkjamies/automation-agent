@@ -42,7 +42,8 @@ flowchart TD
 - `StaticProvider` — constant token. Backs the PAT fallback and the empty
   (anonymous, public-read/test) client. An empty token is valid.
 - `AppProvider` — in the Go reference port, wraps `ghinstallation/v2.Transport`
-  pinned to **one** installation id (single-org per deployment), so there is no
+  pinned to **one** installation id — a deliberate design constraint: each
+  deployment serves a single GitHub org/installation — so there is no
   per-owner cache and no dynamic `repo→installation` resolution. The `repo`
   argument is accepted for the contract but ignored. `WithBaseURL` overrides the
   token-exchange endpoint for tests.

@@ -34,7 +34,7 @@ agent locally without asking anyone.
 - **[Ollama](https://ollama.com)** running locally with a Gemma model (the default local
   LLM). Pull a model and check it's reachable:
   ```bash
-  ollama pull gemma3            # the project defaults to gemma4:* model names
+  ollama pull gemma4:12b        # the default OLLAMA_MODEL (gemma4:26b for code changes)
   cd go && make ollama-check    # curls $OLLAMA_HOST/api/tags
   ```
   (Or skip Ollama and point at Vertex/AI-Studio Gemini — see [LLM selection](#llm-selection--llm_provider).)

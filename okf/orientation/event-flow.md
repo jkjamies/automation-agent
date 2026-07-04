@@ -23,11 +23,11 @@ flowchart TD
     GW --> WCov["POST /webhooks/coverage (coverage report)"]
     GW --> WCI["POST /webhooks/github (check_run)"]
     GW --> WReview["POST /webhooks/github (pull_request)"]
-    Cron -->|KindCronDaily| Env["ingest.Envelope{Kind, Source, Payload}"]
-    WLint -->|KindLint| Env
-    WCov -->|KindCoverage| Env
-    WCI -->|KindCI| Env
-    WReview -->|KindReview| Env
+    Cron -->|cron.daily| Env["ingest.Envelope{Kind, Source, Payload}"]
+    WLint -->|lint| Env
+    WCov -->|coverage| Env
+    WCI -->|ci| Env
+    WReview -->|review| Env
     Env --> TX{"execution transport (TASKS_BACKEND)"}
     TX -->|"inprocess: in-process worker pool (local)"| Root
     TX -->|"cloudtasks: Cloud Tasks → POST /internal/dispatch (in-request)"| Root
@@ -62,14 +62,14 @@ Key properties:
 ## Resume flow (parked fix runs)
 
 A fixer's resume is a separate, later request: the CI check for a parked run reports back
-minutes-to-hours after kickoff and re-enters through the same front door as `KindCI`.
+minutes-to-hours after kickoff and re-enters through the same front door as Kind `ci`.
 Only the two fixers resume; summary and the reviewer are one-shot.
 
 ```mermaid
 flowchart TD
     CR["GitHub: check_run completed<br/>(agent-*-verify, on the automation-agent/* branch)"] --> GW["managed API gateway"]
     GW --> WCI["POST /webhooks/github (check_run)"]
-    WCI -->|"KindCI"| TX{"execution transport"}
+    WCI -->|"ci"| TX{"execution transport"}
     TX --> Disp["root dispatcher"] -->|ci| RES["fixer resume(payload)"]
 
     RES --> NM{"check name == spec check name?"}

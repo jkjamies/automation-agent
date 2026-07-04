@@ -43,8 +43,9 @@ the ≥80% coverage target attainable without testing LLM output.
 a `fixflow.Spec` (branch/label/check names plus its triage/analyze steps) and exposes
 `NewEngine(d fixflow.Deps) *fixflow.Engine`. The shared `fixflow` engine carries the
 suspend/resume Driver and the triage→analyze→commit→PR→await-CI loop, so the fixers stay
-thin. The same testability split still holds: the deterministic logic (`triage.go`,
-`analyze.go`, the `Spec` builder) is unit-tested directly without an LLM.
+thin. The same testability split still holds: each fixer's deterministic logic (its
+`triage` step and `Spec` builder in the fixer package, the engine's `analyze` step) is
+unit-tested directly without an LLM.
 
 ## Shared utilities
 

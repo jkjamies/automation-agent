@@ -15,7 +15,7 @@ Each port owns a self-contained local gate, run from that port's directory:
 | Go (`go/`) | `make ci` | `tidy` → `vet` → architecture tests (`ARCH/`) → `test` → `cover` (≥80%) |
 | Python (`python/`) | `make ci` | `ruff` lint → `mypy` typecheck → architecture tests (`arch/`) → `pytest` → coverage (≥80%) |
 | TypeScript (`javascript/`) | `make ci` | lint → typecheck → architecture tests (`arch/`) → tests → coverage (≥80%) |
-| Kotlin (`kotlin/`) | `gradle build` | compile + detekt/ktlint + tests (architecture assertions live in the test suite) |
+| Kotlin (`kotlin/`) | `./gradlew build` | compile + detekt/ktlint + tests (architecture assertions live in the test suite) |
 
 Shared properties, enforced by the [testing standard](/standards/testing.md) and the
 architecture tests:

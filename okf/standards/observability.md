@@ -15,7 +15,7 @@ is the reference implementation; the Python, TypeScript, and Kotlin ports mirror
 with their native SDKs (parity is at the **data** level — same span names/attributes — not the
 registration code). This document is the design record: the rationale and decisions live here.
 
-> **Scope: traces only.** Metrics and a log-bridge signal are deferred. This document covers the
+> **Scope: traces only.** Metrics and a log-bridge signal are not part of this design. This document covers the
 > trace pipeline: provider registration, exporters, propagation, the flush constraint, config, and
 > log↔trace correlation.
 
@@ -26,7 +26,7 @@ registration code). This document is the design record: the rationale and decisi
 Every port's agent framework (`adk-go`, `adk-python`, `adk-js`, `adk-kotlin`) **already emits** a
 native span tree for every run, under the OpenTelemetry **GenAI semantic conventions**:
 
-```
+```text
 invoke_agent  ──▶  call_llm (gen_ai.request.model, token usage, finish reason)  ──▶  execute_tool (gen_ai.tool.name)
 ```
 
@@ -121,7 +121,7 @@ each port's `config` layer — the **only** place that reads `OTEL_*`; `obs` tak
 **Message content is off by default.** The flag gates only message **bodies** (prompts/responses =
 reviewed source code). The *useful* GenAI attributes — model, prompt/completion token counts, tool
 names, finish reason, latency — are captured **free and always on**, so "off" still yields rich,
-cost-aware traces. (Body-capture wiring itself is a follow-up; the flag is surfaced now.)
+cost-aware traces. The flag is surfaced in config; the framework reads it natively.
 
 ## Log ↔ trace correlation
 

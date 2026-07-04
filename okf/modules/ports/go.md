@@ -119,7 +119,7 @@ Run from the `go/` directory; `make help` lists all targets.
 - `make build` — compile all packages; `make run` — run the service; `make playground` — local web UI at :8080.
 - `make test` — all tests; `make cover` — coverage gate (≥80% over `internal/`; `cmd` is composition-only); `make cover-firestore` — Firestore-backed tests against a running emulator.
 - `make lint` (golangci-lint), `make vet`, `make fmt`, `make tidy`, `make ollama-check`, `make docker`.
-- `make arch` — architecture conformance (`go test ./ARCH`).
+- `make arch` — architecture conformance (`go test ./ARCH/...`).
 - `make ci` — the full local gate: `tidy vet arch test cover`.
 
 ## Conventions

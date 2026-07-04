@@ -31,7 +31,7 @@ These are enforced by architecture tests and review; violating any of them fails
 gate or the PR:
 
 - **Run the port's local gate before proposing changes**: `make ci` from `go/`,
-  `python/`, or `javascript/`; `gradle build` from `kotlin/`.
+  `python/`, or `javascript/`; `./gradlew build` from `kotlin/`.
 - **Two-pair parity.** Go↔Python are the modern pair: behavior changes land in Go first
   and are mirrored into Python in the same logical change. Kotlin↔TypeScript are
   feature-frozen (a critical fix touching one lands in both). No parity requirement

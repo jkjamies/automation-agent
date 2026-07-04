@@ -28,6 +28,9 @@ These are binding review criteria.
   author.**
 - The ops runbook (`DEPLOYMENT.md`) and per-port `README.md` files remain thin
   operational surfaces; anything conceptual links into the bundle.
+- The bundle's `log.md` is the OKF-reserved chronological history file (a changelog of
+  the bundle itself, defined by the format) — it is not a concept and the
+  facts-not-status rule does not apply to it.
 
 ## Docs are factual, not status trackers
 

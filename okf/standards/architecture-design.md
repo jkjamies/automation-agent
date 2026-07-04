@@ -174,7 +174,7 @@ unit tests against a stubbed Ollama HTTP server (`httptest`). Default local mode
 
 ```
 automation-agent/
-├── AGENTS.md                      # repo root: the guardrail sheet + pointer to okf/index.md (the only AGENTS.md)
+├── AGENTS.md                      # repo root: the guardrail sheet + pointer to okf/index.md
 ├── README.md
 ├── DEPLOYMENT.md                  # deployment status + setup checklist
 ├── .gitignore                     # ignores: /specs/* (keep .gitkeep), .env, *.db, build/test artifacts
@@ -344,10 +344,10 @@ functions.
 ## 7. The three agents
 
 **Root** (`root/`): receives the `ingest.Envelope`, routes by `Kind`. Initially a
-deterministic dispatcher (code-agent with a `Run` that picks summary vs lintfixer); kept
-as an *agent* (not a plain switch) so future ingest kinds (Jira/Confluence/human) and
-LLM-based routing slot in without restructuring. Sub-agents are the summary and lint-fixer
-workflows.
+deterministic dispatcher (a code-agent whose `Run` routes by `Kind`); kept as an *agent*
+(not a plain switch) so future ingest kinds (Jira/Confluence/human) and LLM-based routing
+slot in without restructuring. Sub-agents are the summary, lint-fixer, coverage-fixer,
+and reviewer workflows.
 
 **Summary** (`summary/`): `Sequential[ Parallel[fetch_repo₁…fetch_repoₙ] → summarize(LLM) → notify ]`.
 Repo list is `REPOS` env (comma-separated `owner/repo`), so N is dynamic — the parallel
