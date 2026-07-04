@@ -15,9 +15,9 @@ from automation_agent.agent.setup.events import (
 from automation_agent.agent.setup.generate import generate_text, json_config
 from automation_agent.agent.setup.llm import build_code_llm, build_llm
 from automation_agent.agent.setup.longrun import (
+    NODE_OUTPUT_KEY,
     DriveResult,
     LongRunDriver,
-    Sequencer,
 )
 from automation_agent.agent.setup.names import safe_name
 from automation_agent.agent.setup.parkstore import (
@@ -37,13 +37,13 @@ from automation_agent.agent.setup.runner import (
 from automation_agent.agent.setup.session import new_session_service
 
 __all__ = [
+    "NODE_OUTPUT_KEY",
     "DriveResult",
     "LongRunDriver",
     "MemoryParkStore",
     "ParkRecord",
     "ParkStore",
     "Prompts",
-    "Sequencer",
     "SqliteParkStore",
     "assistant_text",
     "build_code_llm",

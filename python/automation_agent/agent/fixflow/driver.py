@@ -1,8 +1,13 @@
-"""The CI-wait suspend/resume loop on ADK long-running tools.
+"""The CI-wait suspend/resume loop on the workflow engine's pause/resume.
 
-The Driver owns the long-run agent and a durable :class:`~automation_agent.agent.setup.ParkStore`
-of suspended runs. All policy — retry vs give up, attempt counting, the per-run timeout —
-lives here; the agent's Sequencer model only emits a fixed apply_fix -> await_ci sequence.
+The Driver owns the fixer workflow and a durable :class:`~automation_agent.agent.setup.ParkStore`
+of parked runs. All policy — retry vs give up, attempt counting, the per-run timeout —
+lives here, while the workflow graph only encodes the fixed apply_fix -> await_ci shape::
+
+    START -> apply_fix -"fix_applied"-> await_ci (request-input pause)
+      apply_fix -DEFAULT-> conclude    (clean, or the attempt errored)
+      await_ci  -"failure"-> apply_fix (conditional retry cycle)
+      await_ci  -DEFAULT-> conclude
 
 Lifecycle: kickoff applies a fix and parks on await_ci (recorded in the store, keyed by a
 UUID session id and indexed by ``owner/repo#pr``). A check_run webhook drives resume, which
@@ -15,9 +20,12 @@ With the default in-memory backend a restart still strands parked runs.
 Terminal resolution (``_clear``) deletes both the park record and the ADK session so a
 durable backend does not accumulate finished runs.
 
-Tool error convention: Python ADK propagates a raised tool exception, so the apply_fix tool
-callable wraps its work in try/except and returns ``{"error": str(e)}`` on failure — the
-Sequencer's apply-error branch checks ``"error" in response`` and concludes.
+The ParkStore's atomic claim is the only guard against stale or duplicate CI results —
+resume must never bypass it.
+
+Node error convention: an apply error is emitted as an ``{"error": ...}`` output rather
+than a node failure, so the run concludes through the graph and ``_after_drive`` can
+notify a human instead of the failure vanishing into a failed run.
 """
 
 from __future__ import annotations
@@ -26,12 +34,15 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from google.adk.agents import LlmAgent
-from google.adk.tools import FunctionTool, LongRunningFunctionTool
+from google.adk.agents import Context
+from google.adk.events import Event, EventActions
+from google.adk.events.request_input import RequestInput
+from google.adk.workflow import DEFAULT_ROUTE, START, Edge, FunctionNode, Workflow
 
 from automation_agent.agent import setup
 from automation_agent.agent.fixflow.summary import (
@@ -39,15 +50,25 @@ from automation_agent.agent.fixflow.summary import (
     TerminalOutcome,
     build_summary_text,
 )
-from automation_agent.agent.setup import MemoryParkStore, ParkRecord
+from automation_agent.agent.setup import NODE_OUTPUT_KEY, MemoryParkStore, ParkRecord
 from automation_agent.githubapi import Comparison
 
 if TYPE_CHECKING:
     from automation_agent.agent.fixflow.engine import Engine, ResumeInput
     from automation_agent.agent.fixflow.envelope import Kickoff
 
-TOOL_APPLY_FIX = "apply_fix"
-TOOL_AWAIT_CI = "await_ci"
+NODE_APPLY_FIX = "apply_fix"
+NODE_AWAIT_CI = "await_ci"
+NODE_CONCLUDE = "conclude"
+
+# ROUTE_FIX_APPLIED is the one concrete route out of apply_fix: a fix landed on a PR, so
+# proceed to the CI park. Every other apply outcome (clean, error) falls through the
+# DEFAULT_ROUTE edge to conclude.
+ROUTE_FIX_APPLIED = "fix_applied"
+# ROUTE_RETRY is the one concrete route out of await_ci: CI failed and the caller resumed
+# the run for another attempt, so cycle back to apply_fix. Any other resumed conclusion
+# falls through the DEFAULT_ROUTE edge to conclude.
+ROUTE_RETRY = "failure"
 
 
 @dataclass
@@ -94,8 +115,33 @@ class RunParams:
         )
 
 
+def new_fixer_workflow(name: str, apply_fn: Any, await_fn: Any) -> Workflow:
+    """Assemble the fix-loop workflow from the apply/await node bodies. conclude is the
+    shared terminal node: every non-parked path ends there, so the graph always has a
+    terminal and the retry cycle (await_ci -> apply_fix) stays conditional."""
+    apply_node = FunctionNode(func=apply_fn, name=NODE_APPLY_FIX)
+    # Re-entry mode: on resume the node re-runs from scratch and picks the reply up via
+    # ctx.resume_inputs, which is what lets it route on the CI conclusion.
+    await_node = FunctionNode(func=await_fn, name=NODE_AWAIT_CI, rerun_on_resume=True)
+    conclude = FunctionNode(func=_conclude, name=NODE_CONCLUDE)
+    return Workflow(
+        name=name,
+        edges=[
+            Edge(from_node=START, to_node=apply_node),
+            Edge(from_node=apply_node, to_node=await_node, route=ROUTE_FIX_APPLIED),
+            Edge(from_node=apply_node, to_node=conclude, route=DEFAULT_ROUTE),
+            Edge(from_node=await_node, to_node=apply_node, route=ROUTE_RETRY),
+            Edge(from_node=await_node, to_node=conclude, route=DEFAULT_ROUTE),
+        ],
+    )
+
+
+def _conclude() -> str:
+    return "done"
+
+
 class Driver:
-    """Runs a Spec's CI-wait loop on ADK long-running suspend/resume over a ParkStore."""
+    """Runs a Spec's CI-wait loop on the workflow engine's pause/resume over a ParkStore."""
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
@@ -110,37 +156,7 @@ class Driver:
         # and notifies for review) could be garbage-collected before it completes.
         self._timeout_tasks: set[asyncio.Future[None]] = set()
 
-        seq_model = setup.Sequencer(
-            action=TOOL_APPLY_FIX,
-            wait=TOOL_AWAIT_CI,
-            # The Driver only resumes a run when it has already decided to retry, so a
-            # resumed failure always means "apply again". (success/timeout never resume.)
-            retry_when=lambda resp: str(resp.get("conclusion")) == "failure",
-            # A clean apply (triage found nothing) is already terminal: conclude without
-            # parking on CI so the result is never forwarded to await_ci.
-            stop_when=lambda resp: bool(resp.get("clean")),
-        )
-        # The Sequencer emits tool calls by name ("apply_fix"/"await_ci"), and ADK derives a
-        # FunctionTool's name from the callable's __name__ — so the tool callables must carry
-        # exactly those names. Bound methods can't be renamed, so wrap them in correctly-named
-        # closures (tool_context is injected by name).
-        driver = self
-
-        async def apply_fix(tool_context: Any = None) -> dict[str, Any]:
-            return await driver._apply_fix_tool(tool_context)
-
-        def await_ci(pr_number: int = 0, head_sha: str = "") -> dict[str, Any]:
-            return driver._await_ci_tool(pr_number, head_sha)
-
-        fixer = LlmAgent(
-            name="fixer_" + engine.spec.name,
-            model=seq_model,
-            instruction="Apply the fix, then wait for CI. If CI fails, apply again.",
-            tools=[
-                FunctionTool(apply_fix),
-                LongRunningFunctionTool(await_ci),
-            ],
-        )
+        fixer = new_fixer_workflow("fixer_" + engine.spec.name, self._apply_node, self._await_node)
         # A durable session_service makes a parked run survive a restart; None falls back to
         # in-memory (today's behavior).
         self.lr = setup.LongRunDriver(
@@ -150,39 +166,67 @@ class Driver:
             engine.d.session_service,
         )
 
-    # --- tools -------------------------------------------------------------
+    # --- workflow nodes ------------------------------------------------------
 
-    async def _apply_fix_tool(self, tool_context: Any = None) -> dict[str, Any]:
-        """Run one fix attempt for the calling session. The run params are loaded from the
-        store by session id (never model-supplied), so the model's args cannot influence the
-        target.
+    async def _apply_node(self, ctx: Context) -> AsyncGenerator[Any, None]:
+        """Run one fix attempt for the calling session and emit the outcome as the node's
+        routing event. The run params are loaded from the store by session id (never
+        event-supplied), so nothing in the run's history can redirect which repo or branch
+        is edited."""
+        out, route = await self._apply_outcome(ctx)
+        yield Event(output=out, actions=EventActions(route=route))
 
-        Wraps the work in try/except returning ``{"error": ...}`` so the Sequencer's
-        apply-error branch can conclude (ADK propagates raised exceptions otherwise)."""
+    async def _apply_outcome(self, ctx: Context) -> tuple[dict[str, Any], str]:
+        """Perform the attempt and fold every outcome — including load/decode errors —
+        into a tagged output dict plus its route."""
         # Local import avoids the engine<->driver import cycle (engine imports RunParams from
         # this module at its bottom).
         from automation_agent.agent.fixflow.engine import NoWorkError
 
+        out: dict[str, Any] = {NODE_OUTPUT_KEY: NODE_APPLY_FIX}
         try:
-            sid = _session_id(tool_context)
+            sid = _session_id(ctx)
             rec = await self.store.get(sid)
             if rec is None:
                 raise ValueError(f"apply_fix: no run params for session {sid!r}")
             rp = RunParams.from_json(rec.params)
             res = await self.engine.attempt_once(rp)
-            return {"pr_number": res.pr.number, "head_sha": res.head_sha}
+            out["pr_number"] = res.pr.number
+            out["head_sha"] = res.head_sha
+            return out, ROUTE_FIX_APPLIED
         except NoWorkError:
-            # Triage found nothing actionable: not a failure. Return a clean-flagged result
-            # (never {"error": ...}) so the sequencer concludes (stop_when) and _after_drive
-            # sends a positive notice instead of the review alarm.
-            return {"clean": True}
+            # Triage found nothing actionable: not a failure. A clean-flagged result (never
+            # {"error": ...}) concludes the run and _after_drive sends a positive notice
+            # instead of the review alarm.
+            out["clean"] = True
+            return out, "conclude"  # no concrete route: falls through DEFAULT_ROUTE
         except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+            out["error"] = str(exc)
+            return out, "conclude"
 
-    def _await_ci_tool(self, pr_number: int = 0, head_sha: str = "") -> dict[str, Any]:
-        """The long-running park point: record that the run is waiting and return
-        immediately with a pending status. The real CI result is fed back via resume."""
-        return {"status": "pending"}
+    async def _await_node(self, ctx: Context) -> AsyncGenerator[Any, None]:
+        """The park point. On its first pass it emits a request-input pause and the run
+        suspends until resume feeds the real CI result back; on the resumed re-entry it
+        routes on the conclusion — "failure" cycles back to apply_fix, anything else
+        concludes. The interrupt id is derived from the invocation so the re-entered node
+        can correlate its own pause; it is unique per run because each fix run owns its
+        session/invocation."""
+        interrupt_id = f"{NODE_AWAIT_CI}-{ctx.invocation_id}"
+        reply = ctx.resume_inputs.get(interrupt_id)
+        if reply is None:
+            yield RequestInput(
+                interrupt_id=interrupt_id,
+                message="Waiting for CI to report on the fix PR.",
+                response_schema=None,
+            )
+            return
+        out: dict[str, Any] = {NODE_OUTPUT_KEY: NODE_AWAIT_CI}
+        route = "conclude"
+        if isinstance(reply, dict):
+            out.update(reply)
+            if str(reply.get("conclusion")) == "failure":
+                route = ROUTE_RETRY
+        yield Event(output=out, actions=EventActions(route=route))
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -268,7 +312,6 @@ class Driver:
             res = await self.lr.resume(
                 run.session_id,
                 run.call_id,
-                TOOL_AWAIT_CI,
                 {"conclusion": in_.conclusion, "output": in_.output_text},
             )
         except Exception:
@@ -390,9 +433,9 @@ class Driver:
     ) -> None:
         """Inspect a drive's outcome and either surface an apply error or park the run (and
         its timeout) under its PR key."""
-        # apply may be None if the apply tool never ran; _pr_number_from tolerates None
+        # apply may be None if the apply node never ran; _pr_number_from tolerates None
         # (returns 0), so the checks below funnel that case into _fail rather than crashing.
-        apply = res.tool_responses.get(TOOL_APPLY_FIX)
+        apply = res.node_output(NODE_APPLY_FIX)
         if apply is not None and "error" in apply:
             await self._fail(sid, full_repo, _pr_number_from(apply), str(apply["error"]))
         if apply is not None and apply.get("clean"):

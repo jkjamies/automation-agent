@@ -28,12 +28,12 @@ flowchart TD
 - `events.py` — small genai content helpers (`user_text`, `content_text`, `last_text`).
 - `runner.py` — in-memory runner helpers (`Runner`, `drive`, `drive_text`,
   `drive_collect_state`).
-- `longrun.py` — generic ADK **IsLongRunning** suspend/resume plumbing: `LongRunDriver`
+- `longrun.py` — generic workflow **pause/resume** plumbing: `LongRunDriver`
   (`start`/`resume` returning a plain `DriveResult`, plus `delete_session` for terminal
-  cleanup, over an injectable `BaseSessionService`) and the `Sequencer` class, a
-  deterministic Action->Wait `BaseLlm` for two-phase wait loops. Lives here because it
-  touches `genai`; callers (e.g. `fixflow`) stay genai-free. Verified end-to-end in
-  `tests/test_suspend_resume.py` + `tests/test_longrun.py`.
+  cleanup, over an injectable `BaseSessionService`). Drives a parking workflow to its
+  request-input pause and feeds the real result back; node outputs are attributed via the
+  `NODE_OUTPUT_KEY` tag. Lives here because it touches `genai`; callers (e.g. `fixflow`)
+  stay genai-free. Verified end-to-end in `tests/test_setup_longrun.py`.
 - `session.py` — `new_session_service(cfg)`: the `SESSION_BACKEND` switch returning an ADK
   `BaseSessionService` (the durable suspend/resume history of the parked fix loop). `memory`
   is in-process; `sqlite` uses adk's `SqliteSessionService`; `firestore` uses adk's **native**
