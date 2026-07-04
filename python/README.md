@@ -1,7 +1,7 @@
 # automation-agent (Python / ADK)
 
 An automation service built on **Python + Google ADK**. The authoritative design is
-[`../.agents/standards/architecture-design.md`](../.agents/standards/architecture-design.md).
+[`../okf/standards/architecture-design.md`](../okf/standards/architecture-design.md).
 
 > Implemented: config, ingest, notify, githubapi, gitrepo, webhook, the
 > model layer, root + summary, and the fixflow engine behind the lint-fixer and

@@ -10,7 +10,7 @@
  * no-op and nothing about the running service changes.
  *
  * Deterministic tooling — it imports no agent packages, and only config reads the OTEL_*
- * environment (this package takes a typed [Config]). See .agents/standards/observability.md.
+ * environment (this package takes a typed [Config]). See okf/standards/observability.md.
  */
 package com.automation.agent.obs
 

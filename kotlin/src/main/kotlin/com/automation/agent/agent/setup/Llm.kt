@@ -7,7 +7,7 @@ import com.automation.agent.config.Provider
 
 /**
  * The LLM provider switch. Agents depend only on the returned [Model] interface, so switching
- * providers is a config change, not a code change (see .agents/standards/architecture-design.md §4). This is the only
+ * providers is a config change, not a code change (see okf/standards/architecture-design.md §4). This is the only
  * package permitted to import provider SDKs — enforced by the :konsist arch rules.
  *
  * No `context` is threaded: ADK-Kotlin is coroutine-based, so cancellation rides on the calling

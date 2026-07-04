@@ -1,45 +1,75 @@
-"""AGENTS.md-presence conformance test.
+"""OKF bundle conformance tests.
 
-Every meaningful directory must carry an ``AGENTS.md``. ``specs/`` and hidden
-dirs (except ``.agents``) are exempt, as are an agent's content subdirs
-(``prompts``/``models``/``tasks``/``testdata``) and Python build artifacts.
+The system's knowledge lives in the repo-root ``okf/`` bundle (Open Knowledge Format).
+These tests are the bundle's structural gate: every concept opens with YAML frontmatter
+declaring a non-empty ``type``, every directory carries an ``index.md``, every
+bundle-absolute link resolves, and the repo-root ``AGENTS.md`` still points at the
+bundle index. Structure only, never content.
 """
 
 from __future__ import annotations
 
 import os
+import re
+
+_TYPE_LINE = re.compile(r"^type:\s*\S", re.MULTILINE)
+_ABS_LINK = re.compile(r"\]\((/[^)#]+\.md)(?:#[^)]*)?\)")
+_RESERVED = {"index.md", "log.md", "AGENTS.md"}
 
 
-def _skip_doc_dir(base: str) -> bool:
-    if base in {
-        ".git",
-        ".claude",
-        "node_modules",
-        "vendor",
-        "specs",
-        ".venv",
-        "__pycache__",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".mypy_cache",
-        "automation_agent.egg-info",
-    }:
-        return True
-    # Content subdirs of an agent are documented by the agent's shared AGENTS.md.
-    if base in {"prompts", "models", "tasks", "testdata"}:
-        return True
-    # Hidden directories are exempt, except the .agents open-standard dir.
-    return base.startswith(".") and base != ".agents"
+def _okf_root(archlib) -> str:
+    root = os.path.normpath(os.path.join(archlib.repo_root(), "..", "okf"))
+    assert os.path.isdir(root), f"okf bundle missing at {root}"
+    return root
 
 
-def test_every_dir_has_agents_doc(archlib) -> None:
-    root = archlib.repo_root()
+def _md_files(root: str):
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            if name.endswith(".md"):
+                yield os.path.join(dirpath, name), name
+
+
+def test_okf_concepts_have_frontmatter_type(archlib) -> None:
+    bad: list[str] = []
+    for path, name in _md_files(_okf_root(archlib)):
+        if name in _RESERVED:
+            continue
+        with open(path, encoding="utf-8") as f:
+            body = f.read()
+        if not body.startswith("---\n"):
+            bad.append(f"{path}: missing frontmatter block")
+            continue
+        end = body.find("\n---", 4)
+        if end < 0:
+            bad.append(f"{path}: frontmatter block not closed")
+            continue
+        if not _TYPE_LINE.search(body[4:end]):
+            bad.append(f"{path}: frontmatter missing required non-empty type field")
+    assert bad == []
+
+
+def test_okf_every_dir_has_index(archlib) -> None:
     missing: list[str] = []
-    for dirpath, dirnames, _ in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not _skip_doc_dir(d)]
-        if not os.path.exists(os.path.join(dirpath, "AGENTS.md")):
-            r = os.path.relpath(dirpath, root)
-            missing.append("(root)" if r == "." else r)
-        if os.path.basename(dirpath) == ".agents":
-            dirnames[:] = []
-    assert not missing, "missing AGENTS.md in: " + ", ".join(missing)
+    for dirpath, _, filenames in os.walk(_okf_root(archlib)):
+        if "index.md" not in filenames:
+            missing.append(dirpath)
+    assert missing == []
+
+
+def test_okf_bundle_links_resolve(archlib) -> None:
+    root = _okf_root(archlib)
+    dangling: list[str] = []
+    for path, _ in _md_files(root):
+        with open(path, encoding="utf-8") as f:
+            body = f.read()
+        for link in _ABS_LINK.findall(body):
+            if not os.path.isfile(os.path.join(root, link.lstrip("/"))):
+                dangling.append(f"{path}: {link}")
+    assert dangling == []
+
+
+def test_root_agents_doc_points_at_bundle(archlib) -> None:
+    p = os.path.normpath(os.path.join(archlib.repo_root(), "..", "AGENTS.md"))
+    with open(p, encoding="utf-8") as f:
+        assert "okf/index.md" in f.read()

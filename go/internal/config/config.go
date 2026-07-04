@@ -1,6 +1,6 @@
 // Package config loads the automation-agent runtime configuration from the
 // environment. It is the single source of truth for settings; no other package
-// should read os.Getenv directly. See .agents/standards/architecture-design.md §12.
+// should read os.Getenv directly. See okf/standards/architecture-design.md §12.
 package config
 
 import (
@@ -188,7 +188,7 @@ type Config struct {
 	// "none" the obs package installs nothing, so tracing changes nothing until an
 	// environment opts in. The agent framework emits a native GenAI span tree; obs registers
 	// the provider/exporter and propagates context. See
-	// .agents/standards/observability.md.
+	// okf/standards/observability.md.
 	//
 	// OTELTracesExporter selects the sink: none (no-op) | console (stdout) | otlp (any
 	// OTLP-native backend or a Collector) | gcp (Cloud Trace via ADC). The app names no
@@ -703,7 +703,7 @@ const (
 	// pattern with no '/' matches the basename; one with '/' matches the full path.
 	defaultReviewStandardsGlobs = "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md," +
 		".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md," +
-		".windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md," +
+		".windsurfrules,.windsurf/rules/**,.agents/standards/**,okf/standards/**,CONTRIBUTING.md," +
 		".editorconfig,.golangci.yml,.golangci.yaml"
 
 	// defaultReviewStandardsMaxBytes caps the total standards-doc bytes fed to the distiller.

@@ -1,7 +1,7 @@
 """Runtime configuration for automation-agent, loaded from the environment.
 
 This module is the single source of truth for settings; no other module should
-read ``os.environ`` directly. See ``.agents/standards/architecture-design.md`` §12.
+read ``os.environ`` directly. See ``okf/standards/architecture-design.md`` §12.
 """
 
 from __future__ import annotations
@@ -85,14 +85,14 @@ DEFAULT_REVIEW_EXCLUDE_GLOBS = (
 DEFAULT_REVIEW_STANDARDS_GLOBS = (
     "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,GEMINI.md,**/GEMINI.md,"
     ".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md,"
-    ".windsurfrules,.windsurf/rules/**,.agents/standards/**,CONTRIBUTING.md,"
+    ".windsurfrules,.windsurf/rules/**,.agents/standards/**,okf/standards/**,CONTRIBUTING.md,"
     ".editorconfig,.golangci.yml,.golangci.yaml"
 )
 
 
 # Trace exporter values for otel_traces_exporter. The app speaks exactly these four sinks and
 # never names a vendor; any OTLP-native backend is otlp + an endpoint. See obs and
-# .agents/standards/observability.md.
+# okf/standards/observability.md.
 OTEL_EXPORTER_NONE = "none"
 OTEL_EXPORTER_CONSOLE = "console"
 OTEL_EXPORTER_OTLP = "otlp"
@@ -238,7 +238,7 @@ class Config:
     # otel_traces_exporter=none nothing is registered and the service is unchanged. The agent
     # framework already emits a native span tree; setting an exporter turns it on. Owned here
     # (the single place that reads OTEL_*) and handed to obs as a typed struct. See obs and
-    # .agents/standards/observability.md.
+    # okf/standards/observability.md.
     # otel_traces_exporter selects the sink: none | console | otlp | gcp.
     otel_traces_exporter: str = OTEL_EXPORTER_NONE
     # otel_traces_exporter_set records whether OTEL_TRACES_EXPORTER was explicitly provided in

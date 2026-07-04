@@ -1,7 +1,7 @@
 /*
  * Package ingest defines the normalized event envelope that every ingress source (Cloud
  * Scheduler, webhooks, and future hooks like GitHub/Jira/Confluence) is reduced to before
- * being handed to the root agent. See ../.agents/standards/architecture-design.md §2.
+ * being handed to the root agent. See ../okf/standards/architecture-design.md §2.
  */
 package com.automation.agent.ingest
 

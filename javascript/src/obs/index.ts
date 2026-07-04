@@ -7,7 +7,7 @@
  * registers a tracer provider + exporter once at startup. This package is that registration, plus
  * the propagation and flush plumbing that stitches the trace across the Cloud Tasks boundary. Off
  * by default (`OTEL_TRACES_EXPORTER=none`). Deterministic tooling — no agent imports; only `config`
- * reads `OTEL_*`. See `.agents/standards/observability.md`.
+ * reads `OTEL_*`. See `okf/standards/observability.md`.
  */
 
 export { parseOtlpHeaders, newExporter } from './exporters';
