@@ -25,6 +25,16 @@ Before non-trivial work in an area, read its concept:
 
 Ops runbook (env, GCP setup, `/internal/*` hooks): `DEPLOYMENT.md`.
 
+## Skills — how work is done here
+
+Reusable procedures live in `.agents/skills/<name>/SKILL.md` (described in
+[`okf/tooling/skills.md`](okf/tooling/skills.md)). The workflow they encode:
+requirements → `/ac-to-spec` (or `/reverse-spec` from code, `/grill-me` on stale specs)
+→ implementation (`/add-workflow-agent`, `/add-platform-package`, `/update`, `/migrate`)
+→ `/verify` + `/run-firestore-tests` → `/update-okf` (knowledge moves with
+the change) → `/review-branch`. `/summarize` gives briefings from the bundle. Prefer a
+skill over improvising its procedure.
+
 ## Must obey (un-skippable)
 
 These are enforced by architecture tests and review; violating any of them fails the

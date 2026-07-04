@@ -3,7 +3,7 @@
 // frontmatter declaring a non-empty type, every directory carries an index.md, every
 // bundle-absolute link resolves, and the repo-root AGENTS.md points at the bundle index.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { repoRoot } from './helpers';
@@ -72,6 +72,32 @@ describe('okf bundle', () => {
         }
       }
     }
+    expect(dangling).toEqual([]);
+  });
+
+  it('skill knowledge citations resolve', () => {
+    const root = join(repoRoot(), '..');
+    const skills = join(root, '.agents', 'skills');
+    if (!existsSync(skills)) return;
+    const dangling: string[] = [];
+    const walkSkills = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walkSkills(p);
+        } else if (entry.name === 'SKILL.md') {
+          const body = readFileSync(p, 'utf8');
+          for (const m of body.matchAll(/okf\/[A-Za-z0-9._/-]+\.md/g)) {
+            // A citation must stay inside the bundle — okf/../x.md is not a concept.
+            const target = resolve(root, m[0]);
+            if (!target.startsWith(resolve(root, 'okf') + sep) || !existsSync(target)) {
+              dangling.push(`${p}: ${m[0]}`);
+            }
+          }
+        }
+      }
+    };
+    walkSkills(skills);
     expect(dangling).toEqual([]);
   });
 
