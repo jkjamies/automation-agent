@@ -72,6 +72,31 @@ def test_okf_bundle_links_resolve(archlib) -> None:
     assert dangling == []
 
 
+def test_okf_skill_citations_resolve(archlib) -> None:
+    """Every knowledge citation in a skill file (.agents/skills/**/SKILL.md) points at a
+    concept that exists — the skills→knowledge edge is one-way and machine-checked."""
+    root = os.path.normpath(os.path.join(archlib.repo_root(), ".."))
+    skills = os.path.join(root, ".agents", "skills")
+    if not os.path.isdir(skills):
+        return
+    cite = re.compile(r"okf/[A-Za-z0-9._/-]+\.md")
+    dangling: list[str] = []
+    for dirpath, _, filenames in os.walk(skills):
+        for name in filenames:
+            if name != "SKILL.md":
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf-8") as f:
+                body = f.read()
+            bundle = os.path.join(root, "okf") + os.sep
+            for m in cite.findall(body):
+                target = os.path.normpath(os.path.join(root, m))
+                # A citation must stay inside the bundle — okf/../x.md is not a concept.
+                if not target.startswith(bundle) or not os.path.isfile(target):
+                    dangling.append(f"{path}: {m}")
+    assert dangling == []
+
+
 def test_okf_root_agents_doc_points_at_bundle(archlib) -> None:
     p = os.path.normpath(os.path.join(archlib.repo_root(), "..", "AGENTS.md"))
     with open(p, encoding="utf-8") as f:

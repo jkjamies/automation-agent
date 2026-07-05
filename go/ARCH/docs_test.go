@@ -107,6 +107,45 @@ func TestOKFBundleLinksResolve(t *testing.T) {
 	}
 }
 
+// TestOKFSkillCitationsResolve asserts every knowledge citation in a skill file
+// (.agents/skills/**/SKILL.md) points at a concept that exists — the skills→knowledge
+// edge is one-way and machine-checked, never hand-maintained.
+func TestOKFSkillCitationsResolve(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	skills := filepath.Join(root, ".agents", "skills")
+	if _, statErr := os.Stat(skills); statErr != nil {
+		t.Skipf("no skills directory: %v", statErr)
+	}
+	cite := regexp.MustCompile(`okf/[A-Za-z0-9._/-]+\.md`)
+	err = filepath.WalkDir(skills, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(p) != "SKILL.md" {
+			return err
+		}
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		for _, m := range cite.FindAllString(string(b), -1) {
+			target := filepath.Clean(filepath.Join(root, filepath.FromSlash(m)))
+			// A citation must stay inside the bundle — okf/../elsewhere.md is not a concept.
+			if !strings.HasPrefix(target, filepath.Join(root, "okf")+string(filepath.Separator)) {
+				t.Errorf("%s: knowledge citation %s escapes the bundle", p, m)
+				continue
+			}
+			if _, statErr := os.Stat(target); statErr != nil {
+				t.Errorf("%s: knowledge citation %s does not resolve", p, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+}
+
 // TestOKFRootAgentsDocPointsAtBundle asserts the repo-root AGENTS.md (the one auto-loaded
 // discovery surface) still points agents at the bundle's index.
 func TestOKFRootAgentsDocPointsAtBundle(t *testing.T) {
