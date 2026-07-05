@@ -17,15 +17,14 @@ These are binding review criteria.
 ## Where knowledge lives
 
 - **This bundle (`okf/`) is the canonical home of system knowledge** — orientation,
-  standards, decisions, module concepts (agents / platform / ports), and tooling.
-  Concepts are self-contained: they carry the knowledge; they never defer to a source
-  file for it. The format itself (frontmatter schema, type taxonomy, timestamp
-  semantics, link convention) is specified in [OKF format](/standards/okf-format.md).
-- **Decision records (`decisions/`) are the durable home for *why*.** Specs are
-  gitignored and disposable; a load-bearing choice a spec locked graduates into a
-  decision record (context → decision → consequences) before the spec dies, with
-  lifecycle (`accepted`/`superseded`) in frontmatter — never as status language in the
-  body.
+  standards, module concepts (agents / platform / ports), and tooling. Concepts are
+  self-contained: they carry the knowledge; they never defer to a source file for it.
+  The format itself (frontmatter schema, type taxonomy, timestamp semantics, link
+  convention) is specified in [OKF format](/standards/okf-format.md).
+- **Rationale lives with the facts it justifies.** A load-bearing choice gets a short
+  *Why* in its owning concept — the constraint that forced it and the alternatives
+  rejected. Specs are gitignored and disposable: a choice a spec grilled and locked
+  graduates into the owning concept's *Why* before the spec dies.
 - **The repo-root `AGENTS.md` is the discovery surface**: the auto-loaded guardrail
   sheet plus deep pointers into this bundle. It carries only the un-skippable
   constraints and the map; narrative belongs here, not there.

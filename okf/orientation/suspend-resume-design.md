@@ -48,7 +48,11 @@ behavior — park, resume by webhook, retry cap, timeout — is identical.
 
 Two provider-switched stores, both selected by one `SESSION_BACKEND` env
 (`memory` | `sqlite` | `firestore`), both confined to the
-[setup package](/modules/agents/setup.md):
+[setup package](/modules/agents/setup.md). Firestore is the cloud backend because it
+matches the service's shape — serverless, per-operation billing, idles at zero alongside
+scale-to-zero Cloud Run, and the ADK session model maps onto it directly; a managed
+agent runtime backed by a relational store was rejected as an always-provisioned
+footprint for a workload that idles most of the day.
 
 - The **ADK session service** — the paused run's event history, from which the engine
   reconstructs graph state on resume. `firestore` is the cloud path (a custom

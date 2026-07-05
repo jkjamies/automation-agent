@@ -16,8 +16,6 @@ Before non-trivial work in an area, read its concept:
 - What the system is & how events flow → [`okf/orientation/`](okf/orientation/index.md)
 - Rules every change obeys (parity, testing, style, docs, security, webhooks…) →
   [`okf/standards/`](okf/standards/index.md)
-- Why a load-bearing choice was made (parity pairs, transport, sessions, auth, model
-  provider) → [`okf/decisions/`](okf/decisions/index.md)
 - A specific agent/workflow (fixflow, reviewer, summary, dispatcher, setup) →
   [`okf/modules/agents/`](okf/modules/agents/index.md)
 - A platform package (config, githubapi, gitrepo, ingest, webhook, notify, obs, tasks,

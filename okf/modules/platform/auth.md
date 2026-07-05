@@ -52,6 +52,16 @@ flowchart TD
   `Authorization: Bearer <token>` on a clone of each request (an empty token is
   left unauthenticated). The provider's cache means this stays cheap.
 
+## Why an App, and why one pinned installation
+
+A PAT is a broad, non-expiring credential tied to a person — kept only as the local-dev
+fallback. App installation tokens are org-scoped, short-lived, and self-rotating, and
+revoking the App revokes everything at once. Pinning **one installation per deployment**
+is the deliberate simplification behind the seam: each deployment serves a single
+GitHub org, so there is no per-owner token cache and no dynamic `repo → installation`
+resolution to get wrong — serving another org means another deployment, not a smarter
+cache.
+
 Mode selection and PEM/env handling live in [config](/modules/platform/config.md)
 (not here): this package only consumes already-resolved app id / installation id /
 private-key bytes / PAT. Git operations consume the same seam via

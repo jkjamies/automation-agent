@@ -46,10 +46,10 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
 - **Bump the concept's `timestamp`** (last material update, per
   okf/standards/okf-format.md) whenever the body changes meaning; cosmetic fixes don't
   bump it.
-- If the change implements a choice a spec grilled and locked, record it as
-  `okf/decisions/<slug>.md` (context → decision → consequences) **before the spec is
-  discarded**; a replaced decision gets `status: superseded` in frontmatter and a link
-  to its successor — its rationale is never rewritten away.
+- If the change implements a choice a spec grilled and locked, capture the *why*
+  (the forcing constraint + the alternatives rejected) as a short **Why** section in
+  the owning concept **before the spec is discarded** — rationale lives with the facts
+  it justifies.
 - If the concept's one-line `description` changed meaning, update it **and** the matching
   entry in its directory `index.md`.
 - New unit (agent/package/port)? Create the concept with the house frontmatter (`type`,

@@ -14,10 +14,6 @@ of one design. New here? Start with
 
 * [standards](standards/index.md) - The rules every change obeys: architecture boundaries, language parity, testing, style, documentation, security, webhooks, observability, CI integration, deployment, and local development.
 
-# Decisions
-
-* [decisions](decisions/index.md) - Why the load-bearing choices were made — parity pairs, execution transport, durable sessions, model provider, GitHub App auth, and the knowledge bundle itself.
-
 # Modules
 
 * [modules](modules/index.md) - The system's units: workflow agents, deterministic platform packages, and the four language ports.

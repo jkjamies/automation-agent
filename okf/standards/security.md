@@ -19,7 +19,7 @@ from package docs. External contracts here bind **all four ports**.
 | Surface | Guard | Detail |
 |---|---|---|
 | `POST /webhooks/*` | **HMAC** `X-Hub-Signature-256` (`GITHUB_WEBHOOK_SECRET`) | Verified on every webhook POST when the secret is set — including the `/webhooks/lint` and `/webhooks/coverage` kickoffs, because a kickoff selects a **caller-supplied target repo**. Bad/missing signature → 401. See [HTTP ingress](/modules/platform/webhook.md). |
-| `POST /internal/*` | **Bearer** (`INTERNAL_TOKEN`) | Cloud Scheduler (cron, sweep) and the Cloud Tasks worker (`/internal/dispatch`) present the shared bearer; the endpoints are **disabled (404)** unless the token is set. Bearer-not-OIDC is a recorded trade-off with an upgrade path — see [Deployment](/standards/deployment.md) and [GitHub App auth & native triggers](/decisions/github-app-auth-and-native-triggers.md). |
+| `POST /internal/*` | **Bearer** (`INTERNAL_TOKEN`) | Cloud Scheduler (cron, sweep) and the Cloud Tasks worker (`/internal/dispatch`) present the shared bearer; the endpoints are **disabled (404)** unless the token is set. Bearer-not-OIDC is a recorded trade-off with an upgrade path — see [Deployment](/standards/deployment.md). |
 | `GET /healthz` | none | liveness only. |
 
 A single generic managed **API gateway** fronts Cloud Run (authn, rate-limit, routing);

@@ -15,6 +15,18 @@ Shared utilities for building agents. **This is the only package allowed to impo
 
 It owns three provider-switched seams, each built once at startup: the LLM (`BuildLLM`), selected by `LLM_PROVIDER` (`ollama` | `gemini`); and the ADK `session.Service` (`NewSessionService`) plus the `ParkStore` (`NewParkStore`), both selected by `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`).
 
+## Why one builder, two providers
+
+Local development runs free and offline on Ollama + Gemma; production runs Gemma
+through the native Gemini client on Vertex (a trivial env override targets AI Studio
+instead), so there is no GPU VM to operate and the model scales to zero with the
+service. A proxy or compatibility shim between the app and the model was rejected: it
+adds a hop and a deployment, and translates tool calls lossily, while the `BuildLLM`
+seam already makes switching providers a config change rather than a code change.
+Model sizing splits by task: code reasoning and code changes use the larger code model
+(`OLLAMA_CODE_MODEL`, 26 B class); summarization and lighter reasoning use the base
+model (`OLLAMA_MODEL`, 12 B class).
+
 ## Flow
 
 ```mermaid

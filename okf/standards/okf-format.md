@@ -23,7 +23,6 @@ One directory per layer, each with an `index.md` for progressive disclosure:
 |---|---|---|
 | `orientation/` | what the system is, how events flow, the glossary | `Architecture`, `Reference` |
 | `standards/` | the rules every change obeys | `Standard`, `Architecture` |
-| `decisions/` | why load-bearing choices were made | `Decision` |
 | `modules/agents/` | the workflow agents + the setup layer | `Agent`, `Workflow` |
 | `modules/platform/` | the deterministic platform packages | `Platform-Package` |
 | `modules/ports/` | the four language ports | `Port` |
@@ -53,10 +52,8 @@ Optional fields:
 | Field | Meaning |
 |---|---|
 | `resource` | repo-relative path of the unit this concept documents (reference-port path for module concepts); must exist |
-| `status` | **Decision concepts only**: `accepted` or `superseded` (link the successor from the body). Lifecycle lives here, never in the body |
-| `decided` | **Decision concepts only**: the date the decision was made |
 
-**Type taxonomy**: `Architecture`, `Standard`, `Decision`, `Agent`, `Workflow`,
+**Type taxonomy**: `Architecture`, `Standard`, `Agent`, `Workflow`,
 `Platform-Package`, `Port`, `Tooling`, `Reference`. Adding a new type is a deliberate
 act: define it here first.
 
@@ -66,15 +63,17 @@ act: define it here first.
   for it ("see the code" is not a concept).
 - **Factual, present-tense**: describe how the system works now — no migration status,
   no "done/pending/Phase X" (see [Documentation & diagrams](/standards/documentation.md)).
-  Decision records state context and consequences; their lifecycle is frontmatter.
+- **Rationale is part of the fact**: a load-bearing choice gets a short *Why* in its
+  owning concept — the constraint that forced it and the alternatives rejected — so the
+  reasoning survives the disposable spec where it was argued.
 - **Links are bundle-absolute** — `[ingest](/modules/platform/ingest.md)` resolves from
   the bundle root. This is the house convention and the form the conformance tests
   validate; anchors (`#…`) are content and not validated.
 - **No skill references** in concepts — skills cite the bundle one-way; the single
   exception is [Agent skills](/tooling/skills.md), which describes the skills system.
 - **No `specs/` references** — specs are gitignored dev memory
-  ([Specs & templates](/tooling/specs-and-templates.md)); a decision a spec locked that
-  must outlive it becomes a `decisions/` record.
+  ([Specs & templates](/tooling/specs-and-templates.md)); a choice a spec locked that
+  must outlive it is captured in the owning concept's *Why*.
 - **Every concept has an index entry** in its directory's `index.md`, and a material
   add/remove/rewrite gets a dated `log.md` entry.
 
