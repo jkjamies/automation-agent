@@ -22,19 +22,19 @@ class DocsTest : BehaviorSpec({
         root.walkTopDown().filter { it.isFile && it.extension == "md" }.toList()
 
     Given("the okf bundle") {
-        val concepts = markdownFiles(okfRoot)
+        val allDocs = markdownFiles(okfRoot)
+        val conceptDocs = allDocs.filter { it.name !in reserved }
 
         When("scanning the bundle") {
             Then("the scan actually found concept documents") {
-                // Guard against a vacuous pass if the bundle walk found nothing.
-                concepts.isNotEmpty().shouldBeTrue()
+                // Guard against a vacuous pass if the bundle walk found no real concepts.
+                conceptDocs.isNotEmpty().shouldBeTrue()
             }
         }
 
         When("checking concept frontmatter") {
             val typeLine = Regex("(?m)^type:\\s*\\S")
-            val bad = concepts
-                .filter { it.name !in reserved }
+            val bad = conceptDocs
                 .mapNotNull { f ->
                     val body = f.readText()
                     if (!body.startsWith("---\n")) return@mapNotNull "${f.path}: missing frontmatter block"
@@ -63,8 +63,9 @@ class DocsTest : BehaviorSpec({
 
         When("resolving bundle-absolute links") {
             // Anchor existence inside the target is content, not structure — not validated.
+            // Reserved files (indexes) are scanned too: their links must resolve as well.
             val link = Regex("]\\((/[^)#]+\\.md)(?:#[^)]*)?\\)")
-            val dangling = concepts.flatMap { f ->
+            val dangling = allDocs.flatMap { f ->
                 link.findAll(f.readText())
                     .map { it.groupValues[1] }
                     .filter { !File(okfRoot, it).isFile }
