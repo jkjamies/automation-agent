@@ -1,6 +1,6 @@
 """Firestore-backed park store — the serverless, scale-to-zero cloud backend.
 
-Mirrors the Go reference (``parkstore_firestore.go``) on the native async Firestore client.
+Built on the native async Firestore client.
 The park record is *our* app concept (no ADK type), so unlike the session service — which
 uses adk's native ``FirestoreSessionService`` — this store is hand-rolled on
 ``google.cloud.firestore.AsyncClient``.

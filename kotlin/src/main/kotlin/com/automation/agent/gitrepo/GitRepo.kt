@@ -116,7 +116,7 @@ class Repo internal constructor(
      * Pushes the current branch to origin. An up-to-date push is not an error. The https token is
      * re-resolved here (not reused from clone) so a fresh, repo-scoped token authenticates the push
      * even if the clone-time token has since expired; JGit supplies it as in-memory transport auth,
-     * so the credential never lands in `.git/config` (matching the Go reference).
+     * so the credential never lands in `.git/config`.
      */
     suspend fun push() = withContext(Dispatchers.IO) {
         val cmd = git.push()
@@ -149,7 +149,7 @@ class Repo internal constructor(
          * and uses ssh-agent / [Auth.sshKey] / the default identity files, with `known_hosts`
          * verification on. A plaintext `http://` remote is refused (token leak). The token is given as
          * in-memory transport auth, never embedded in the remote URL, so it never lands in
-         * `.git/config` (matching the Go reference).
+         * `.git/config`.
          */
         suspend fun clone(url: String, dir: String, auth: Auth = Auth()): Repo =
             withContext(Dispatchers.IO) {

@@ -74,8 +74,8 @@ def encode(e: Envelope) -> bytes:
     """
     if not e.kind.valid():
         raise ValueError(f"ingest: unknown kind {e.kind!r}")
-    # Match the Go reference byte-for-byte: a UTC instant serializes with a trailing "Z"
-    # (Go's time.Time RFC 3339), not Python's default "+00:00".
+    # The cross-port wire contract is byte-for-byte: a UTC instant serializes with a
+    # trailing "Z" (RFC 3339), not Python's default "+00:00".
     received_at = e.received_at.isoformat()
     if received_at.endswith("+00:00"):
         received_at = received_at[:-6] + "Z"

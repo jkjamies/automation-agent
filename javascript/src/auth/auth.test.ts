@@ -2,9 +2,9 @@
  * Tests for the auth seam (TokenProvider).
  *
  * StaticProvider needs no network. AppProvider is exercised against a localhost stub of the
- * GitHub installation token-exchange endpoint (the analog of the Go reference's `httptest`
- * stub): a throwaway RSA key signs the App JWT, and the stub captures it to assert RS256 /
- * issuer / the pinned-installation path, plus caching and refresh. No live network, no LLM.
+ * GitHub installation token-exchange endpoint: a throwaway RSA key signs the App JWT, and
+ * the stub captures it to assert RS256 / issuer / the pinned-installation path, plus
+ * caching and refresh. No live network, no LLM.
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';

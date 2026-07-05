@@ -115,7 +115,7 @@ class MemoryParkStore(ParkStore):
     The whole driver runs in one asyncio event loop, so there is no preemption between the
     index lookup and the claim — :meth:`resolve_by_pr_key`/:meth:`sweep` are naturally
     atomic without a lock. Records are copied in and out so a caller mutating a returned
-    record cannot corrupt stored state (value semantics, mirroring the Go reference).
+    record cannot corrupt stored state (value semantics).
     """
 
     def __init__(self) -> None:

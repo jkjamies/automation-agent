@@ -12,8 +12,8 @@
  *     single pinned installation (single-org per deployment). The `repo` argument is accepted for the
  *     contract but ignored: one installation covers every repo in the deployment.
  *
- * Unlike the Go (ghinstallation), Python (PyGithub) and JS (@octokit/auth-app) ports, the JVM has
- * no off-the-shelf installation-token library, so [AppProvider] hand-rolls the App flow: it signs an
+ * The JVM has no off-the-shelf installation-token library, so [AppProvider] hand-rolls the App
+ * flow: it signs an
  * RS256 JWT with the App private key (java.security), exchanges it at
  * POST /app/installations/{id}/access_tokens for an installation token, and caches that token,
  * refreshing it shortly before expiry. The external contract (env vars, mode selection,
@@ -237,9 +237,8 @@ fun newAppProvider(
 /**
  * Parses [pem] into an RSA private key, accepting both PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`,
  * the shape GitHub hands out) and PKCS#8 (`-----BEGIN PRIVATE KEY-----`) via Bouncy Castle. Throws
- * [IllegalArgumentException] if the PEM does not parse or is not an RSA key — the JVM analogue of the
- * Go reference's x509 PKCS#1/PKCS#8 validation, failing fast at startup rather than cryptically at
- * the first token exchange.
+ * [IllegalArgumentException] if the PEM does not parse or is not an RSA key — failing fast at
+ * startup rather than cryptically at the first token exchange.
  */
 fun parseRsaPrivateKey(pem: String): RSAPrivateKey {
     val obj = try {

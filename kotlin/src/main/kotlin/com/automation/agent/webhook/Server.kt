@@ -28,7 +28,7 @@ import kotlinx.io.readByteArray
 import java.lang.System.Logger.Level
 import java.time.Instant
 
-/** The largest request body accepted on any webhook endpoint (matches the Go reference's 5 MiB). */
+/** The largest request body accepted on any webhook endpoint — 5 MiB, the cross-port contract. */
 private const val MAX_BODY_BYTES = 5 * 1024 * 1024
 
 /** Idle connections are closed after this many seconds, blunting slow-client (Slowloris) holds. */
@@ -157,9 +157,9 @@ fun Application.webhookRoutes(
 
 /**
  * Reads the request body, bounded at [MAX_BODY_BYTES]. Returns null when the body exceeds the cap,
- * so the caller can reply 413 — unlike the Go reference's `io.LimitReader`, an oversized body is
- * rejected outright rather than silently truncated (which would only fail HMAC later). Memory is
- * bounded: at most `MAX_BODY_BYTES + 1` bytes are ever read.
+ * so the caller can reply 413 — an oversized body is rejected outright rather than silently
+ * truncated (which would only fail HMAC later). Memory is bounded: at most `MAX_BODY_BYTES + 1`
+ * bytes are ever read.
  */
 /**
  * Verifies the request's HMAC signature when [secret] is set. With no secret (local dev only)

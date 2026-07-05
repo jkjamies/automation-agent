@@ -209,9 +209,9 @@ class Client(
     }
 
     init {
-        // Inject a fresh bearer token per request from the provider seam (the analogue of the Go
-        // reference's token-injecting RoundTripper). The provider caches/refreshes a short-lived App
-        // installation token, so this stays cheap; an empty token leaves the request anonymous.
+        // Inject a fresh bearer token per request from the provider seam. The provider
+        // caches/refreshes a short-lived App installation token, so this stays cheap; an empty
+        // token leaves the request anonymous.
         tokenSource?.let { source ->
             http.requestPipeline.intercept(HttpRequestPipeline.State) {
                 val token = source.token()
@@ -270,7 +270,7 @@ class Client(
         val resp =
             http.get(
                 // filter=latest: on a re-run, return only the most recent run per check name, so we
-                // never read a stale prior run (matches the Go reference's Filter: ptr("latest")).
+                // never read a stale prior run.
                 url("repos/$owner/$repo/commits/$ref/check-runs", "check_name" to checkName, "filter" to "latest"),
             ).orThrow()
         val dto = resp.body<CheckRunsDto>()

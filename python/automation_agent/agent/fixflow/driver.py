@@ -87,8 +87,8 @@ class RunParams:
     new_branch: bool = True  # True on kickoff (create from base); False on retry
 
     def to_json(self) -> str:
-        """Serialize the durable inputs. The key names match the Go reference's blob for
-        cross-port parity."""
+        """Serialize the durable inputs. The key names are the shared cross-port blob
+        schema."""
         return json.dumps(
             {
                 "owner": self.owner,
