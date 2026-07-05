@@ -1,11 +1,11 @@
 # automation-agent (Kotlin)
 
 Kotlin port of [`automation-agent`](../README.md), built on
-[ADK for Kotlin](https://github.com/google/adk-kotlin). The Go implementation at the repo
-root is the canonical reference; this port tracks it **1:1 in functionality**
+[ADK for Kotlin](https://github.com/google/adk-kotlin). The four ports share one design;
+this port and the TypeScript port are the feature-frozen pair
 (see [`../okf/standards/language-parity.md`](../okf/standards/language-parity.md)).
-Every package mirrors the Go reference, with tests, architecture conformance checks
-(`./gradlew arch`), and an 80% coverage floor (`./gradlew koverVerify`).
+Every package mirrors the shared architecture, with tests, architecture conformance
+checks (`./gradlew arch`), and an 80% coverage floor (`./gradlew koverVerify`).
 
 ## Requirements
 
@@ -15,15 +15,15 @@ Every package mirrors the Go reference, with tests, architecture conformance che
 ## Quick start
 
 ```bash
-cp ../.env.example .env    # same env vars as the Go reference
+cp ../.env.example .env    # same env vars as the other ports
 ./gradlew build            # compile + test
-./gradlew koverVerify      # 80% coverage gate (mirrors `make cover`)
-./gradlew run              # run the service (mirrors `make run`)
+./gradlew koverVerify      # 80% coverage gate
+./gradlew run              # run the service
 ```
 
 ## Design
 
-The architecture is identical to the Go reference and documented once, language-neutrally,
-in [`../okf/standards/architecture-design.md`](../okf/standards/architecture-design.md). This port mirrors its package
-structure, public surface, configuration, and external contracts. See [`AGENTS.md`](AGENTS.md)
-for the package map.
+The architecture is documented once, language-neutrally, in
+[`../okf/standards/architecture-design.md`](../okf/standards/architecture-design.md). This port mirrors its package
+structure, public surface, configuration, and external contracts. See
+[`../okf/modules/ports/kotlin.md`](../okf/modules/ports/kotlin.md) for the package map.

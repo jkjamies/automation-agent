@@ -24,6 +24,6 @@ How to restore if removal causes fallout.
 
 ## Checklist
 - [ ] No dangling imports/refs (`make build`, `make vet`)
-- [ ] `AGENTS.md` for removed dirs deleted
+- [ ] `okf/` concepts for removed units deleted + indexes updated (`/update-okf`)
 - [ ] `make ci` green
 - [ ] `okf/standards/architecture-design.md` updated

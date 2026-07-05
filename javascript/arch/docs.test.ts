@@ -58,7 +58,7 @@ describe('okf bundle', () => {
     expect(out.dirs.filter((d) => !existsSync(join(d, 'index.md')))).toEqual([]);
   });
 
-  it('bundle-absolute links resolve to files (anchors not validated 2014 content, not structure)', () => {
+  it('bundle-absolute links resolve to files (anchors not validated — content, not structure)', () => {
     const root = okfRoot();
     const out = { dirs: [], files: [] } as { dirs: string[]; files: string[] };
     walk(root, out);

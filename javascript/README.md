@@ -43,7 +43,9 @@ make playground           # local ADK web UI at http://localhost:8080 (dev only)
 | `src/{config,ingest}` | configuration + normalized event envelope |
 | `arch/` | architecture-conformance tests |
 
-Every directory carries an `AGENTS.md`; the arch suite enforces it.
+System knowledge lives in the repo-root [`okf/`](../okf/index.md) bundle; the arch
+suite enforces its conformance. See [`../okf/modules/ports/javascript.md`](../okf/modules/ports/javascript.md)
+for this port's concept.
 
 ## Toolchain
 

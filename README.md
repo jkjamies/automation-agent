@@ -107,7 +107,7 @@ OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
 |---|---|
 | `go/` | the canonical Go implementation (`cmd/`, `internal/`, `ARCH/`, `Makefile`) |
 | `kotlin/` · `python/` · `javascript/` | the sibling ports, each mirroring `go/` |
-| `.agents/` | standards, skills, and spec templates |
+| `.agents/` | skills and spec templates |
 | `specs/` | developer memory (gitignored) — created from `.agents/templates` |
 
 Inside `go/` (mirrored by each port):
