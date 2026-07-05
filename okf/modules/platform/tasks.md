@@ -24,7 +24,11 @@ On Cloud Run with request-based billing, CPU is throttled to near-zero once the 
 is sent. The old design ran each dispatch in a background task *after* the 202, so a
 long compute was starved and the instance could be reclaimed mid-run. Cloud Tasks is the
 primitive that fixes it: **durable retry with backoff**, **rate limiting** (the queue's
-`max-concurrent-dispatches`), and an **explicit in-request HTTP target**.
+`max-concurrent-dispatches`), and an **explicit in-request HTTP target**. The rejected
+alternatives: always-allocated CPU pays for idle capacity around a bursty workload, and
+a resident worker service reintroduces the always-on infrastructure the
+[suspend/resume design](/orientation/suspend-resume-design.md) exists to avoid. All
+workflows go through the transport uniformly — no per-workflow special-casing.
 
 ## Backends (config-switched via `TASKS_BACKEND`, like `SESSION_BACKEND`)
 

@@ -199,8 +199,7 @@ class GitHubApiTest : BehaviorSpec({
                 res.conclusion shouldBe "success"
                 res.outputText shouldBe "all checks passed"
                 // Assert the request filters by name AND filter=latest: without filter=latest GitHub
-                // returns every historical run per name and we could read a stale prior run (mirrors
-                // the Go reference's Filter: ptr("latest")).
+                // returns every historical run per name and we could read a stale prior run.
                 queries["check_name"] shouldBe "agent-lint-verify"
                 queries["filter"] shouldBe "latest"
 

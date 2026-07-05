@@ -1,7 +1,7 @@
-// Kotlin port of automation-agent. Mirrors the Go reference at the repo root 1:1 in
-// functionality (see ../okf/standards/language-parity.md). Built on ADK for Kotlin.
+// Kotlin port of automation-agent — one of four ports of a single shared design
+// (see ../okf/standards/language-parity.md). Built on ADK for Kotlin.
 //
-// This root project is the service module (mirrors Go cmd/ + internal/). Architecture
+// This root project is the service module (entrypoint + packages). Architecture
 // tests live in the separate :konsist module, run via `./gradlew arch`.
 plugins {
     kotlin("jvm") version "2.4.0"
@@ -25,7 +25,7 @@ repositories {
 }
 
 dependencies {
-    // Coroutines (the goroutine equivalent) + JSON (encoding/json equivalent).
+    // Coroutines + JSON serialization.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
@@ -77,7 +77,7 @@ dependencies {
     // the ADK span tree (which resolves GlobalOpenTelemetry) is exported instead of discarded. The
     // BOM aligns api/sdk/exporter/extension versions; the extension-kotlin bridge carries the OTel
     // Context across coroutine suspension (span parenting + the in-process trace passthrough). See
-    // obs/AGENTS.md and okf/standards/observability.md.
+    // okf/standards/observability.md.
     implementation(platform("io.opentelemetry:opentelemetry-bom:$otelVersion"))
     implementation("io.opentelemetry:opentelemetry-api")
     implementation("io.opentelemetry:opentelemetry-sdk")
@@ -148,6 +148,6 @@ kover {
 // Runs the Konsist checks in the :konsist module, independent of the unit-test run.
 tasks.register("arch") {
     group = "verification"
-    description = "Run Konsist architecture conformance tests (import boundaries + AGENTS.md presence)."
+    description = "Run Konsist architecture conformance tests (import boundaries + OKF bundle conformance)."
     dependsOn(":konsist:test")
 }

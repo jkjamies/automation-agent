@@ -19,6 +19,7 @@ describes it is updated in the same change — this skill is that step, made mec
 ## Reference knowledge
 
 - The rules this skill enforces: okf/standards/documentation.md
+- The format contract (frontmatter, types, timestamps, links): okf/standards/okf-format.md
 - Bundle structure and conventions: okf/index.md
 - The registry that must stay in lockstep with code: okf/standards/webhooks.md
 
@@ -42,6 +43,13 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
 - State the **new reality** factually — never "changed X to Y", never status language
   (per okf/standards/documentation.md).
 - Keep the body **self-contained** — no "see the repo file for details".
+- **Bump the concept's `timestamp`** (last material update, per
+  okf/standards/okf-format.md) whenever the body changes meaning; cosmetic fixes don't
+  bump it.
+- If the change implements a choice a spec grilled and locked, capture the *why*
+  (the forcing constraint + the alternatives rejected) as a short **Why** section in
+  the owning concept **before the spec is discarded** — rationale lives with the facts
+  it justifies.
 - If the concept's one-line `description` changed meaning, update it **and** the matching
   entry in its directory `index.md`.
 - New unit (agent/package/port)? Create the concept with the house frontmatter (`type`,

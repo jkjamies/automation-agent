@@ -45,8 +45,7 @@ export function newEnvelope(kind: Kind, source: string, payload: Buffer, at: Dat
  * Thrown by {@link decode} for a permanent (poison) body — a malformed payload, bad base64, or
  * unrecognized kind that a redelivery cannot fix. The Cloud Tasks worker catches *only* this type
  * to ack-and-drop a poison task, so an unexpected error (a genuine bug) surfaces as a retried 500
- * instead of being silently swallowed as a dropped task. (The typed-error analogue of Python's
- * `ValueError` and the Go reference's returned decode error.)
+ * instead of being silently swallowed as a dropped task.
  */
 export class DecodeError extends Error {
   constructor(message: string) {

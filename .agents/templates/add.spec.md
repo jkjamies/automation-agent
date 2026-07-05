@@ -14,7 +14,7 @@ The problem this solves / the value it adds.
 
 ## Design
 How it works. New packages/agents/tools, the ingest→root→workflow path it touches,
-and any new config/env. Note which `standards/` apply.
+and any new config/env. Note which `okf/standards/` apply.
 
 ## Test plan
 Unit tests and the coverage impact (must keep ≥80%). What fakes/stubs are needed.
@@ -24,7 +24,7 @@ No assertions on LLM output.
 How it ships and how to back it out if needed.
 
 ## Checklist
-- [ ] `AGENTS.md` added/updated for new dirs
+- [ ] `okf/` concept + directory index added/updated for new units (`/update-okf`)
 - [ ] ARCH boundaries respected (`make arch`)
 - [ ] `make ci` green
 - [ ] Prompts (if any) are markdown under `prompts/`

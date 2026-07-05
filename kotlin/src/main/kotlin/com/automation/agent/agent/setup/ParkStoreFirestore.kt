@@ -5,9 +5,9 @@
  * parked), so re-parking under a new key cannot leak a stale entry. The atomic claim
  * ([resolveByPrKey]) runs in a firestore transaction: of N concurrent resolvers the first to commit
  * clears `pr_key`; the others retry, re-read the cleared key, and find nothing — so exactly one
- * wins. Doc field names are snake_case to match the Go reference's schema. This file is exercised
+ * wins. Doc field names are snake_case — the shared cross-port store schema. This file is exercised
  * only under the firestore emulator (see the emulator-gated tests) and excluded from the coverage
- * floor. Mirrors the Go/JS firestore park stores.
+ * floor.
  */
 package com.automation.agent.agent.setup
 

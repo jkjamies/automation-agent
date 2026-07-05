@@ -12,7 +12,7 @@ of one design. New here? Start with
 
 # Standards
 
-* [standards](standards/index.md) - The rules every change obeys: architecture boundaries, language parity, testing, style, documentation, webhooks, observability, CI integration, deployment, and local development.
+* [standards](standards/index.md) - The rules every change obeys: architecture boundaries, language parity, testing, style, documentation, security, webhooks, observability, CI integration, deployment, and local development.
 
 # Modules
 

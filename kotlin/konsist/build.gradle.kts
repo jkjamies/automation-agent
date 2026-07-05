@@ -1,4 +1,4 @@
-// Dedicated architecture-conformance module. Mirrors the Go reference's ARCH/ package.
+// Dedicated architecture-conformance module: import boundaries + OKF bundle conformance.
 // Run via `./gradlew arch` (which wires `:konsist:test`); kept out of the service module's
 // unit-test run so architecture checks are a separate, explicit command.
 plugins {

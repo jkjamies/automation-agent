@@ -1,8 +1,7 @@
 /*
  * Package setup holds shared utilities for building agents. safeName lives here so the
  * workflow agents that derive an ADK sub-agent name from a repo or file path (fixflow
- * analyze, summary fetchers) share one implementation. Mirrors the Go reference's
- * setup.SafeName.
+ * analyze, summary fetchers) share one implementation.
  */
 package com.automation.agent.agent.setup
 

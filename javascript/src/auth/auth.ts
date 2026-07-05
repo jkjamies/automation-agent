@@ -23,11 +23,10 @@
  *     request; `token()` reads the cached token off the *same* Octokit auth hook, so REST
  *     and git share one cached installation token (no double mint).
  *
- * The Go reference bridges the seam to the REST client with a token-injecting
- * RoundTripper; Octokit already owns the REST client and its auth refresh (via the
- * auth-app strategy), so the idiomatic shape here is to let the provider hand back a ready
- * client. The external contract (env vars, mode selection, App-vs-PAT behavior) is
- * identical across ports.
+ * Octokit already owns the REST client and its auth refresh (via the auth-app strategy),
+ * so the idiomatic shape here is to let the provider hand back a ready client rather than
+ * inject a token per request. The external contract (env vars, mode selection,
+ * App-vs-PAT behavior) is identical across ports.
  *
  * Deterministic tooling — no agent imports (an arch test enforces this).
  */

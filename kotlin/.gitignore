@@ -2,7 +2,7 @@
 .gradle/
 build/
 
-# Local env & secrets (mirrors the Go reference's .gitignore)
+# Local env & secrets
 .env
 *.local
 

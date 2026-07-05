@@ -31,5 +31,5 @@ Per-step rollback, and the point of no return (if any).
 ## Checklist
 - [ ] Each step independently green under `make ci`
 - [ ] ARCH boundaries respected
-- [ ] `AGENTS.md` files moved/updated with the code
+- [ ] `okf/` concepts + diagrams moved/updated with the code (`/update-okf`)
 - [ ] `okf/standards/architecture-design.md` updated

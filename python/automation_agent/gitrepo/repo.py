@@ -146,7 +146,7 @@ class Repo:
 
         ``clone_from(env=...)`` scopes the ssh environment to the clone subprocess only, so
         it is persisted onto the returned repo's Git instance — a later :meth:`push` over
-        ssh then reuses the same key (mirroring the Go reference's per-repo auth).
+        ssh then reuses the same key.
         """
         auth = auth if auth is not None else Auth()
         token = _token_for(url, auth)
@@ -159,8 +159,7 @@ class Repo:
         if token:
             # Don't persist the credential: clone_from records the tokened URL as origin in
             # .git/config. Reset it to the clean URL; push() re-applies a fresh token only for
-            # the network op and strips it again, so the token never lingers on disk (matching
-            # the Go reference, which uses transport auth rather than an in-URL credential).
+            # the network op and strips it again, so the token never lingers on disk.
             try:
                 repo.remote("origin").set_url(url)
             except Exception as exc:  # noqa: BLE001

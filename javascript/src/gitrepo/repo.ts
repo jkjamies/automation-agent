@@ -176,8 +176,7 @@ export class Repo {
     const git = simpleGit(dir);
     // Don't persist the credential: git records the clone URL (which carries the token) as
     // the origin remote in .git/config, so reset it to the clean URL. The token is re-applied
-    // only for the network op in push() and stripped again, so it never lingers on disk —
-    // matching the Go reference, which supplies the token as transport auth, not in the URL.
+    // only for the network op in push() and stripped again, so it never lingers on disk.
     if (token) {
       try {
         await git.remote(['set-url', 'origin', url]);

@@ -45,7 +45,7 @@ def test_encode_decode_round_trip(payload: bytes) -> None:
 
 
 def test_encode_wire_shape() -> None:
-    # The wire form is byte-identical to the Go reference: compact separators (no spaces), a
+    # The wire form is byte-identical across ports: compact separators (no spaces), a
     # UTC instant spelled with a trailing "Z", and a standard-base64 payload ("hi" -> "aGk=").
     b = encode(new(Kind.LINT, "webhook:/lint", b"hi", datetime.fromtimestamp(0, tz=UTC)))
     text = b.decode()

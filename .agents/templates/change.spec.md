@@ -23,6 +23,6 @@ How to revert.
 
 ## Checklist
 - [ ] ARCH boundaries respected (`make arch`)
-- [ ] `AGENTS.md` updated if behavior/responsibility shifted
+- [ ] `okf/` concepts updated if behavior/responsibility shifted (`/update-okf`)
 - [ ] `make ci` green
 - [ ] `okf/standards/architecture-design.md` updated if the design changed

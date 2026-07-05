@@ -6,7 +6,7 @@
  * atomic claim ({@link FirestoreParkStore.resolveByPrKey}) runs in a firestore
  * transaction: of N concurrent resolvers the first to commit clears `pr_key`; the others
  * retry, re-read the cleared key, and find nothing — so exactly one wins. The doc field
- * names are snake_case to match the Go reference's schema.
+ * names are snake_case — the shared cross-port store schema.
  *
  * The `@google-cloud/firestore` client is heavy and only this backend needs it, so it is
  * loaded lazily through a real Node require when a store is constructed (the type side

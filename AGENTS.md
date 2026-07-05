@@ -14,7 +14,7 @@ Format: markdown concepts with YAML frontmatter, cross-linked). Start at
 Before non-trivial work in an area, read its concept:
 
 - What the system is & how events flow → [`okf/orientation/`](okf/orientation/index.md)
-- Rules every change obeys (parity, testing, style, docs, webhooks…) →
+- Rules every change obeys (parity, testing, style, docs, security, webhooks…) →
   [`okf/standards/`](okf/standards/index.md)
 - A specific agent/workflow (fixflow, reviewer, summary, dispatcher, setup) →
   [`okf/modules/agents/`](okf/modules/agents/index.md)

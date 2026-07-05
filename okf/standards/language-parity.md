@@ -38,6 +38,17 @@ Each language targets its **own native ADK**, so parity is **functional, not
 version-matched** — the ADKs are at different versions and expose different idiomatic
 APIs. The shared contract is the *agent topology and behavior*, not the SDK calls.
 
+## Why two pairs
+
+The ADKs diverged: only the Go and Python lines carry 2.x capabilities (graph
+workflows, request-input pause/resume). Four-way parity therefore capped the design at
+the least capable SDK and priced every change at four implementations plus four review
+passes. Splitting into pairs lets the modern pair carry the design forward at full SDK
+capability while the frozen pair — complete, tested, and proving the design on a second
+SDK generation — costs nothing to keep. Deleting the frozen ports was rejected for the
+same reason freezing is cheap: they still demonstrate the external contract is
+language-neutral.
+
 The language-neutral design lives in
 [Automation Agent — Architecture & Build Plan](/standards/architecture-design.md) and
 describes the modern pair. When the design and a port disagree, the design wins; when Go

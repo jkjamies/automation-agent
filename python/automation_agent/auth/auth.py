@@ -17,17 +17,16 @@ Each provider exposes two views of the same credential, one per consumer:
 
   * ``token(repo)`` — the raw token string the git transport embeds as
     ``x-access-token`` basic auth, re-fetched per git operation so a short-lived
-    installation token stays current (mirrors the Go reference, where gitrepo calls
-    ``Token`` per op).
+    installation token stays current.
   * ``github()`` — a ready PyGithub ``Github`` REST client. :class:`AppProvider` backs
     it with PyGithub's native ``AppInstallationAuth`` so the token auto-refreshes per
     request; the *same* underlying ``AppInstallationAuth`` backs ``token()``, so REST
     and git share one cached installation token (no double mint).
 
-The Go reference bridges the seam with a token-injecting ``http.RoundTripper`` plus a
-free ``Token`` call in gitrepo; PyGithub already owns the REST client and its auth
-refresh, so the idiomatic Python shape is to let the provider hand back a ready client.
-The external contract (env vars, mode selection, App-vs-PAT behavior) is identical.
+PyGithub already owns the REST client and its auth refresh, so the idiomatic Python
+shape is to let the provider hand back a ready client rather than inject a token per
+request. The external contract (env vars, mode selection, App-vs-PAT behavior) is
+identical across ports.
 
 Deterministic tooling — no agent imports.
 """

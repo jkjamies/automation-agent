@@ -52,19 +52,17 @@ class InProcess(
     // A burst blocks the enqueue caller (backpressure) instead of piling up detached coroutines. A
     // slot is taken by sending Unit and released by receiving — a Channel rather than a Semaphore so
     // the take can be raced against the close signal in a select (Semaphore.acquire has no select
-    // clause), mirroring the Go reference's select over its slot channel and its closed channel.
+    // clause).
     private val slots = Channel<Unit>(this.maxConcurrent)
     // Completed by close() to wake any enqueue caller parked waiting for a slot, so it fails promptly
-    // with TransportClosedException once shutdown starts rather than waiting for a later release (the
-    // Go reference races this as its closed channel inside Enqueue's select).
+    // with TransportClosedException once shutdown starts rather than waiting for a later release.
     private val closeSignal = CompletableDeferred<Unit>()
     // Owns the in-flight dispatch coroutines; close() drains them via the scope's children.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // Serializes the launch registration against close()'s drain snapshot. close() sets [closed]
     // and snapshots the children under this lock, and enqueue does its closed-recheck + launch
     // under it, so a launch either happens-before the snapshot (and is drained) or observes closed
-    // and backs out — it can never slip past the drain (the mutex mirrors the Go reference's lock
-    // serializing wg.Add against wg.Wait).
+    // and backs out — it can never slip past the drain.
     private val mutex = Mutex()
 
     @Volatile
@@ -87,8 +85,7 @@ class InProcess(
         // caller park — surface that so sustained saturation is observable rather than a silently
         // delayed webhook ACK, then wait for a slot but race the close signal so a parked caller
         // wakes promptly (with TransportClosedException) once shutdown begins, instead of waiting
-        // for a later release. This mirrors the Go reference selecting its slot channel against its
-        // closed channel.
+        // for a later release.
         if (slots.trySend(Unit).isFailure) {
             log.log(
                 Level.WARNING,
