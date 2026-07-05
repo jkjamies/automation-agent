@@ -50,3 +50,14 @@ timestamp: 2026-07-04T00:00:00Z
   advisory review.
 - **Spec (repo process)** — a design/intent document under `specs/` (gitignored dev
   memory). See [specs & templates](/tooling/specs-and-templates.md).
+- **Bundle (OKF)** — this `okf/` directory: the canonical knowledge for the system,
+  written as Open Knowledge Format concepts. Format contract:
+  [OKF format](/standards/okf-format.md).
+- **Concept** — one markdown file in the bundle: YAML frontmatter (`type`, fabric
+  fields) plus a self-contained, factual body.
+- **Decision record** — a `decisions/` concept capturing why a load-bearing choice was
+  made (context → decision → consequences); its lifecycle (`accepted`/`superseded`)
+  lives in frontmatter. See [decisions](/decisions/index.md).
+- **Conformance tests** — the per-port architecture-suite checks that gate the bundle's
+  structure (frontmatter `type`, per-directory `index.md`, resolving links and skill
+  citations, the root `AGENTS.md` pointer).

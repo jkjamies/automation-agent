@@ -10,6 +10,8 @@ the rest are focused contracts a change must not break.
 * [Testing](testing.md) - How to run every kind of test for each port and the rules they obey — 80% coverage, no LLM-content assertions, and stubbed networks.
 * [Go style](go-style.md) - Idiomatic Go conventions for the reference port — formatting, errors, naming, dependency injection, configuration, and context.
 * [Documentation & diagrams](documentation.md) - How the repo documents itself — the knowledge bundle, factual docs, and the rule that docs and diagrams move with the code in the same change.
+* [OKF format](okf-format.md) - The bundle's own format contract — layout, frontmatter schema, the type taxonomy, timestamp semantics, link convention, and the conformance floor.
+* [Security model](security.md) - The service's security controls in one view — ingress authentication per route class, credential lifecycle, secret storage, and input hardening.
 * [Webhooks & CI check names](webhooks.md) - The canonical registry of the agent's webhook routes and GitHub check_run names, which every port must match as an external contract.
 * [Observability](observability.md) - The distributed-tracing design — one globally registered tracer provider the agent framework inherits, four config-selected exporters, backend-aware propagation, and an in-request flush.
 * [CI integration](ci-integration.md) - How a CI pipeline on any tech stack kicks off the lint and coverage fixers and wires the verify checks that resume them.
