@@ -32,9 +32,6 @@ type ParkRecord struct {
 	ParkedAt time.Time // zero until parked; the sweep cutoff field
 }
 
-// Parked reports whether the record is currently parked awaiting CI.
-func (r ParkRecord) Parked() bool { return r.PRKey != "" }
-
 // ParkStore persists suspended fix runs so a resume — or, with a durable backend, a
 // process restart — can continue them. A record has two distinct lifetimes: the per-run
 // record (keyed by SessionID) lives for the whole multi-attempt run, while the PRKey index

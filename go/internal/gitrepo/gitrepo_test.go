@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,5 +268,92 @@ func TestCloneBadURL(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "nope")
 	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, "", Auth{}); err == nil {
 		t.Fatal("expected clone error for nonexistent source")
+	}
+}
+
+// seedRemoteWithBranch seeds a remote whose default branch is master and which also carries
+// `branch`, holding a file master does not — the marker that proves which ref was checked out.
+func seedRemoteWithBranch(t *testing.T, branch string) string {
+	t.Helper()
+	dir := seedRemote(t)
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open seeded remote: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branch), Create: true}); err != nil {
+		t.Fatalf("create %s: %v", branch, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("marker.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Commit("branch-only change", &git.CommitOptions{
+		Author: &object.Signature{Name: "seed", Email: "s@x", When: time.Unix(2, 0)},
+	}); err != nil {
+		t.Fatalf("commit on %s: %v", branch, err)
+	}
+	// Leave the remote's HEAD on master, so a clone that ignores the requested branch lands
+	// there — which is exactly what these tests are watching for.
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName("master")}); err != nil {
+		t.Fatalf("restore master: %v", err)
+	}
+	return dir
+}
+
+// Clone checks out the requested branch rather than the remote's default. The fixers depend
+// on this: the branch a fix is cut from must be the same ref its PR targets, or the PR
+// carries every commit between the two.
+func TestCloneChecksOutRequestedBranch(t *testing.T) {
+	remote := seedRemoteWithBranch(t, "develop")
+	work := filepath.Join(t.TempDir(), "w")
+
+	r, err := Clone(context.Background(), remote, work, "develop", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, err := os.Stat(r.Path("marker.txt")); err != nil {
+		t.Errorf("checkout is missing develop's marker file, so it landed on another branch: %v", err)
+	}
+	head, err := r.repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	if got := head.Name().Short(); got != "develop" {
+		t.Errorf("HEAD = %q, want develop", got)
+	}
+}
+
+// An empty branch keeps the remote's default — the behavior callers that just want HEAD rely on.
+func TestCloneEmptyBranchUsesRemoteDefault(t *testing.T) {
+	remote := seedRemoteWithBranch(t, "develop")
+	work := filepath.Join(t.TempDir(), "w")
+
+	r, err := Clone(context.Background(), remote, work, "", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, err := os.Stat(r.Path("marker.txt")); err == nil {
+		t.Error("an empty branch should follow the remote default (master), not develop")
+	}
+}
+
+// A branch that does not exist is an error naming the branch, not a silent fall back to the
+// default — falling back would branch the fix off the wrong ref.
+func TestCloneUnknownBranchErrors(t *testing.T) {
+	remote := seedRemote(t)
+	work := filepath.Join(t.TempDir(), "w")
+
+	_, err := Clone(context.Background(), remote, work, "no-such-branch", Auth{})
+	if err == nil {
+		t.Fatal("expected an error cloning a branch that does not exist")
+	}
+	if !strings.Contains(err.Error(), "no-such-branch") {
+		t.Errorf("error = %v, want it to name the missing branch", err)
 	}
 }

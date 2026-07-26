@@ -36,14 +36,20 @@ architecture tests:
 ## Hosted CI
 
 `.github/workflows/ci.yml` runs the Go gate on every push to `main` and every pull
-request. It is one job that shells out to the same `make ci`, so the hosted gate cannot
-drift from the local one, plus a `git diff --exit-code` afterwards — `make ci` starts with
-`go mod tidy` and formats via the lint step, both of which rewrite files in place, so the
-check turns silent drift into a failure.
+request, in two jobs.
 
-Two things it deliberately does not run: the Firestore-emulator suite
-(`make cover-firestore`, which is what folds the `*_firestore.go` cloud backends into
-measured coverage) and anything that calls a real model.
+**`go`** shells out to the same `make ci`, so the hosted gate cannot drift from the local
+one, plus a `git diff --exit-code` afterwards — `make ci` starts with `go mod tidy` and
+formats via the lint step, both of which rewrite files in place, so the check turns silent
+drift into a failure.
+
+**`firestore`** starts the standalone Firestore emulator (the Firebase jar, so no gcloud
+SDK — just the JRE the runner already has) and runs `make cover-firestore`. Without it the
+cloud session and park-store backends are skipped entirely rather than failing, which is a
+quiet gap: `internal/agent/setup` measures ~82% with the emulator and ~41% without, and the
+missing half is precisely the durability path production depends on.
+
+Still not run in CI: anything that calls a real model.
 
 **golangci-lint is built from source, pinned, at the module's own Go toolchain.** A
 released binary is built against whatever Go its release used, and golangci-lint refuses to

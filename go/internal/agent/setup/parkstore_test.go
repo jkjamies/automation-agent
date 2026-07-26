@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"automation-agent/internal/config"
 )
 
 var fsPrefixSeq atomic.Int64
@@ -324,5 +326,61 @@ func TestSQLiteParkStoreCrossProcess(t *testing.T) {
 	}
 	if run.CallID != "call-7" || run.Attempts != 2 {
 		t.Errorf("recovered record = %+v, want call-7/2", run)
+	}
+}
+
+// NewParkStore is the backend switch the entrypoint calls: it must mirror SESSION_BACKEND
+// exactly, since the park store and the session service have to agree on durability. The
+// firestore arm needs a live client, so it is covered by the emulator-gated suite above.
+func TestNewParkStoreSelectsBackend(t *testing.T) {
+	ctx := context.Background()
+	dsn := "file:" + filepath.Join(t.TempDir(), "switch.db")
+
+	for _, tc := range []struct {
+		backend config.SessionBackend
+		want    string
+	}{
+		{config.SessionMemory, "*setup.memoryParkStore"},
+		{config.SessionSQLite, "*setup.sqliteParkStore"},
+	} {
+		t.Run(string(tc.backend), func(t *testing.T) {
+			s, err := NewParkStore(ctx, config.Config{SessionBackend: tc.backend, SQLiteDSN: dsn})
+			if err != nil {
+				t.Fatalf("NewParkStore(%s): %v", tc.backend, err)
+			}
+			if got := fmt.Sprintf("%T", s); got != tc.want {
+				t.Errorf("backend %s built %s, want %s", tc.backend, got, tc.want)
+			}
+		})
+	}
+
+	// An unrecognized backend is an error, not a silent fall back to memory: falling back
+	// would hand a misconfigured deployment a store that strands every parked run on restart.
+	if _, err := NewParkStore(ctx, config.Config{SessionBackend: "nope"}); err == nil {
+		t.Error("expected an error for an unknown session backend")
+	}
+}
+
+// The store a run parks in and the session service that holds its paused history must be
+// backed by the same durability tier — a durable park record pointing at an in-memory
+// session cannot resume after a restart. Both switches read SESSION_BACKEND, so this pins
+// that they agree on every value.
+func TestParkStoreAndSessionServiceAgreeOnBackend(t *testing.T) {
+	ctx := context.Background()
+	for _, backend := range []config.SessionBackend{config.SessionMemory, config.SessionSQLite} {
+		cfg := config.Config{SessionBackend: backend, SQLiteDSN: "file:" + filepath.Join(t.TempDir(), "pair.db")}
+		if _, err := NewParkStore(ctx, cfg); err != nil {
+			t.Errorf("park store for %s: %v", backend, err)
+		}
+		if _, err := NewSessionService(ctx, cfg); err != nil {
+			t.Errorf("session service for %s: %v", backend, err)
+		}
+	}
+	// And both reject the same unknown value rather than one of them defaulting.
+	bad := config.Config{SessionBackend: "nope"}
+	_, parkErr := NewParkStore(ctx, bad)
+	_, sessErr := NewSessionService(ctx, bad)
+	if parkErr == nil || sessErr == nil {
+		t.Errorf("both switches must reject an unknown backend (park=%v, session=%v)", parkErr, sessErr)
 	}
 }

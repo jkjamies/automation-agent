@@ -1,11 +1,12 @@
 # The Go gate, run on every push and pull request.
 #
-# Deliberately one job running the same `make ci` a developer runs locally, so the gate
-# cannot drift from the Makefile. It covers the Go reference implementation only.
+# Two jobs. `go` is the main gate: one step running the same `make ci` a developer runs
+# locally, so the hosted gate cannot drift from the Makefile. `firestore` runs the
+# emulator-gated suite that covers the cloud session and park-store backends — they are
+# skipped entirely without an emulator, which left the whole production durability path
+# (internal/agent/setup drops from ~82% to ~41% without it) unexecuted.
 #
-# Not included (each needs infrastructure this job deliberately does without): the
-# Firestore-emulator suite (`make cover-firestore`, which folds the *_firestore.go cloud
-# backends into measured coverage) and anything that calls a real model.
+# Still not run here: anything that calls a real model.
 name: ci
 
 on:
@@ -54,3 +55,50 @@ jobs:
       # instead of landing silently.
       - name: Check for uncommitted changes
         run: git diff --exit-code
+
+  # The cloud backends (session service + park store) only execute against a Firestore
+  # emulator; without one their tests are skipped, so the durability path the production
+  # deployment depends on would never run. Separate job so a failure here is
+  # distinguishable from the main gate, and so it cannot slow it down.
+  firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      # The standalone emulator jar, so this needs no gcloud SDK install — just the JRE
+      # ubuntu-latest already ships. Cached because it is ~64 MB and versioned.
+      - name: Cache Firestore emulator
+        id: emulator-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/firestore-emulator.jar
+          key: firestore-emulator-v1.19.8
+      - name: Download Firestore emulator
+        if: steps.emulator-cache.outputs.cache-hit != 'true'
+        run: curl -fsSL -o ~/firestore-emulator.jar https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+
+      - name: Start Firestore emulator
+        run: |
+          java -jar ~/firestore-emulator.jar --host=127.0.0.1 --port=8765 &
+          # Poll rather than sleep a fixed interval: the emulator takes a few seconds to
+          # bind, and a fixed wait is either flaky or wasteful.
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8765/ >/dev/null && exit 0
+            sleep 1
+          done
+          echo "Firestore emulator did not come up" >&2
+          exit 1
+
+      - name: Run the emulator-backed suite
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8765
+        run: make cover-firestore
