@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"io"
 	"os"
 	"testing"
 
@@ -24,7 +25,9 @@ func TestFirestoreSessionConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new firestore session service: %v", err)
 		}
-		t.Cleanup(func() { _ = svc.Close() })
+		if c, ok := svc.(io.Closer); ok {
+			t.Cleanup(func() { _ = c.Close() })
+		}
 		return svc
 	})
 }
@@ -43,7 +46,9 @@ func TestFirestoreSession_AppendEvent_WorkflowFieldsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new firestore session service: %v", err)
 	}
-	t.Cleanup(func() { _ = svc.Close() })
+	if c, ok := svc.(io.Closer); ok {
+		t.Cleanup(func() { _ = c.Close() })
+	}
 
 	created, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user"})
 	if err != nil {

@@ -139,7 +139,7 @@ func TestLocalRemoteSkipsProvider(t *testing.T) {
 	ctx := context.Background()
 	p := &fakeProvider{tok: "tok"}
 
-	r, err := Clone(ctx, remote, work, Auth{Provider: p, Repo: "acme/api"})
+	r, err := Clone(ctx, remote, work, "", Auth{Provider: p, Repo: "acme/api"})
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestCloneBranchCommitPush(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
 	ctx := context.Background()
 
-	r, err := Clone(ctx, remote, work, Auth{})
+	r, err := Clone(ctx, remote, work, "", Auth{})
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestCheckoutRemote(t *testing.T) {
 	ctx := context.Background()
 
 	// First clone: create and push a branch.
-	r1, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w1"), Auth{})
+	r1, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w1"), "", Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestCheckoutRemote(t *testing.T) {
 	}
 
 	// Second clone: check out the existing remote branch.
-	r2, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w2"), Auth{})
+	r2, err := Clone(ctx, remote, filepath.Join(t.TempDir(), "w2"), "", Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestCheckoutRemote(t *testing.T) {
 }
 
 func TestCheckoutMissingBranch(t *testing.T) {
-	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), Auth{})
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "", Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestCheckoutMissingBranch(t *testing.T) {
 }
 
 func TestCommitNothing(t *testing.T) {
-	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), Auth{})
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "w"), "", Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestCommitNothing(t *testing.T) {
 
 func TestCloneBadURL(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "nope")
-	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, Auth{}); err == nil {
+	if _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), work, "", Auth{}); err == nil {
 		t.Fatal("expected clone error for nonexistent source")
 	}
 }

@@ -139,14 +139,27 @@ func sshAuth(keyPath string) (transport.AuthMethod, error) {
 
 // Clone clones url into dir (which must not already exist). The auth applied is chosen
 // by url's scheme — see Auth.
-func Clone(ctx context.Context, url, dir string, auth Auth) (*Repo, error) {
+//
+// branch is the ref to check out. It must be the caller's real base branch, not an
+// assumption: without it the clone lands on whatever the remote's default branch is, so a
+// fix cut from "HEAD" would be branched off the default while its PR targets a different
+// base — a PR whose diff carries every commit between the two. Empty keeps the remote's
+// default (used by callers that genuinely just want HEAD).
+//
+// All remote refs are fetched (no single-branch): a retry checks out the agent's existing
+// remote branch via CheckoutRemote, which needs its ref present in this clone.
+func Clone(ctx context.Context, url, dir, branch string, auth Auth) (*Repo, error) {
 	am, err := authFor(ctx, url, auth)
 	if err != nil {
 		return nil, fmt.Errorf("auth for %s: %w", url, err)
 	}
-	repo, err := git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{URL: url, Auth: am})
+	opts := &git.CloneOptions{URL: url, Auth: am}
+	if branch != "" {
+		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+	}
+	repo, err := git.PlainCloneContext(ctx, dir, false, opts)
 	if err != nil {
-		return nil, fmt.Errorf("clone %s: %w", url, err)
+		return nil, fmt.Errorf("clone %s (branch %q): %w", url, branch, err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {

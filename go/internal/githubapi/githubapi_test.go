@@ -658,3 +658,43 @@ func TestTree(t *testing.T) {
 		t.Errorf("entry[2] should be a tree: %+v", entries[2])
 	}
 }
+
+func TestDefaultBranch(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r", func(w http.ResponseWriter, _ *http.Request) {
+		// A repo whose default is NOT "main" — the case a hardcoded base gets wrong.
+		_, _ = w.Write([]byte(`{"name":"r","default_branch":"trunk"}`))
+	})
+	c := testClient(t, mux)
+	got, err := c.DefaultBranch(context.Background(), "o", "r")
+	if err != nil {
+		t.Fatalf("DefaultBranch: %v", err)
+	}
+	if got != "trunk" {
+		t.Errorf("default branch = %q, want trunk", got)
+	}
+}
+
+// A repo response with no default_branch is an error, not an empty string: an empty base
+// would clone the remote's HEAD and open the PR against nothing.
+func TestDefaultBranchMissing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"r"}`))
+	})
+	c := testClient(t, mux)
+	if _, err := c.DefaultBranch(context.Background(), "o", "r"); err == nil {
+		t.Fatal("expected an error when the repo reports no default branch")
+	}
+}
+
+func TestDefaultBranchAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	c := testClient(t, mux)
+	if _, err := c.DefaultBranch(context.Background(), "o", "r"); err == nil {
+		t.Fatal("expected an error when the repo lookup fails")
+	}
+}

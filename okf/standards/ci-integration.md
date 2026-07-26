@@ -29,7 +29,11 @@ You only need to send a small, trusted envelope.
 ```
 
 - `repo` / `base` are **trusted** — set by *your* CI, never inferred by the model.
-  `repo` is `owner/name`; `base` is the branch to fix against (defaults to `main`).
+  `repo` is `owner/name`. `base` is the branch to fix against and is **optional**: omit it
+  and the agent resolves the repository's own default branch via the API. It is never
+  assumed to be `main` — the fix branch is cut from `base` and the PR targets `base`, so a
+  guessed name would open the PR against a branch that may not exist. Send it explicitly
+  only to fix against something other than the default (e.g. a release branch).
 - `report` is **arbitrary** — JSON, SARIF, or plain text. The agent's triage LLM
   reads it; you do not need to normalize it.
 

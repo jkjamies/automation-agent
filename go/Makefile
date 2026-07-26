@@ -2,7 +2,18 @@ MODULE    := automation-agent
 COVER_MIN := 80
 OLLAMA_HOST ?= http://localhost:11434
 
-.PHONY: help build run test cover cover-firestore lint fmt vet arch tidy spec docs-check ollama-check ci
+# golangci-lint is pinned and installed from source rather than taken from PATH. A released
+# binary is built with whatever Go its release used, and golangci-lint refuses to analyze a
+# module whose `go` directive is newer than its own build ("the Go language version used to
+# build golangci-lint is lower than the targeted Go version"). Building it with THIS module's
+# toolchain — read from go.mod, so it follows a version bump automatically — sidesteps that
+# entirely and makes local and CI runs identical.
+GOLANGCI_VERSION := v2.12.2
+GO_TOOLCHAIN     := go$(shell awk '/^go /{print $$2; exit}' go.mod)
+GOBIN            := $(shell go env GOPATH)/bin
+GOLANGCI         := $(GOBIN)/golangci-lint
+
+.PHONY: help build run test cover cover-firestore lint lint-install fmt vet arch tidy spec docs-check ollama-check ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -33,8 +44,12 @@ cover-firestore: ## Run the firestore-backed tests against a running emulator (n
 	@test -n "$$FIRESTORE_EMULATOR_HOST" || { echo "set FIRESTORE_EMULATOR_HOST first (gcloud beta emulators firestore start)"; exit 1; }
 	go test ./internal/agent/setup/... -run 'Firestore|ParkStoreConformance' -count=1
 
-lint: ## Run golangci-lint
-	golangci-lint run
+lint: ## Run golangci-lint (pinned; installed on first use)
+	@$(GOLANGCI) --version 2>/dev/null | grep -q '$(GOLANGCI_VERSION:v%=%)' || $(MAKE) lint-install
+	@$(GOLANGCI) run
+
+lint-install: ## (Re)install the pinned golangci-lint, built with this module's Go toolchain
+	GOTOOLCHAIN=$(GO_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 fmt: ## Format the code
 	gofmt -w .
@@ -65,4 +80,4 @@ spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove
 docker: ## Build the production container image (cmd/agent only)
 	docker build -t automation-agent .
 
-ci: tidy vet arch test cover ## Full local CI gate
+ci: tidy vet lint arch test cover ## Full local CI gate

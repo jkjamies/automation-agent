@@ -8,13 +8,13 @@ package reviewer
 
 // dropLowConfidence removes findings below the configured minimum confidence (spec Decision
 // 13's phase-1 verify gate). A non-positive minimum keeps everything.
-func dropLowConfidence(findings []Finding, min float64) []Finding {
-	if min <= 0 {
+func dropLowConfidence(findings []Finding, threshold float64) []Finding {
+	if threshold <= 0 {
 		return findings
 	}
 	out := findings[:0:0] // new backing array; never alias the caller's slice
 	for _, f := range findings {
-		if f.Confidence >= min {
+		if f.Confidence >= threshold {
 			out = append(out, f)
 		}
 	}

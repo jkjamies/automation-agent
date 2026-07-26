@@ -1,0 +1,56 @@
+# The Go gate, run on every push and pull request.
+#
+# Deliberately one job running the same `make ci` a developer runs locally, so the gate
+# cannot drift from the Makefile. It covers the Go reference implementation only.
+#
+# Not included (each needs infrastructure this job deliberately does without): the
+# Firestore-emulator suite (`make cover-firestore`, which folds the *_firestore.go cloud
+# backends into measured coverage) and anything that calls a real model.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push supersedes an in-flight run on the same ref rather than queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Single source of truth for the toolchain: the module's own go directive.
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      # golangci-lint is built from source against this module's toolchain (see the Makefile
+      # for why a released binary will not do), so cache the built binary rather than paying
+      # for the build on every run. Keyed on the pinned version + the toolchain that built it.
+      - name: Cache golangci-lint
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-${{ runner.os }}-${{ hashFiles('go/Makefile', 'go/go.mod') }}
+
+      # tidy + vet + lint + arch + test + coverage gate.
+      - run: make ci
+
+      # `make ci` starts with `go mod tidy`, and gofmt runs via the lint step — both of which
+      # rewrite files in place. Fail if either changed anything, so drift is caught here
+      # instead of landing silently.
+      - name: Check for uncommitted changes
+        run: git diff --exit-code

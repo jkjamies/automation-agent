@@ -13,6 +13,8 @@ import (
 // Kind identifies what triggered an ingest, so the root agent can route it.
 type Kind string
 
+// The recognized ingest kinds. Each maps to exactly one workflow in the root dispatcher;
+// a new ingress source adds a Kind here rather than a new path.
 const (
 	KindCronDaily Kind = "cron.daily" // daily Cloud Scheduler trigger -> summary digest
 	KindLint      Kind = "lint"       // agnostic lint payload -> lint-fixer

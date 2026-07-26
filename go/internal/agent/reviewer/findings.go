@@ -10,6 +10,7 @@ import (
 // once publishing lands); nitpick is collapsed/low-noise.
 type Severity string
 
+// The severity ladder, worst first. Only nitpick is non-actionable.
 const (
 	SeverityCritical Severity = "critical"
 	SeverityMajor    Severity = "major"
@@ -53,6 +54,8 @@ func normalizeSeverity(s string) Severity {
 // with the dimension it belongs to; the scorecard is a per-dimension histogram.
 type Dimension string
 
+// The review dimensions a finding can be tagged with. DimOther is the catch-all an
+// unrecognized model-emitted dimension normalizes to.
 const (
 	DimRuntimeSafety    Dimension = "runtime_safety"
 	DimErrorHandling    Dimension = "error_handling"

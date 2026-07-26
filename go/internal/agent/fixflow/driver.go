@@ -277,10 +277,14 @@ func (dr *Driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) e
 
 // Kickoff starts a new suspended run: apply the fix, then park awaiting CI.
 func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
+	base, err := dr.resolveBase(ctx, k)
+	if err != nil {
+		return err
+	}
 	sid := dr.newSessionID()
 	rp := &runParams{
 		owner: k.Owner(), repo: k.Name(), fullRepo: k.Repo,
-		base: k.Base, report: k.ReportText(), newBranch: true,
+		base: base, report: k.ReportText(), newBranch: true,
 	}
 	if err := dr.putParams(ctx, sid, rp); err != nil {
 		return err
@@ -291,6 +295,27 @@ func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
 		return err
 	}
 	return dr.afterDrive(ctx, sid, k.Repo, res, 1)
+}
+
+// resolveBase decides the branch this run works from: the kickoff's explicit base when the
+// caller supplied one, otherwise the repository's actual default branch, looked up once here
+// and then persisted in the run's params. Resolving once (not per attempt) keeps the branch
+// point, the PR base, and the terminal summary's comparison on the same ref for the whole
+// multi-attempt run.
+//
+// A lookup failure fails the kickoff rather than falling back to a guessed name: every
+// downstream step (branch point, PR base, compare) needs a ref that really exists, and a
+// wrong guess surfaces only as an opaque GitHub 422 when the PR is opened.
+func (dr *Driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
+	if k.Base != "" {
+		return k.Base, nil
+	}
+	base, err := dr.engine.d.GH.DefaultBranch(ctx, k.Owner(), k.Name())
+	if err != nil {
+		return "", fmt.Errorf("%s %s: resolve default branch: %w", k.Repo, dr.engine.spec.Name, err)
+	}
+	dr.engine.d.Log.Info("resolved base branch", "workflow", dr.engine.spec.Name, "repo", k.Repo, "base", base)
+	return base, nil
 }
 
 // Resume reacts to a CI conclusion for a parked run.
@@ -306,7 +331,7 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 	}
 
 	key := prKey(in.FullRepo, in.PRNumber)
-	run, ok, err := dr.store.ResolveByPRKey(ctx, key)
+	run, ok, err := dr.store.ResolveByPRKey(ctx, dr.workflow(), key)
 	if err != nil {
 		return fmt.Errorf("resume: resolve %s: %w", key, err)
 	}
@@ -354,7 +379,7 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 // claims the run, frees it, and asks for human review.
 func (dr *Driver) onTimeout(key string) {
 	ctx := context.Background()
-	run, ok, err := dr.store.ResolveByPRKey(ctx, key)
+	run, ok, err := dr.store.ResolveByPRKey(ctx, dr.workflow(), key)
 	if err != nil {
 		dr.engine.d.Log.Error("timeout resolve failed", "workflow", dr.engine.spec.Name, "pr", key, "err", err)
 		return
@@ -378,7 +403,7 @@ func (dr *Driver) SweepTimeouts(ctx context.Context) error {
 	// contract is that returned records are already claimed (pr_key cleared), so skipping them
 	// on error would strand them. Propagate the error afterwards so the handler 500s and Cloud
 	// Scheduler retries the records that could not be claimed this pass.
-	swept, err := dr.store.Sweep(ctx, time.Now().Add(-dr.timeout))
+	swept, err := dr.store.Sweep(ctx, dr.workflow(), time.Now().Add(-dr.timeout))
 	for _, run := range swept {
 		dr.stopTimer(run.PRKey)
 		fullRepo, pr := splitPRKey(run.PRKey)
@@ -475,13 +500,17 @@ func (dr *Driver) newSessionID() string {
 	return uuid.NewString()
 }
 
+// workflow is this driver's owning engine name ("lint" | "coverage"). Every engine shares
+// one ParkStore, so it stamps each record and scopes every claim — see setup.ParkRecord.
+func (dr *Driver) workflow() string { return dr.engine.spec.Name }
+
 // putParams stores a fresh run's inputs (not yet parked: no PR key, no timer).
 func (dr *Driver) putParams(ctx context.Context, sid string, rp *runParams) error {
 	blob, err := marshalRunParams(rp)
 	if err != nil {
 		return err
 	}
-	return dr.store.Put(ctx, setup.ParkRecord{SessionID: sid, Params: blob})
+	return dr.store.Put(ctx, setup.ParkRecord{SessionID: sid, Workflow: dr.workflow(), Params: blob})
 }
 
 // park records that sid is now suspended awaiting CI under key, and arms the soft timeout.
@@ -494,6 +523,7 @@ func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int
 	if !ok {
 		rec = setup.ParkRecord{SessionID: sid}
 	}
+	rec.Workflow = dr.workflow() // stamp on every write: the claim scope must never be blank
 	rec.PRKey = key
 	rec.CallID = callID
 	rec.Attempts = attempt
@@ -559,9 +589,9 @@ func (dr *Driver) stopTimer(key string) {
 	}
 }
 
-// parkedCount reports the number of currently parked runs (used by tests).
+// parkedCount reports the number of this engine's currently parked runs (used by tests).
 func (dr *Driver) parkedCount() int {
-	n, _ := dr.store.ParkedCount(context.Background())
+	n, _ := dr.store.ParkedCount(context.Background(), dr.workflow())
 	return n
 }
 

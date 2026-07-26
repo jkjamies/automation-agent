@@ -63,7 +63,7 @@ func postJSON(ctx context.Context, httpc *http.Client, url string, payload any) 
 	if err != nil {
 		return fmt.Errorf("post notification: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("notification rejected: %s: %s", resp.Status, snippet)

@@ -43,11 +43,11 @@ func safeJoin(root, rel string) (string, error) {
 func resolveExisting(p string) (string, error) {
 	rest := ""
 	for {
-		if real, err := filepath.EvalSymlinks(p); err == nil {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
 			if rest == "" {
-				return real, nil
+				return resolved, nil
 			}
-			return filepath.Join(real, rest), nil
+			return filepath.Join(resolved, rest), nil
 		}
 		// EvalSymlinks failed. If the entry itself exists (Lstat doesn't follow the final
 		// link), it's a dangling/looping symlink — reject. Otherwise it's a genuinely

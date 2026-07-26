@@ -22,6 +22,7 @@ import (
 // Provider selects which LLM backend agents use.
 type Provider string
 
+// The supported LLM backends (LLM_PROVIDER).
 const (
 	ProviderOllama Provider = "ollama"
 	ProviderGemini Provider = "gemini"
@@ -30,6 +31,7 @@ const (
 // NotifyProvider selects where summaries are posted.
 type NotifyProvider string
 
+// The supported chat destinations (NOTIFY_PROVIDER).
 const (
 	NotifySlack NotifyProvider = "slack"
 	NotifyTeams NotifyProvider = "teams"
@@ -549,13 +551,13 @@ func resolveGitHubApp(get lookup) (GitHubApp, error) {
 		return GitHubApp{}, errors.New("GITHUB_APP_* set but GITHUB_APP_ID is missing (App mode requires GITHUB_APP_ID)")
 	}
 	if installIDStr == "" {
-		return GitHubApp{}, errors.New("App mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)")
+		return GitHubApp{}, errors.New("app mode requires GITHUB_APP_INSTALLATION_ID (single pinned installation)")
 	}
 	switch {
 	case keyLiteral != "" && keyPath != "":
 		return GitHubApp{}, errors.New("set exactly one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both")
 	case keyLiteral == "" && keyPath == "":
-		return GitHubApp{}, errors.New("App mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH")
+		return GitHubApp{}, errors.New("app mode requires one of GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH")
 	}
 
 	appID, err := strconv.ParseInt(appIDStr, 10, 64)

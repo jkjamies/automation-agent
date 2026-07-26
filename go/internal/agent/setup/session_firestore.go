@@ -29,8 +29,10 @@ type firestoreSessionService struct {
 }
 
 // NewFirestoreSessionService opens a Firestore-backed session service. project may be ""
-// to detect it from ADC / GOOGLE_CLOUD_PROJECT. Close releases the client.
-func NewFirestoreSessionService(ctx context.Context, project, prefix string) (*firestoreSessionService, error) {
+// to detect it from ADC / GOOGLE_CLOUD_PROJECT. The returned service also implements
+// io.Closer, which is how the entrypoint releases the client at shutdown (it type-asserts
+// rather than depending on the concrete type).
+func NewFirestoreSessionService(ctx context.Context, project, prefix string) (session.Service, error) {
 	if project == "" {
 		project = firestore.DetectProjectID
 	}

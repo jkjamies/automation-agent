@@ -13,10 +13,13 @@ import (
 
 // parkRow is the gorm model backing the sqlite ParkStore. The pr_key column doubles as
 // the resume index ("" when the run is not parked); making it the column rather than a
-// separate map means re-parking under a new key cannot leak a stale index entry.
+// separate map means re-parking under a new key cannot leak a stale index entry. The
+// workflow column scopes every claim to the owning engine (see ParkRecord.Workflow), so
+// the index is really (workflow, pr_key).
 type parkRow struct {
 	SessionID string `gorm:"primaryKey"`
-	PRKey     string `gorm:"index"`
+	Workflow  string `gorm:"index:idx_workflow_pr_key,priority:1"`
+	PRKey     string `gorm:"index:idx_workflow_pr_key,priority:2"`
 	CallID    string
 	Attempts  int
 	Params    string
@@ -25,19 +28,12 @@ type parkRow struct {
 
 func (parkRow) TableName() string { return "parked_runs" }
 
-func (r parkRow) toRecord() ParkRecord {
-	return ParkRecord{
-		SessionID: r.SessionID, PRKey: r.PRKey, CallID: r.CallID,
-		Attempts: r.Attempts, Params: r.Params, ParkedAt: r.ParkedAt,
-	}
-}
+// parkRow mirrors ParkRecord field for field (only the gorm tags differ), so these are
+// plain conversions. Adding a field to one and not the other is then a compile error rather
+// than a field silently dropped on the way to or from storage.
+func (r parkRow) toRecord() ParkRecord { return ParkRecord(r) }
 
-func rowFromRecord(r ParkRecord) parkRow {
-	return parkRow{
-		SessionID: r.SessionID, PRKey: r.PRKey, CallID: r.CallID,
-		Attempts: r.Attempts, Params: r.Params, ParkedAt: r.ParkedAt,
-	}
-}
+func rowFromRecord(r ParkRecord) parkRow { return parkRow(r) }
 
 // sqliteParkStore persists park records to a sqlite file so they survive a restart. It is
 // the park-record counterpart of the sqlite session backend and shares its DSN/file.
@@ -77,10 +73,11 @@ func NewSQLiteParkStore(dsn string) (ParkStore, error) {
 func (s *sqliteParkStore) Put(ctx context.Context, r ParkRecord) error {
 	db := s.db.WithContext(ctx)
 	if r.PRKey != "" {
-		// One active row per pr_key: clear it on any OTHER session still holding it, so
-		// resolve/sweep have a single winner (the pr_key column is a non-unique index).
+		// One active row per (workflow, pr_key): clear it on any OTHER session still holding it,
+		// so resolve/sweep have a single winner (the index is non-unique). Scoped by workflow so
+		// a sibling engine parked on the same PR number is left alone.
 		if err := db.Model(&parkRow{}).
-			Where("pr_key = ? AND session_id <> ?", r.PRKey, r.SessionID).
+			Where("workflow = ? AND pr_key = ? AND session_id <> ?", r.Workflow, r.PRKey, r.SessionID).
 			Update("pr_key", "").Error; err != nil {
 			return err
 		}
@@ -103,13 +100,13 @@ func (s *sqliteParkStore) Get(ctx context.Context, sessionID string) (ParkRecord
 	return row.toRecord(), true, nil
 }
 
-func (s *sqliteParkStore) ResolveByPRKey(ctx context.Context, prKey string) (ParkRecord, bool, error) {
+func (s *sqliteParkStore) ResolveByPRKey(ctx context.Context, workflow, prKey string) (ParkRecord, bool, error) {
 	if prKey == "" {
 		return ParkRecord{}, false, nil // an empty key would match unparked rows (pr_key='')
 	}
 	db := s.db.WithContext(ctx)
 	var row parkRow
-	err := db.First(&row, "pr_key = ?", prKey).Error
+	err := db.First(&row, "workflow = ? AND pr_key = ?", workflow, prKey).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return ParkRecord{}, false, nil
 	}
@@ -119,10 +116,10 @@ func (s *sqliteParkStore) ResolveByPRKey(ctx context.Context, prKey string) (Par
 	return s.claim(db, row)
 }
 
-func (s *sqliteParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]ParkRecord, error) {
+func (s *sqliteParkStore) Sweep(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
 	db := s.db.WithContext(ctx)
 	var rows []parkRow
-	if err := db.Where("pr_key <> '' AND parked_at < ?", cutoff).Find(&rows).Error; err != nil {
+	if err := db.Where("workflow = ? AND pr_key <> '' AND parked_at < ?", workflow, cutoff).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ParkRecord, 0, len(rows))
@@ -147,6 +144,8 @@ func (s *sqliteParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]ParkRe
 // clears pr_key only while it is still set, so of N concurrent claimers exactly one (the
 // writer SQLite lets through first) gets RowsAffected==1; the rest see 0 and no-op. The
 // per-run row is retained (only pr_key is cleared) so a retry can still read its params.
+// The row was already selected by (workflow, pr_key), and session_id is the primary key,
+// so this CAS is inherently workflow-scoped.
 func (s *sqliteParkStore) claim(db *gorm.DB, row parkRow) (ParkRecord, bool, error) {
 	return execClaim(db.Model(&parkRow{}).
 		Where("session_id = ? AND pr_key = ?", row.SessionID, row.PRKey), row)
@@ -176,9 +175,10 @@ func (s *sqliteParkStore) Delete(ctx context.Context, sessionID string) error {
 	return s.db.WithContext(ctx).Delete(&parkRow{}, "session_id = ?", sessionID).Error
 }
 
-func (s *sqliteParkStore) ParkedCount(ctx context.Context) (int, error) {
+func (s *sqliteParkStore) ParkedCount(ctx context.Context, workflow string) (int, error) {
 	var n int64
-	if err := s.db.WithContext(ctx).Model(&parkRow{}).Where("pr_key <> ''").Count(&n).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&parkRow{}).
+		Where("workflow = ? AND pr_key <> ''", workflow).Count(&n).Error; err != nil {
 		return 0, err
 	}
 	return int(n), nil

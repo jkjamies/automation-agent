@@ -15,10 +15,12 @@ import (
 )
 
 // seedParked puts a parked run directly into the driver's store, for tests that exercise
-// Resume/timeout without driving a real kickoff first.
+// Resume/timeout without driving a real kickoff first. The record is stamped with the
+// engine's workflow, since every claim is workflow-scoped (the store is shared).
 func seedParked(e *Engine, prKey, sid, callID string, attempts int) {
 	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
-		SessionID: sid, PRKey: prKey, CallID: callID, Attempts: attempts, ParkedAt: time.Now(),
+		SessionID: sid, Workflow: e.spec.Name, PRKey: prKey, CallID: callID,
+		Attempts: attempts, ParkedAt: time.Now(),
 	})
 }
 
@@ -244,7 +246,7 @@ func TestEngineSweepTimesOutStaleRun(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
 	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
-		SessionID: "run-x", PRKey: "acme/api#42", CallID: "c", Attempts: 1,
+		SessionID: "run-x", Workflow: e.spec.Name, PRKey: "acme/api#42", CallID: "c", Attempts: 1,
 		ParkedAt: time.Now().Add(-2 * time.Hour), // older than the 1h CITimeout
 	})
 	if err := e.SweepTimeouts(context.Background()); err != nil {
@@ -355,5 +357,117 @@ func TestCloneURLByTransport(t *testing.T) {
 	override := (&Engine{d: Deps{GitTransport: "ssh", CloneURL: func(_, _ string) string { return "x" }}}).cloneURL("acme", "api")
 	if override != "x" {
 		t.Errorf("injected CloneURL override = %q, want x", override)
+	}
+}
+
+// Production wires every fix engine onto ONE shared ParkStore (a single Firestore instance
+// and collection), so an engine's sweep must claim only its own runs. It previously claimed
+// all of them: whichever engine swept first resolved every stale run, notified under the
+// wrong workflow's title and awaited check name, and deleted the ADK session under the wrong
+// app name — so the real session leaked in the durable backend.
+func TestSweepDoesNotClaimAnotherEnginesRun(t *testing.T) {
+	shared := setup.NewMemoryParkStore()
+	remote := seedRemote(t)
+	deps := func(n *fakeNotifier) Deps {
+		return Deps{
+			GH: &fakeGH{}, Notify: n, MaxIter: 3, CITimeout: time.Hour, ParkStore: shared,
+			CloneURL: func(_, _ string) string { return remote },
+		}
+	}
+	lintNotes, covNotes := &fakeNotifier{}, &fakeNotifier{}
+	lintSpec := testSpec()
+	lintSpec.Name, lintSpec.CheckName, lintSpec.ReviewTitle = "lint", "agent-lint-verify", "Lint needs review"
+	covSpec := testSpec()
+	covSpec.Name, covSpec.CheckName, covSpec.ReviewTitle = "coverage", "agent-coverage-verify", "Coverage needs review"
+	lint := NewEngine(lintSpec, deps(lintNotes))
+	cov := NewEngine(covSpec, deps(covNotes))
+
+	// Only the coverage engine has a stale parked run.
+	_ = shared.Put(context.Background(), setup.ParkRecord{
+		SessionID: "cov-sess", Workflow: "coverage", PRKey: "acme/api#42", CallID: "c1", Attempts: 1,
+		Params:   `{"owner":"acme","repo":"api","full_repo":"acme/api","base":"main"}`,
+		ParkedAt: time.Now().Add(-2 * time.Hour),
+	})
+
+	if err := lint.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("lint sweep: %v", err)
+	}
+	if len(lintNotes.msgs) != 0 {
+		t.Errorf("the lint engine notified about a coverage run: %+v", lintNotes.msgs)
+	}
+	if _, ok, _ := shared.Get(context.Background(), "cov-sess"); !ok {
+		t.Fatal("the lint engine's sweep deleted the coverage engine's run")
+	}
+
+	// The owning engine still resolves it, framed as coverage.
+	if err := cov.SweepTimeouts(context.Background()); err != nil {
+		t.Fatalf("coverage sweep: %v", err)
+	}
+	if len(covNotes.msgs) != 1 {
+		t.Fatalf("coverage notifications = %d, want 1", len(covNotes.msgs))
+	}
+	if got := covNotes.msgs[0].Title; got != "Coverage needs review" {
+		t.Errorf("timeout notice title = %q, want the coverage engine's", got)
+	}
+	if _, ok, _ := shared.Get(context.Background(), "cov-sess"); ok {
+		t.Error("the coverage engine's sweep should clear its own run")
+	}
+}
+
+// A kickoff that omits "base" resolves the repository's real default branch and uses it for
+// the branch point and the PR base. It previously defaulted to the literal "main", so on any
+// repo whose default is master/develop/trunk the fix was cut from one ref while its PR
+// targeted another that may not even exist.
+func TestKickoffResolvesDefaultBranch(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "master"} // what git.PlainInit gives the seeded remote
+	e := newEngine(seedRemote(t), gh, &fakeNotifier{})
+
+	// No "base" in the payload.
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if gh.created == nil {
+		t.Fatal("expected a PR to be created")
+	}
+	if gh.created.Base != "master" {
+		t.Errorf("PR base = %q, want the repo's real default branch (master), not a hardcoded name", gh.created.Base)
+	}
+}
+
+// An explicit base in the payload wins over the repo default, and the fix branch is actually
+// cut from it — the clone must check that ref out rather than landing on the remote's default.
+func TestKickoffHonorsExplicitBase(t *testing.T) {
+	remote := seedRemoteWithBranch(t, "develop")
+	gh := &fakeGH{defaultBranch: "master"}
+	e := newEngine(remote, gh, &fakeNotifier{})
+
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"develop","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if gh.created == nil || gh.created.Base != "develop" {
+		t.Fatalf("PR = %+v, want base develop", gh.created)
+	}
+	// The pushed branch must descend from develop, not from the remote's default branch.
+	// develop carries a file master does not, so its presence proves the branch point.
+	if !branchHasFile(t, remote, "agent/fix", "only-on-develop.txt") {
+		t.Error("the fix branch was not cut from the explicit base (develop)")
+	}
+}
+
+// When the base cannot be resolved, the kickoff fails loudly instead of guessing a branch
+// name and surfacing an opaque 422 later when the PR is opened.
+func TestKickoffFailsWhenDefaultBranchUnresolvable(t *testing.T) {
+	gh := &fakeGH{defaultBranchErr: errors.New("api down")}
+	e := newEngine(seedRemote(t), gh, &fakeNotifier{})
+
+	err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","report":"r"}`))
+	if err == nil {
+		t.Fatal("expected the kickoff to fail when the default branch cannot be resolved")
+	}
+	if !strings.Contains(err.Error(), "default branch") {
+		t.Errorf("error = %v, want it to name the unresolved default branch", err)
+	}
+	if gh.created != nil {
+		t.Error("no PR should be opened when the base is unknown")
 	}
 }
