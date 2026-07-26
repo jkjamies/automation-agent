@@ -11,7 +11,7 @@ timestamp: 2026-07-04T00:00:00Z
 
 # Git Working-Tree Operations
 
-Working-tree git operations via an embedded git library (Go reference port:
+Working-tree git operations via an embedded git library (
 `go-git/v5` — pure Go, no git binary):
 
 ## Flow

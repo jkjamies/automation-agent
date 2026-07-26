@@ -11,7 +11,7 @@ timestamp: 2026-07-04T00:00:00Z
 
 # GitHub REST API Client
 
-A thin wrapper over a GitHub REST client library (Go reference port: `go-github/v78`)
+A thin wrapper over a GitHub REST client library (`go-github/v78`)
 exposing only what this service needs:
 
 ## Flow

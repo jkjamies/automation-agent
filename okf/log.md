@@ -2,9 +2,9 @@
 
 ## 2026-07-04
 * **Update**: Owning concepts gained *Why* sections capturing the rationale behind the
-  load-bearing choices — the parity pairs, the execution transport, the durable session
-  store, the model provider, and GitHub App auth — so reasoning survives the disposable
-  specs where it was argued.
+  load-bearing choices — the execution transport, the durable session store, the model
+  provider, and GitHub App auth — so reasoning survives the disposable specs where it was
+  argued.
 * **Creation**: Added [OKF format](/standards/okf-format.md) — the bundle's own format
   contract (frontmatter schema, type taxonomy, timestamp semantics, link convention,
   the conformance floor).

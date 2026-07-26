@@ -15,8 +15,8 @@ reflects what the code does today, not necessarily what was intended.
 ```text
 /reverse-spec fixflow                      # workflow agent → add.spec.md-style output
 /reverse-spec go/internal/ingest           # single package deep-dive
-/reverse-spec reviewer python              # agent, specific port
-/reverse-spec summary go python            # compare the modern pair for drift
+/reverse-spec reviewer                     # one workflow agent
+/reverse-spec go/internal/agent/setup      # the setup layer's public surface
 ```
 
 ## When to Use
@@ -27,17 +27,15 @@ reflects what the code does today, not necessarily what was intended.
 - **Onboarding** — a structured document beats reading every file
 - **Validating the okf bundle** — diff the reverse-spec against
   documentation to find drift
-- **Modern-pair drift check** — reverse both Go and Python and compare (Go wins on
-  undocumented disagreement, per `okf/standards/language-parity.md`)
 
 ## Pre-flight: Subagent dispatch (multi-unit reverse-engineering)
 
-When reverse-engineering **more than one workflow agent, or one agent across both
-modern ports**, dispatch one `Explore` agent BEFORE step 1 to map the surface in
+When reverse-engineering **more than one workflow agent, or an agent plus the platform
+packages it calls**, dispatch one `Explore` agent BEFORE step 1 to map the surface in
 parallel — sequential reads of 20+ files compound otherwise:
 
 ```text
-Map the implementation of {target} in {port(s)} to seed a reverse-spec. Report:
+Map the implementation of {target} to seed a reverse-spec. Report:
 - Every file path and 1-line purpose.
 - Public surface (types, constructors, tool signatures).
 - Env vars read and their defaults; webhook routes / check names touched.
@@ -54,13 +52,12 @@ Read in order — each layer adds context the previous can't:
 
 | Source | What it reveals |
 |--------|-----------------|
-| `okf/modules/agents/{name}.md` (or `platform/`, `ports/`) | Documented intent (may be stale — note discrepancies) |
+| `okf/modules/agents/{name}.md` (or `platform/`) | Documented intent (may be stale — note discrepancies) |
 | `okf/standards/architecture-design.md` | Where this unit sits in the ingest→root→workflow path |
-| Source (Go reference first: `go/internal/`, `go/cmd/`) | The actual public surface and logic |
-| `prompts/` markdown in the port | LLM instructions — the agent's real "business rules" |
+| Source (`go/internal/`, `go/cmd/`) | The actual public surface and logic |
+| `prompts/` markdown beside the agent | LLM instructions — the agent's real "business rules" |
 | Config package + `.env.example` | Env vars, defaults, validation, precedence |
 | Test files + fakes/stubs | What's actually enforced — the most reliable contract |
-| The pair port (`python/` for a Go target) | Parity or drift within the modern pair |
 | `git log --follow` / `git blame` on the target dir | Who, when, why; recency of each section |
 
 ## Steps
@@ -98,21 +95,19 @@ reference it from code, standards, or the okf bundle.
 
 ### 4. Fill in Each Section
 
-- **Context** — what the unit is, where it sits in the ingest→root→workflow path, and
-  which ports implement it (modern pair / frozen pair / all four)
+- **Context** — what the unit is and where it sits in the ingest→root→workflow path
 - **Motivation (presumed)** — infer from prompts, commit messages, and the okf concept;
   flag anything that looks partially implemented or abandoned
 - **Scope** — the observable behavior in vs out; note placeholder/stub paths
 - **Design** — the load-bearing section:
   - Public surface: types, constructors, tool signatures, and their semantics
   - **External contracts**: webhook routes, check names, notify payloads, GitHub API
-    calls, labels — cross-check `okf/standards/webhooks.md`; these bind all four ports
+    calls, labels — cross-check `okf/standards/webhooks.md`; these bind every target repo
+    already wired up, so a change to one breaks them silently
   - **Config**: every env var read, default, validation (cross-check `.env.example`)
   - **Durable park/resume**: does it suspend/resume? Resume keys, session usage
     (cross-check `okf/orientation/suspend-resume-design.md`)
   - Prompts: which `prompts/` files, and the behavioral rules they encode
-  - **Pair parity**: for a modern-pair target, note where Python matches or drifts
-    from Go — per-item, with file paths on both sides
 - **Test plan (as found)** — what's actually tested per layer; extract key scenarios
   as implicit acceptance criteria. **The most reliable source of "what's enforced."**
   Note coverage vs the ≥80% floor and any LLM-output assertions (a violation)
@@ -126,9 +121,6 @@ At the bottom of the spec:
 
 ### Code vs okf bundle
 - [differences between documented intent and actual code — the code wins]
-
-### Modern-pair drift
-- [Go vs Python behavior differences not recorded as deliberate deltas]
 
 ### Incomplete Implementations
 - [TODOs, placeholder data, dead branches]
@@ -178,10 +170,8 @@ briefing.
 - **Check git history for context** — commit messages often explain "why"
 - **Note staleness** — if the okf bundle contradicts the code, the code
   wins; list it under Discrepancies so the bundle gets fixed
-- **Go is the reference** — for modern-pair targets, reverse Go first; Python drift is
-  a finding, not a second source of truth
-- **No cross-language mentions leak into code** — drift findings live in the spec,
-  never as comments in a port
+- **The spec records findings, the code stays clean** — observations about history or
+  alternatives belong in the spec, never as commentary in the source
 
 ## No Verification Needed
 Read-only skill — produces a document, not code changes.

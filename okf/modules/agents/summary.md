@@ -43,9 +43,7 @@ flowchart TD
 
 Each parallel fetcher writes its repo's commit digest to session state under `commits:<owner/repo>`. The summarizer's instruction provider reads all `commits:*` keys, appends them to the prompt, and the model writes the digest to state under `digest` (its `OutputKey`). The notifier reads `digest` and posts it to chat.
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `agents_setup.go` — `BuildSummaryAgent(Deps)`: the sequential/parallel ADK wiring.
 - `summary.go` — the testable logic: per-repo fetch code-agents, the notify code-agent, `formatCommits`, the summarizer's `InstructionProvider`.

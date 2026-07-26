@@ -15,7 +15,7 @@ Run the full house review flow on the current branch. The output is a reviewed, 
 /review-branch feat/base-pr    # stacked branch: review against its base
 ```
 
-**Gate definitions live in `okf/tooling/ci-gates.md`; parity rules used in triage live in `okf/standards/language-parity.md`.** This skill is a thin driver.
+**Gate definitions live in `okf/tooling/ci-gates.md`.** This skill is a thin driver.
 
 ## Steps
 
@@ -40,14 +40,14 @@ coderabbit review --agent --base main --dir okf/
 
 For every finding, exactly one of:
 
-- **Fix it** — the default for genuine findings. Apply the fix, then re-run the affected port's gate.
-- **Decline with concrete evidence** — cite the file/line that proves the finding wrong, or the pair-parity reason (the same construct exists in the sibling port and changing one side breaks parity — name the sibling file). Write the decline rationale down; it goes in the summary.
+- **Fix it** — the default for genuine findings. Apply the fix, then re-run the gate.
+- **Decline with concrete evidence** — cite the file/line that proves the finding wrong, or the contract that makes the current shape deliberate (name it). Write the decline rationale down; it goes in the summary.
 
 Never blind-accept a finding just to clear the list, and never decline with only "seems fine" — no evidence, no decline.
 
 ### 4. Re-verify after fixes
 
-If step 3 changed code, re-run the affected gates. Optionally re-run CodeRabbit on the delta to confirm the fixes didn't introduce new findings.
+If step 3 changed code, re-run the gate. Optionally re-run CodeRabbit on the delta to confirm the fixes didn't introduce new findings.
 
 ### 5. Present and WAIT
 
@@ -63,5 +63,5 @@ Present to the human, then **stop**:
 
 - **Order is fixed**: gates → review → triage → re-verify → present. No review on red gates.
 - **Evidence or fix — no third option** for findings.
-- **Parity declines must name the sibling** file/port, not just say "parity".
+- **Declines must cite a file/line or a named contract**, never just "seems fine".
 - **WAIT means wait** — presenting the triage is the end of this skill's authority.

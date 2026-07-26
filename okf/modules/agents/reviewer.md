@@ -144,9 +144,7 @@ Graceful by design: standards off, no docs found, or a distillation/fetch error 
 
 Category agents deliberately do not set `OutputSchema` — schema validation fails the run on a malformed body, while the design wants malformed → no findings — and the local-model adapter only forwards generic JSON mode via `ResponseMIMEType`. So category agents request `application/json` (valid JSON syntax), describe the exact findings schema in their prompt, and `parseFindings` recovers **defensively** — it extracts the first JSON array from the model text, tolerates fences/prose, and treats a malformed body as no findings (empty = success). This is best-effort by design; the narrow single-lens prompts are themselves the false-positive control, and the model is a config knob.
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `reviewer.go` — `Deps`, `Engine`, `NewEngine`, `Engine.Kickoff(ctx, raw)`, and the `decide` intake orchestration + skip helpers. Gated by `REVIEW_ENABLED` (default false, the kill switch).
 - `filter.go` — the exclude-glob `fileFilter` (basename and `**`-aware path globs) that drops generated/vendored/binary churn and totals the filtered patch bytes.

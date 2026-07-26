@@ -1,11 +1,11 @@
 ---
 name: add-workflow-agent
-description: Scaffold a new workflow agent end-to-end on the modern pair — ingest Kind, dispatcher registration, agent package, tests, webhook route, and the knowledge updates. Use when adding an entirely new workflow (a new fixer, digest, or reviewer-style agent) to the system.
+description: Scaffold a new workflow agent end-to-end — ingest Kind, dispatcher registration, agent package, tests, webhook route, and the knowledge updates. Use when adding an entirely new workflow (a new fixer, digest, or reviewer-style agent) to the system.
 ---
 
 # Add Workflow Agent
 
-Scaffold a complete new workflow agent: Go reference first, Python mirror in the same
+Scaffold a complete new workflow agent in the same
 change, knowledge bundle updated before the change is called done.
 
 **Parameters**: agent name (lowercase slug, e.g. `typecheck`), spec via `@file` — **a spec
@@ -35,13 +35,12 @@ branch slug and verify check name.
 - Import boundaries the ARCH suite enforces: okf/standards/architecture.md
 - Route / Kind / branch / check-name registry + naming patterns ("Adding a new workflow"): okf/standards/webhooks.md
 - Test rules (deterministic, no LLM-content assertions, ≥80%): okf/standards/testing.md
-- Go-first / Python-mirror contract: okf/standards/language-parity.md
 - Docs-move-with-code rule: okf/standards/documentation.md
 - The dispatcher being extended: okf/modules/agents/root-dispatcher.md
 - Envelope normalization: okf/modules/platform/ingest.md · HTTP ingress: okf/modules/platform/webhook.md
 - Fixer-shaped agents share the engine: okf/modules/agents/fixflow.md
 
-## Steps — Go reference first (`go/`)
+## Steps
 
 ### 1. Ingest Kind
 
@@ -83,15 +82,7 @@ logged no-op). Wire the real deps in `go/cmd/agent`.
 the logic directly, `httptest` for anything external. Deterministic only — never assert on
 LLM output content. The package must clear the ≥80% gate (okf/standards/testing.md).
 
-### 6. Python mirror — same change set
-
-Repeat 1–5 in `python/automation_agent/`: `ingest/envelope.py`, `webhook/`,
-`agent/<name>/` (`agents_setup.py` + `<name>.py` + `prompts/`), `agent/root/agents_setup.py`,
-`cmd/`. Tests mirror the Go cases in `python/tests/test_<name>.py`. Same env var names,
-routes, Kind string, branch, label, check name — byte-identical external contract
-(okf/standards/language-parity.md). Do **not** touch `kotlin/` or `javascript/`.
-
-### 7. Knowledge update — MANDATORY
+### 6. Knowledge update — MANDATORY
 
 A change is not done until the concepts and diagrams that describe it are updated in the
 same change (okf/standards/documentation.md). Run `/update-okf`, which must produce:
@@ -101,7 +92,7 @@ same change (okf/standards/documentation.md). Run `/update-okf`, which must prod
 - the okf/modules/agents/root-dispatcher.md flow + behavior lists;
 - new rows in **both** okf/standards/webhooks.md tables if any route / Kind / check name
   was added, plus a CI-author example in okf/standards/ci-integration.md for fixers;
-- `.env.example` in `go/` and `python/` + the architecture-design config table for any
+- the repo-root `.env.example` + the architecture-design config table for any
   new env var.
 
 ## Verification
@@ -109,7 +100,6 @@ same change (okf/standards/documentation.md). Run `/update-okf`, which must prod
 ```bash
 cd go && make ci            # tidy + vet + arch + test + 80% cover
 cd go && make docs-check    # okf bundle conformance
-cd python && make ci        # ruff + mypy + arch + pytest + cover
 ```
 
 Then grep the repo for the new route, Kind, branch, and check name — every mention (code,
@@ -117,9 +107,8 @@ concepts, diagrams, registry) must agree.
 
 ## Key Rules
 
-- **Go first, Python in the same logical change** — the modern pair never silently drifts;
+- **Knowledge moves with the code** — the concept updates in the same change;
   any deliberate gap is recorded in the PR description.
-- **Frozen pair untouched** — feature work never edits `kotlin/` or `javascript/`.
 - **Check names are globally unique** and routes/Kinds/branches are external contracts —
   follow the naming patterns in okf/standards/webhooks.md exactly.
 - **Wiring stays pure** — `agents_setup.*` has no logic, no I/O, no env reads; only

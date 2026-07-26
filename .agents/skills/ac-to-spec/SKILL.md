@@ -38,9 +38,8 @@ standards, or the okf bundle; only other specs may reference specs.
 Ground technical sections in the bundle — cite concepts, never copy their content in:
 
 - `okf/orientation/what-this-system-is.md` — what the system does; event flow context
-- `okf/standards/language-parity.md` — two-pair contract (modern Go/Python, frozen Kotlin/TS)
-- `okf/standards/architecture-design.md` — language-neutral design; the ingest→root→workflow path
-- `okf/standards/webhooks.md` — webhook routes and check names (external contracts, all four ports)
+- `okf/standards/architecture-design.md` — the authoritative design; the ingest→root→workflow path
+- `okf/standards/webhooks.md` — webhook routes and check names (external contracts)
 - `okf/orientation/suspend-resume-design.md` — durable park/resume design
 - `okf/standards/testing.md` — coverage floor, no LLM-output assertions
 - `okf/standards/documentation.md` — which okf concepts/diagrams must move with a change
@@ -137,13 +136,11 @@ explore the codebase before asking; one question at a time with a recommended an
 and tradeoff; write each resolution back immediately; append a `## Decisions` log.
 
 Always walk the house decision branches, even if unmarked:
-1. **Parity impact** — modern pair only? Go-first, Python mirrored in the same logical
-   change; frozen Kotlin/TS untouched by features (`okf/standards/language-parity.md`)
-2. **External contracts** — any ingest Kind, webhook route, or check-name change binds
-   ALL FOUR ports (`okf/standards/webhooks.md`)
-3. **Env/config** — identical names, defaults, validation across the pair
-4. **Durable park/resume** — does the change interact with suspended workflows?
-5. **okf bundle** — which concepts/diagrams move with this change
+1. **External contracts** — any ingest Kind, webhook route, or check-name change is
+   observed by GitHub and by every target repo's CI (`okf/standards/webhooks.md`)
+2. **Env/config** — name, default, validation; `internal/config` is the only env reader
+3. **Durable park/resume** — does the change interact with suspended workflows?
+4. **okf bundle** — which concepts/diagrams move with this change
    (`okf/standards/documentation.md`)
 
 **No `<!-- TODO -->` markers may survive.** Explicit deferrals go under `### Deferred`
@@ -181,8 +178,8 @@ out); and that the spec is implementation-ready — including which ports it cov
   a standard after the change ships, never by referencing the spec
 - **Grill until clean — never punt TODOs forward**
 - **Stay grounded** — every filled section traces to input, codebase, or a grill answer
-- **Use repo vocabulary** — ingest, root dispatcher, workflow agents, modern/frozen
-  pairs, park/resume — so the spec reads natively
+- **Use repo vocabulary** — ingest, root dispatcher, workflow agents, park/resume,
+  fixflow — so the spec reads natively
 - **Respect the template** — no extra sections, no skipped sections
 
 ## No Verification Needed

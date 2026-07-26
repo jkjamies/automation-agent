@@ -12,7 +12,7 @@ timestamp: 2026-07-04T00:00:00Z
 
 The service's security controls in one view. Each control is owned and detailed by its
 concept; this registry exists so a security review doesn't have to reassemble the model
-from package docs. External contracts here bind **all four ports**.
+from package docs.
 
 ## Ingress authentication
 

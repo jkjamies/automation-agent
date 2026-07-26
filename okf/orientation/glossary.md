@@ -36,11 +36,6 @@ timestamp: 2026-07-04T00:00:00Z
   [tasks](/modules/platform/tasks.md).
 - **Sweep** — the durable timeout catch-all (`POST /internal/sweep`, Cloud Scheduler):
   claims parked runs whose CI never reported and frees them with a human-review notice.
-- **Modern pair / frozen pair** — the parity structure: Go+Python evolve together on the
-  ADK 2.x line; Kotlin+TypeScript are feature-frozen, 1:1 with each other. See the
-  [parity standard](/standards/language-parity.md).
-- **Reference port** — the Go implementation; behavior changes land there first and are
-  mirrored into Python in the same logical change.
 - **Verify check** — the label-triggered GitHub Actions check (`agent-lint-verify`,
   `agent-coverage-verify`) whose `check_run` conclusion resumes a parked fix run.
 - **Clean / no-work** — a triage that found nothing to address: the run concludes

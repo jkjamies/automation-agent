@@ -48,9 +48,7 @@ flowchart TD
 
 Keeping a single entry point is the point of "root": new ingress sources (GitHub / Jira / Confluence / human) and smarter routing (e.g. LLM-based) slot in here without restructuring. Today it is a deterministic dispatcher; it can become an ADK agent when LLM routing is wanted.
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `root.go` — `Dispatcher`: routes an `ingest.Envelope` to a `Handler` by `Kind`; unregistered kinds are logged and ignored.
 - `agents_setup.go` — `BuildRootDispatcher(Deps)`: conditional registration of the summary, coverage-fixer, lint-fixer, and reviewer handlers.

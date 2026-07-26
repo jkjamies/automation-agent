@@ -43,9 +43,7 @@ flowchart TD
     Events["UserText / AssistantText / TextEvent / StateString"] --> Agents
 ```
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
 - `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama client. Converts genai content ⇄ Ollama chat messages and aggregates streaming chunks. The ADK ships no built-in Ollama model, so this adapter provides one.

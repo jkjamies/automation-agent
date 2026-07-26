@@ -10,10 +10,8 @@ timestamp: 2026-07-04T00:00:00Z
 
 # Observability (distributed tracing)
 
-How the automation-agent is traced, stated language-neutrally. The **Go** port (`go/internal/obs`)
-is the reference implementation; the Python, TypeScript, and Kotlin ports mirror this contract
-with their native SDKs (parity is at the **data** level — same span names/attributes — not the
-registration code). This document is the design record: the rationale and decisions live here.
+How the automation-agent is traced. The implementation is `go/internal/obs`; this document
+is the design record, where the rationale and decisions live.
 
 > **Scope: traces only.** Metrics and a log-bridge signal are not part of this design. This document covers the
 > trace pipeline: provider registration, exporters, propagation, the flush constraint, config, and
@@ -23,8 +21,8 @@ registration code). This document is the design record: the rationale and decisi
 
 ## The core idea: the framework already traces; we only turn it on
 
-Every port's agent framework (`adk-go`, `adk-python`, `adk-js`, `adk-kotlin`) **already emits** a
-native span tree for every run, under the OpenTelemetry **GenAI semantic conventions**:
+The agent framework (`adk-go`) **already emits** a native span tree for every run, under the
+OpenTelemetry **GenAI semantic conventions**:
 
 ```text
 invoke_agent  ──▶  call_llm (gen_ai.request.model, token usage, finish reason)  ──▶  execute_tool (gen_ai.tool.name)
@@ -40,9 +38,8 @@ is proven.
 
 The `obs` package builds and globally registers **one** tracer provider per process; the framework
 attaches its auto-spans to that global. We **do not** call the framework's own telemetry-setup
-helper in any port — registering ours first is the one conflict-free integration that works
-uniformly (one port's helper refuses to override an already-registered global; the others read the
-global). Single exporter-config owner ⇒ trivial parity.
+helper — registering ours first keeps a single owner of the exporter configuration, and the
+framework reads whatever global is already installed.
 
 Registration (`obs.Init` / equivalent) runs **once**, right after config load in the entrypoint,
 and:
@@ -106,8 +103,8 @@ is a no-op — no `traceparent` leaks onto a task.
 
 ## Config
 
-Identical env var names, defaults, and validation across all four ports (parity rule #3). Owned by
-each port's `config` layer — the **only** place that reads `OTEL_*`; `obs` takes a typed struct.
+Owned by the `config` layer — the **only** place that reads `OTEL_*`; `obs` takes a typed
+struct, which is what keeps the env surface in one file.
 
 | Var | Default | Meaning |
 |---|---|---|

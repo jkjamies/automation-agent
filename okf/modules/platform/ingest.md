@@ -50,7 +50,7 @@ an `Envelope` — the root agent's routing is the only other place that changes.
 `Encode`/`Decode` are the envelope's JSON wire form, used when it crosses the Cloud Tasks
 boundary ([tasks](/modules/platform/tasks.md) → `POST /internal/dispatch`). The form —
 `kind`/`source` strings, `received_at` RFC 3339, `payload` standard base64 — is an
-external contract and must stay byte-identical across all four language ports. `Decode`
+external contract and must stay byte-identical for anything that reads it. `Decode`
 rejects an unknown `Kind` as a permanent (poison) error so the worker acks rather than
 retries it. The in-process transport passes the struct directly and never touches the
 codec.

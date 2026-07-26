@@ -31,9 +31,9 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
 
 | Changed path | Owning concept |
 |---|---|
-| `*/agent/<name>/**` (any port) | `okf/modules/agents/<name>.md` |
-| `*/internal/<pkg>/**`, `*/automation_agent/<pkg>/**` | `okf/modules/platform/<pkg>.md` |
-| a port's build files, Makefile, conventions | `okf/modules/ports/<port>.md` |
+| `go/internal/agent/<name>/**` | `okf/modules/agents/<name>.md` |
+| `go/internal/<pkg>/**` | `okf/modules/platform/<pkg>.md` |
+| build files, Makefile, conventions | `okf/modules/service.md` |
 | ingest Kinds, routes, check names | `okf/orientation/event-flow.md` + `okf/standards/webhooks.md` |
 | park/resume, session/park stores | `okf/orientation/suspend-resume-design.md` |
 | env vars | `okf/standards/local-development.md` + the architecture-design config table |

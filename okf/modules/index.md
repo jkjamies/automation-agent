@@ -1,10 +1,12 @@
 # Modules
 
-The system's units, documented once for all ports (the Go port is the reference
-implementation; per-port deltas live in the port concepts).
+The system's units: the service itself, its workflow agents, and its deterministic platform packages.
 
 # Subdirectories
 
 * [agents](agents/index.md) - The workflow agents: the root dispatcher, the daily summary, the two fixers over the shared fixflow engine, the PR reviewer, and the setup layer they are built on.
 * [platform](platform/index.md) - The deterministic, agent-free platform packages: config, auth, GitHub API, git working tree, ingress envelope, webhooks, notifications, observability, and the execution transport.
-* [ports](ports/index.md) - The four language ports and how the two parity pairs relate.
+
+# Concepts
+
+* [The service](service.md) - The Go service under `go/` — its kickoff and resume flows, package layout, build targets, and the conventions the architecture tests enforce.

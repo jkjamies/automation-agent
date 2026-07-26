@@ -1,11 +1,11 @@
 ---
 name: add-platform-package
-description: Scaffold a new deterministic, agent-free tooling package on the modern pair, with tests and its knowledge concept. Use when the system needs a new platform capability (an API client, ingress, transport, notifier-style package) rather than a new workflow.
+description: Scaffold a new deterministic, agent-free tooling package, with tests and its knowledge concept. Use when the system needs a new platform capability (an API client, ingress, transport, notifier-style package) rather than a new workflow.
 ---
 
 # Add Platform Package
 
-Scaffold a deterministic tooling package: Go reference first, Python mirror in the same
+Scaffold a deterministic tooling package in the same
 change, concept + index entry in the bundle before the change is called done.
 
 **Parameters**: package name (lowercase, e.g. `ratelimit`), optional spec via `@file` or
@@ -23,8 +23,8 @@ When a spec is given via `@file`, scan it for unresolved markers (`<!-- TODO -->
 `- [ ]` AC items, empty required header fields, `...` table cells, `presumably`/`appears
 to` presumptions). If any are present, **stop and run `/grill-me @{spec}` first**, then
 resume. Bare invocations are fine for small packages — but the public surface (types,
-constructors, error conditions) must be settled before writing code, because Python must
-mirror it exactly.
+constructors, error conditions) must be settled before writing code: it is the contract
+every consumer is built against, and widening it later is far cheaper than narrowing it.
 
 ## Reference knowledge (read before writing code)
 
@@ -32,11 +32,10 @@ mirror it exactly.
 - What "platform" means (deterministic, agent-free): okf/orientation/what-this-system-is.md
 - Existing package concepts to match in shape: okf/modules/platform/index.md
 - Test rules (httptest stubs, ≥80%, table-driven): okf/standards/testing.md
-- Go-first / Python-mirror contract: okf/standards/language-parity.md
 - Docs-move-with-code rule: okf/standards/documentation.md
 - Go style conventions: okf/standards/go-style.md
 
-## Steps — Go reference first (`go/`)
+## Steps
 
 ### 1. Create the package
 
@@ -66,15 +65,7 @@ Construct the package in `go/cmd/agent` (entrypoints are leaves — nothing impo
 and hand it to whatever `Deps` struct needs it. Any new env var: add it to
 `go/internal/config` with the same name, default, and validation the spec fixed.
 
-### 5. Python mirror — same change set
-
-`python/automation_agent/<name>/` with the same module name, public surface, error
-conditions, and injected dependencies (idiomatic Python, same behavior — see
-okf/standards/language-parity.md). Mirror the test cases in
-`python/tests/test_<name>.py`; the arch suite (`python/arch/`) applies the same
-boundaries. Do **not** touch `kotlin/` or `javascript/`.
-
-### 6. Knowledge update — MANDATORY
+### 5. Knowledge update — MANDATORY
 
 A change is not done until the concepts that describe it are updated in the same change
 (okf/standards/documentation.md). Run `/update-okf`, which must produce:
@@ -83,7 +74,7 @@ A change is not done until the concepts that describe it are updated in the same
   Mermaid flow if the package has one) + entry in `okf/modules/platform/index.md`;
 - okf/orientation/event-flow.md and the architecture-design diagrams **only if** the
   package changes the event path or topology;
-- `.env.example` in `go/` and `python/` + the architecture-design config table for any
+- the repo-root `.env.example` + the architecture-design config table for any
   new env var.
 
 ## Verification
@@ -92,7 +83,6 @@ A change is not done until the concepts that describe it are updated in the same
 cd go && make ci            # tidy + vet + arch + test + 80% cover
 cd go && make lint          # depguard picks up the new boundary entry
 cd go && make docs-check    # okf bundle conformance
-cd python && make ci        # ruff + mypy + arch + pytest + cover
 ```
 
 ## Key Rules
@@ -103,6 +93,5 @@ cd python && make ci        # ruff + mypy + arch + pytest + cover
   even if convenient.
 - **Same public surface on both modern ports** — same names, inputs, outputs, and error
   conditions; idiom differs, behavior does not.
-- **Frozen pair untouched** — `kotlin/` and `javascript/` receive no feature work.
 - **Concept + index entry ship in the same change** — the platform index is how the next
   reader discovers the package exists.

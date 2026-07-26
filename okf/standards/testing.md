@@ -1,7 +1,7 @@
 ---
 type: Standard
 title: Testing
-description: How to run every kind of test for each port and the rules they obey — 80% coverage, no LLM-content assertions, and stubbed networks.
+description: How to run every kind of test and the rules they obey — 80% coverage, no LLM-content assertions, and stubbed networks.
 tags: [testing, coverage, conventions]
 sensitivity: internal
 bundle: automation-agent
@@ -10,15 +10,13 @@ timestamp: 2026-07-04T00:00:00Z
 
 # Testing
 
-How to run **every** kind of test for each port, plus the rules they must obey. This
-is the source of truth — read it and you can run the suite without asking anyone.
-
-> **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same test
-> kinds and equivalent commands apply to every port — run them from that port's directory.
+How to run **every** kind of test, plus the rules they must obey. This is the source of
+truth — read it and you can run the suite without asking anyone. All commands run from the
+`go/` directory.
 
 ---
 
-## Principles (all ports)
+## Principles
 
 - **Coverage ≥ 80%**, enforced by `make cover` (and `make ci`). Put the hard logic in
   injectable, LLM-free functions so it's reachable by unit tests.
@@ -33,12 +31,12 @@ is the source of truth — read it and you can run the suite without asking anyo
 - **Table-driven tests** where they reduce duplication. Name tests for behavior.
 - Keep tests in the **same package** for white-box access, or a `_test` package when
   asserting the public API surface.
-- The *cases* mirror across ports even though the frameworks differ (`testing` vs
-  JUnit/kotlin-test vs pytest). See [Language parity](/standards/language-parity.md).
+- **Regression tests pin the bug, not the fix.** A test for a fixed defect must fail
+  against the pre-fix code; if it passes either way it documents nothing.
 
 ---
 
-## Go (`go/`) — reference
+## Running the suite
 
 Module `automation-agent`, Go 1.26. **Run everything from the `go/`
 directory.** All targets live in `go/Makefile`.
@@ -88,9 +86,22 @@ The session history **and** the park record (suspend/resume state) are switched 
 
 ### Firestore-backed tests (emulator)
 
-The `*_firestore.go` code is validated against the Firestore **emulator** (needs Java
-17+). It is *excluded* from the default `make cover` gate denominator so no one is forced
-to run the emulator for everyday work; validate it explicitly:
+The `*_firestore.go` code is validated against the Firestore **emulator** (needs a JRE).
+It is *excluded* from the default `make cover` gate denominator so no one is forced to run
+the emulator for everyday work — which makes running it explicitly load-bearing rather than
+optional: without it `internal/agent/setup` measures ~41% instead of ~82%, and the missing
+half is the cloud durability path production runs on. CI runs it in its own job.
+
+Either the standalone jar (no gcloud SDK needed — this is what CI uses):
+
+```bash
+curl -fsSL -o /tmp/firestore-emulator.jar \
+  https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+java -jar /tmp/firestore-emulator.jar --host=127.0.0.1 --port=8765 &
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8765 make cover-firestore
+```
+
+or via gcloud, if you already have it:
 
 ```bash
 gcloud components install cloud-firestore-emulator            # one-time
@@ -127,11 +138,16 @@ These never assert on model *content* — they assert the call wiring round-trip
 ### Lint / vet alongside tests
 
 - `make vet` → `go vet ./...`.
-- `make lint` → `golangci-lint run` (config `go/.golangci.yml`): errcheck, govet,
-  ineffassign, staticcheck, unused, gofmt, goimports, misspell, revive, **depguard**.
-  depguard enforces the same boundary the ARCH tests do — tooling packages (`githubapi`,
-  `gitrepo`, `webhook`, `notify`, `scheduler`) may not import `internal/agent/...`. Test
-  files are exempt from `errcheck`.
+- `make lint` → golangci-lint (config `go/.golangci.yml`, schema v2): errcheck, govet,
+  ineffassign, staticcheck, unused, misspell, revive, **depguard**, plus gofmt/goimports as
+  formatters. Note that v2's `staticcheck` subsumes the former gosimple and stylecheck, so
+  the S* and ST* diagnostics are part of the set. depguard enforces the same boundary the
+  ARCH tests do — tooling packages (`githubapi`, `gitrepo`, `webhook`, `notify`, `obs`,
+  `tasks`) may not import `internal/agent/...`. Test files are exempt from `errcheck`.
+- `lint` is **part of `make ci`**, so a new finding fails the gate rather than accumulating.
+  The pinned linter is built from source at the module's own Go toolchain (`make
+  lint-install`); a released binary refuses a module whose `go` directive is newer than its
+  own build.
 
 ### Running a single test / package
 
@@ -142,36 +158,3 @@ go test ./internal/agent/setup/ -run TestParkStoreConformance/sqlite -count=1
 
 ---
 
-## Other ports
-
-Go, Python, and TypeScript expose the same `make` targets (`make test`, `make cover`,
-`make arch`, `make ci`), run from their own directory. Kotlin has no Makefile — it drives
-the equivalent steps through Gradle. The frameworks differ:
-
-| Port | Framework | Coverage tool | Run the suite |
-|---|---|---|---|
-| Go `go/` | `go test` | `go tool cover` | `cd go && make ci` |
-| Python `python/` | pytest (`pytest-asyncio`) | coverage.py (`pytest --cov`) | `cd python && make ci` |
-| TypeScript `javascript/` | the port's runner | the port's coverage | `cd javascript && make ci` |
-| Kotlin `kotlin/` | Kotest / JUnit | Kover | `cd kotlin && ./gradlew test arch koverVerify` |
-
-### Python (`python/`)
-
-```bash
-cd python
-make ci              # ruff + mypy + arch + pytest + coverage gate (>= 80%)
-make test            # pytest -q
-make cover           # pytest --cov (firestore park store omitted — emulator-only)
-make cover-firestore # the firestore-backed tests against a running emulator
-```
-
-`SESSION_BACKEND` selects the durable store the suspend/resume tests exercise: `memory`
-(default), `sqlite` (adk `SqliteSessionService` + an `aiosqlite` park store), or `firestore`
-(adk's native `FirestoreSessionService` + a custom park store on `google-cloud-firestore`).
-The firestore park store is emulator-only, so `make cover` omits it from the gate and the
-firestore conformance tests are skipped unless `FIRESTORE_EMULATOR_HOST` is set:
-
-```bash
-gcloud emulators firestore start --host-port=localhost:8765 &
-FIRESTORE_EMULATOR_HOST=localhost:8765 make cover-firestore
-```
