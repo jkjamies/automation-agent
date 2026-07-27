@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +38,10 @@ func TestVerifyOllamaModelsNamesTheMissingTagAndTheFix(t *testing.T) {
 
 	err := VerifyOllamaModels(context.Background(), host, "gemma4:12b", "gemma3:12b")
 	if err == nil {
-		t.Fatal("a tag the server does not have must be reported")
+		t.Fatal("a tag the server does not have must be an error")
+	}
+	if errors.Is(err, ErrOllamaUnreachable) {
+		t.Fatal("a reachable server missing a model must not read as unreachable")
 	}
 	msg := err.Error()
 	for _, want := range []string{
@@ -67,19 +71,20 @@ func TestVerifyOllamaModelsEmptyServer(t *testing.T) {
 	}
 }
 
-// A server that is not up reads as exactly that, and names the host it tried — the whole
-// result is a log line, so the message has to be self-explanatory without a caller to shape it.
+// Unreachable is a distinct outcome, because the caller treats it differently: Ollama not being
+// up yet is ordinary in local development and must not block startup, while a reachable server
+// missing a model is a configuration error that will fail every run.
 func TestVerifyOllamaModelsUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	host := srv.URL
 	srv.Close() // nothing is listening now
 
 	err := VerifyOllamaModels(context.Background(), host, "gemma4:12b")
-	if err == nil {
-		t.Fatal("an unreachable server must be reported")
+	if !errors.Is(err, ErrOllamaUnreachable) {
+		t.Fatalf("err = %v, want ErrOllamaUnreachable", err)
 	}
-	if !strings.Contains(err.Error(), host) || !strings.Contains(err.Error(), "could not be reached") {
-		t.Errorf("error should say it could not reach the host, and name it: %v", err)
+	if !strings.Contains(err.Error(), host) {
+		t.Errorf("error should name the host it tried: %v", err)
 	}
 }
 

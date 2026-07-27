@@ -35,10 +35,10 @@ agent locally without asking anyone.
   ```
   **Model tags are a moving target.** A family gets a new generation, a size is renamed, a tag
   is withdrawn — so treat the defaults above as a starting point and let `make ollama-check`
-  tell you what your server has. If the configured tag is not among them, `make run` says so in
-  one warning at startup, naming the tag and the `ollama pull` that fixes it (see
-  [LLM selection](#llm-selection--llm_provider)), rather than leaving you to discover it on the
-  first webhook.
+  tell you what your server has. If the configured tag is not among them, `make run` refuses to
+  start and names both the tag and the `ollama pull` that fixes it (see
+  [LLM selection](#llm-selection--llm_provider)); it does not wait to discover this on the first
+  webhook.
   (Or skip Ollama and point at Vertex/AI-Studio Gemini — see [LLM selection](#llm-selection--llm_provider).)
 - A **`.env`** file — copy the starting point and edit:
   ```bash
@@ -95,12 +95,12 @@ attempts, params`) live:
 > point, not a contract — pick whatever your hardware runs well.
 
 **Startup verification (ollama only).** On boot the service lists the server's models and
-confirms both configured tags are present. It is **advisory** — configuring the deployment is
-yours to get right, and this never blocks the boot. A missing tag (or an unreachable server) is
-one warning naming the tag, the `ollama pull` that fixes it, and the models the server does
-have; without it the first sign of a stale tag is an opaque failure on the first generation,
-after a webhook has been accepted, a task dispatched, and a repository cloned. Nothing is checked
-under `LLM_PROVIDER=gemini`.
+confirms both configured tags are present. A reachable server that lacks one is a configuration
+error and startup **fails**, naming the tag, the `ollama pull` that fixes it, and the models the
+server does have — because every run would otherwise fail the same way, and only after a webhook
+had been accepted, a task dispatched, and a repository cloned. A server that is simply *not up
+yet* only **warns**: starting Ollama after the service is ordinary, and startup order should not
+matter. Nothing is checked under `LLM_PROVIDER=gemini`.
 
 ### Environment variables (full reference)
 

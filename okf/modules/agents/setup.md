@@ -30,15 +30,13 @@ Model sizing splits by task: code reasoning and code changes use the larger code
 size is renamed, a tag is withdrawn) and it previously appeared in the loader, three packages'
 live tests, `.env.example`, and the docs.
 
-`VerifyOllamaModels` makes a stale tag legible: `NewOllamaModel` only builds a client, so a tag
-that was never pulled constructs fine and first fails on the initial generation — after a webhook
-was accepted, a task dispatched, and a repository cloned, where it reads as an opaque drive error
-rather than "that model isn't here". The service lists the server's models once at startup
-instead and warns, naming the tag, the `ollama pull` that fixes it, and what the server does
-have. **Advisory only** — configuring the deployment is the operator's job and this never decides
-whether the process boots, which is also why the error carries its whole explanation in the
-message rather than in a sentinel: nothing branches on which failure it was. Skipped entirely
-under `LLM_PROVIDER=gemini`.
+`VerifyOllamaModels` closes the gap that made a stale tag expensive: `NewOllamaModel` only
+builds a client, so a tag that was never pulled constructs fine and first fails on the initial
+generation — after a webhook was accepted, a task dispatched, and a repository cloned. The
+service lists the server's models at startup instead. A reachable server missing a tag fails the
+boot, naming the tag, the `ollama pull` that fixes it, and what the server does have; a server
+that is not up yet only warns, since starting Ollama after the service is ordinary and startup
+order should not matter. Skipped entirely under `LLM_PROVIDER=gemini`.
 
 ## Flow
 
@@ -59,7 +57,7 @@ flowchart TD
 ## Implementation layout
 
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
-- `ollama_preflight.go` — `VerifyOllamaModels(ctx, host, tags...)`: the advisory startup check that the configured tags are pulled. Returns a self-explanatory error the caller logs; Ollama's implicit `:latest` is normalized on both sides so a bare name does not read as missing.
+- `ollama_preflight.go` — `VerifyOllamaModels(ctx, host, tags...)`: the startup check that the configured tags are pulled. `ErrOllamaUnreachable` separates "server is down" (warn) from "server lacks the model" (fail), which is the whole point — the two want opposite responses.
 - `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama client. Converts genai content ⇄ Ollama chat messages and aggregates streaming chunks. The ADK ships no built-in Ollama model, so this adapter provides one.
 - `gemini.go` — the Gemini-backed `model.LLM` for the cloud deployment.
 - `prompt.go` — `Prompts`, a markdown loader over an embedded filesystem (each agent embeds its own `prompts/` dir).
