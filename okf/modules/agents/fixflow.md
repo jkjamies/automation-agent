@@ -21,7 +21,9 @@ A run whose CI never reports is freed two ways: a soft per-run `CITimeout` timer
 
 Terminal resolution (`clear`) deletes both the park record and the ADK session (`LongRunDriver.DeleteSession`) so durable backends don't accumulate finished runs.
 
-**Every terminal path notifies.** Success, retries exhausted, timeout, clean/no-work, an attempt that failed outright, *and* a run whose drive itself failed (the session backend being unavailable, say) all reach a human. This is the reason the failure paths route through one helper rather than returning bare errors: by the time most failures happen the attempt has already pushed a commit and opened a PR, and the dispatcher only logs — so a run dropped without a notification leaves that PR with nobody watching it.
+**Once a run is underway, every terminal path notifies.** Success, retries exhausted, timeout, clean/no-work, an attempt that failed outright, *and* a run whose drive itself failed (the session backend being unavailable, say) all reach a human. This is the reason the failure paths route through one helper rather than returning bare errors: by the time most failures happen the attempt has already pushed a commit and opened a PR, and the dispatcher only logs — so a run dropped without a notification leaves that PR with nobody watching it.
+
+The qualifier is deliberate. A failure *before* the run starts — the kickoff's own `putParams` write failing — returns a bare error and notifies nothing, because nothing has been pushed and there is no PR to leave unattended. Notifying there would be noise about work that never began.
 
 ## Workflow graph
 

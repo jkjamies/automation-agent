@@ -17,12 +17,15 @@ import (
 	"automation-agent/internal/obs"
 )
 
-// MaxTaskBytes is the Cloud Tasks size limit for an HTTP-target task. Enqueue refuses an
-// envelope whose encoded body exceeds it rather than letting Cloud Tasks reject the
-// CreateTask call opaquely (spec §9). It is the same constant the ingress layer sizes its
-// body caps against, so a body accepted at ingress is always enqueueable; if a future
-// payload could exceed it, the fallback is store-in-Firestore + enqueue a reference —
-// noted in the spec, not built here.
+// MaxTaskBytes is the Cloud Tasks size limit for an HTTP-target task, measured on the
+// *encoded* envelope. Enqueue refuses a body over it rather than letting Cloud Tasks reject
+// the CreateTask call opaquely (spec §9).
+//
+// It is not the ingress cap and must not be confused with it: raw request bodies are capped
+// at the smaller ingest.MaxPayloadBytes, which is derived from this limit precisely so that
+// a body accepted at ingress always still fits once base64 has inflated it by a third. If a
+// future payload could exceed this, the fallback is store-in-Firestore + enqueue a
+// reference — noted in the spec, not built here.
 const MaxTaskBytes = ingest.MaxEncodedBytes
 
 // submitter is the slice of the Cloud Tasks client this backend uses, isolated so the

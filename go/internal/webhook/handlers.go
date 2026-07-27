@@ -189,11 +189,13 @@ func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, e ingest.E
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// readBody reads up to limit bytes. A body over the cap is rejected with 413 rather
-// than silently truncated — a truncated body would both fail HMAC verification and feed
-// malformed JSON downstream. 413 is also the honest status: the caller must send less, so
-// a retry of the same body can never succeed. Returns false (after writing the error
-// response) on failure.
+// readBody reads up to limit bytes. A body over the cap is rejected with 413 rather than
+// silently truncated: a truncated body feeds malformed JSON downstream, and on the
+// HMAC-authenticated routes it also fails signature verification whenever a secret is set.
+// (This helper serves every route, including bearer-authenticated /internal/dispatch and
+// local runs with signing off, so the malformed-payload half is the part that always holds.)
+// 413 is also the honest status: the caller must send less, so a retry of the same body can
+// never succeed. Returns false (after writing the error response) on failure.
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer func() { _ = r.Body.Close() }()

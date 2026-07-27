@@ -244,7 +244,10 @@ func TestMaxPayloadFitsInATask(t *testing.T) {
 		ingest.KindCoverage,
 		"webhook:/coverage",
 		bytes.Repeat([]byte("x"), ingest.MaxPayloadBytes),
-		time.Now().UTC(),
+		// Fixed, and deliberately carrying full nanosecond precision: RFC 3339 trims trailing
+		// zeros, so this is the longest the timestamp can serialize. A boundary test should
+		// measure the worst case, not whatever time.Now() happened to round to.
+		time.Date(2026, 7, 27, 20, 37, 57, 123456789, time.UTC),
 	))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)

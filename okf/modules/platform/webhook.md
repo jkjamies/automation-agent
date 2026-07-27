@@ -61,7 +61,7 @@ sequenceDiagram
     rect rgb(255,245,235)
     Client->>Mux: POST /webhooks/github (check_run)
     Mux->>Srv: handleGitHub(w, r)
-    Srv->>Srv: readBody (MaxBytesReader, dispatch cap -> 413 over cap)
+    Srv->>Srv: readBody (MaxBytesReader, ingress cap -> 413 over cap)
     alt secret set
         Srv->>Srv: verifySignature(secret, X-Hub-Signature-256, body)
         Note right of Srv: HMAC-SHA256, hmac.Equal
@@ -119,5 +119,7 @@ actually be enqueued. `/internal/dispatch` receives that already-encoded envelop
 larger, so it reads up to `ingest.MaxEncodedBytes`. Over-cap is `413`, never truncation: a
 truncated body would fail HMAC verification and feed malformed JSON downstream, and `413` is
 the honest status because the caller must send less — a retry of the same body can never
-succeed, whereas a `500` would invite the source to retry it forever. Deterministic tooling — no agent imports. Fully tested with a
-local HTTP test harness.
+succeed, whereas a `500` would invite the source to retry it forever.
+
+Deterministic tooling — no agent imports. Tested against a local HTTP harness rather than a
+live GitHub, so the routing, auth, and cap behavior are exercised without network.
