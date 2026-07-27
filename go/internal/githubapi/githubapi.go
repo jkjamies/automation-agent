@@ -427,6 +427,21 @@ func (c *Client) FindOpenPRByBranch(ctx context.Context, owner, repo, branch str
 	return toPR(prs[0]), true, nil
 }
 
+// DefaultBranch returns the repository's default branch (e.g. "main", "master", "develop").
+// The fixers resolve it once per run rather than assuming a name: the branch a fix is cut
+// from, the base its PR targets, and the base of the terminal summary's comparison must all
+// be the same real ref, or the PR is opened against a branch that may not exist.
+func (c *Client) DefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	r, _, err := c.gh.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return "", fmt.Errorf("get repo %s/%s: %w", owner, repo, err)
+	}
+	if b := r.GetDefaultBranch(); b != "" {
+		return b, nil
+	}
+	return "", fmt.Errorf("get repo %s/%s: no default branch reported", owner, repo)
+}
+
 // PullRequestHeadSHA returns the PR's current head commit SHA. The reviewer compares it to the
 // SHA carried by a review task to detect a task superseded by a newer push (coalesce-to-latest)
 // and skip a stale review.

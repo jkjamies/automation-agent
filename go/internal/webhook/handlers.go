@@ -194,7 +194,7 @@ func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, e ingest.E
 // malformed JSON downstream. Returns false (after writing the error response) on failure.
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError

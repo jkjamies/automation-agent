@@ -14,13 +14,18 @@ import (
 // Kickoff is the trusted envelope a CI job posts: repo/base identify where to work
 // (reliable), and report is the arbitrary tool output (lint report, coverage report,
 // …) that the agent's triage LLM reasons over.
+//
+// Base is optional and left empty when the caller omits it — the driver then resolves the
+// repository's actual default branch. It is deliberately not defaulted to a literal name
+// here: a hardcoded "main" is wrong for every repo whose default is master/develop/trunk,
+// and the failure is invisible until the PR is opened against a branch that does not exist.
 type Kickoff struct {
 	Repo   string          `json:"repo"`
 	Base   string          `json:"base,omitempty"`
 	Report json.RawMessage `json:"report"`
 }
 
-// ParseKickoff unmarshals and validates the envelope, applying defaults.
+// ParseKickoff unmarshals and validates the envelope.
 func ParseKickoff(b []byte) (Kickoff, error) {
 	var k Kickoff
 	if err := json.Unmarshal(b, &k); err != nil {
@@ -28,9 +33,6 @@ func ParseKickoff(b []byte) (Kickoff, error) {
 	}
 	if err := k.Validate(); err != nil {
 		return Kickoff{}, err
-	}
-	if k.Base == "" {
-		k.Base = "main"
 	}
 	return k, nil
 }

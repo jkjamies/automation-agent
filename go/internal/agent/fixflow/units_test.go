@@ -7,12 +7,19 @@ import (
 )
 
 func TestParseKickoff(t *testing.T) {
+	// An omitted base stays empty: the driver resolves the repo's real default branch. It
+	// must NOT be defaulted to a literal name here — a hardcoded "main" opens the PR against
+	// a branch that does not exist on any repo whose default is master/develop/trunk.
 	k, err := ParseKickoff([]byte(`{"repo":"acme/api","report":{"x":1}}`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if k.Owner() != "acme" || k.Name() != "api" || k.Base != "main" || k.ReportText() == "" {
+	if k.Owner() != "acme" || k.Name() != "api" || k.Base != "" || k.ReportText() == "" {
 		t.Errorf("kickoff = %+v", k)
+	}
+	// An explicit base is preserved verbatim (the caller's override).
+	if k, err := ParseKickoff([]byte(`{"repo":"acme/api","base":"develop","report":{"x":1}}`)); err != nil || k.Base != "develop" {
+		t.Errorf("explicit base = %q, err %v; want develop", k.Base, err)
 	}
 	for name, body := range map[string]string{
 		"bad json":       `{`,

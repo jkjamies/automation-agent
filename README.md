@@ -47,7 +47,7 @@ Each port uses its language's **native ADK**, so parity is functional, not versi
 ```bash
 cp .env.example .env      # then edit
 make help                 # list all targets
-make ci                   # tidy + vet + arch + test + coverage gate
+make ci                   # tidy + vet + lint + arch + test + coverage gate
 make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```

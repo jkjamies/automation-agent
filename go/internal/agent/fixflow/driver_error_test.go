@@ -38,11 +38,11 @@ func (e *erroringStore) Put(ctx context.Context, r setup.ParkRecord) error {
 	return e.ParkStore.Put(ctx, r)
 }
 
-func (e *erroringStore) ResolveByPRKey(ctx context.Context, k string) (setup.ParkRecord, bool, error) {
+func (e *erroringStore) ResolveByPRKey(ctx context.Context, workflow, k string) (setup.ParkRecord, bool, error) {
 	if e.failResolve {
 		return setup.ParkRecord{}, false, errors.New("resolve boom")
 	}
-	return e.ParkStore.ResolveByPRKey(ctx, k)
+	return e.ParkStore.ResolveByPRKey(ctx, workflow, k)
 }
 
 func engineWithStore(t *testing.T, store setup.ParkStore, n *fakeNotifier) *Engine {

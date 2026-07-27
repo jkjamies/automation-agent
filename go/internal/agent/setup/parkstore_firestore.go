@@ -14,9 +14,10 @@ import (
 
 // firestoreParkDoc is the Firestore document backing a park record. As with sqlite, the
 // pr_key field doubles as the resume index ("" when not parked), so re-parking under a new
-// key cannot leak a stale entry.
+// key cannot leak a stale entry, and workflow scopes every claim to the owning engine.
 type firestoreParkDoc struct {
 	SessionID string    `firestore:"session_id"`
+	Workflow  string    `firestore:"workflow"`
 	PRKey     string    `firestore:"pr_key"`
 	CallID    string    `firestore:"call_id"`
 	Attempts  int       `firestore:"attempts"`
@@ -24,32 +25,34 @@ type firestoreParkDoc struct {
 	ParkedAt  time.Time `firestore:"parked_at"`
 }
 
-func (d firestoreParkDoc) toRecord() ParkRecord {
-	return ParkRecord{
-		SessionID: d.SessionID, PRKey: d.PRKey, CallID: d.CallID,
-		Attempts: d.Attempts, Params: d.Params, ParkedAt: d.ParkedAt,
-	}
-}
+// firestoreParkDoc mirrors ParkRecord field for field (only the firestore tags differ), so
+// these are plain conversions — a divergence becomes a compile error rather than a field
+// silently dropped on the way to or from storage.
+func (d firestoreParkDoc) toRecord() ParkRecord { return ParkRecord(d) }
 
-func parkDocFromRecord(r ParkRecord) firestoreParkDoc {
-	return firestoreParkDoc{
-		SessionID: r.SessionID, PRKey: r.PRKey, CallID: r.CallID,
-		Attempts: r.Attempts, Params: r.Params, ParkedAt: r.ParkedAt,
-	}
-}
+func parkDocFromRecord(r ParkRecord) firestoreParkDoc { return firestoreParkDoc(r) }
 
 // firestoreParkStore persists park records to Firestore — the serverless, scale-to-zero
-// cloud backend. The atomic claim runs in a Firestore transaction: of N concurrent
-// resolvers, the first to commit clears pr_key; the others' transactions detect the change
-// and retry, re-read the now-cleared key, and find nothing — so exactly one wins.
+// cloud backend. Every fix engine shares this one instance and collection; the workflow
+// field is what keeps their claims disjoint. The atomic claim runs in a Firestore
+// transaction: of N concurrent resolvers, the first to commit clears pr_key; the others'
+// transactions detect the change and retry, re-read the now-cleared key, and find nothing —
+// so exactly one wins.
+//
+// Every query here filters on a SINGLE field (pr_key) and narrows by workflow in Go, so the
+// store needs no composite index — matching the deployment promise that a Native-mode
+// database works with nothing to pre-create. The candidate sets are tiny (at most one doc
+// per workflow per PR), so the client-side narrowing costs nothing.
 type firestoreParkStore struct {
 	client *firestore.Client
 	coll   string
 }
 
 // NewFirestoreParkStore opens a Firestore-backed park store. project may be "" to detect it
-// from ADC / GOOGLE_CLOUD_PROJECT. Close releases the client.
-func NewFirestoreParkStore(ctx context.Context, project, collection string) (*firestoreParkStore, error) {
+// from ADC / GOOGLE_CLOUD_PROJECT. The returned store also implements io.Closer, which is how
+// the entrypoint releases the client at shutdown (it type-asserts rather than depending on
+// the concrete type).
+func NewFirestoreParkStore(ctx context.Context, project, collection string) (ParkStore, error) {
 	if project == "" {
 		project = firestore.DetectProjectID
 	}
@@ -67,8 +70,9 @@ func (s *firestoreParkStore) col() *firestore.CollectionRef { return s.client.Co
 
 func (s *firestoreParkStore) Put(ctx context.Context, r ParkRecord) error {
 	if r.PRKey != "" {
-		// One active doc per pr_key: clear it on any OTHER session still holding it, so
-		// resolve/sweep have a single winner. Best-effort (not transactional with the Set).
+		// One active doc per (workflow, pr_key): clear it on any OTHER session of the SAME
+		// workflow still holding it, so resolve/sweep have a single winner. A sibling engine
+		// parked on the same PR number is left alone. Best-effort (not transactional with the Set).
 		docs, err := s.col().Where("pr_key", "==", r.PRKey).Documents(ctx).GetAll()
 		if err != nil {
 			return err
@@ -76,6 +80,13 @@ func (s *firestoreParkStore) Put(ctx context.Context, r ParkRecord) error {
 		for _, snap := range docs {
 			if snap.Ref.ID == r.SessionID {
 				continue
+			}
+			var d firestoreParkDoc
+			if err := snap.DataTo(&d); err != nil {
+				return err
+			}
+			if d.Workflow != r.Workflow {
+				continue // another engine's park on the same PR key
 			}
 			if _, err := snap.Ref.Update(ctx, []firestore.Update{{Path: "pr_key", Value: ""}}); err != nil {
 				return err
@@ -101,7 +112,7 @@ func (s *firestoreParkStore) Get(ctx context.Context, sessionID string) (ParkRec
 	return d.toRecord(), true, nil
 }
 
-func (s *firestoreParkStore) ResolveByPRKey(ctx context.Context, prKey string) (ParkRecord, bool, error) {
+func (s *firestoreParkStore) ResolveByPRKey(ctx context.Context, workflow, prKey string) (ParkRecord, bool, error) {
 	if prKey == "" {
 		return ParkRecord{}, false, nil // an empty key would match unparked docs (pr_key="")
 	}
@@ -109,15 +120,24 @@ func (s *firestoreParkStore) ResolveByPRKey(ctx context.Context, prKey string) (
 	var found bool
 	err := s.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
 		found = false // reset on each retry
-		docs, err := tx.Documents(s.col().Where("pr_key", "==", prKey).Limit(1)).GetAll()
+		// Query the single indexed field, then pick this workflow's doc in Go (no composite
+		// index). At most one doc per workflow holds a given pr_key, so this selects uniquely.
+		docs, err := tx.Documents(s.col().Where("pr_key", "==", prKey)).GetAll()
 		if err != nil {
 			return err
 		}
-		if len(docs) == 0 {
-			return nil
+		for _, snap := range docs {
+			var d firestoreParkDoc
+			if err := snap.DataTo(&d); err != nil {
+				return err
+			}
+			if d.Workflow != workflow {
+				continue // another engine's run: not ours to claim
+			}
+			rec, found, err = claimDoc(tx, snap)
+			return err
 		}
-		rec, found, err = claimDoc(tx, docs[0])
-		return err
+		return nil
 	})
 	if err != nil {
 		return ParkRecord{}, false, err
@@ -125,9 +145,9 @@ func (s *firestoreParkStore) ResolveByPRKey(ctx context.Context, prKey string) (
 	return rec, found, nil
 }
 
-func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]ParkRecord, error) {
-	// Collect candidate session ids (parked + stale), then claim each in its own
-	// transaction so a concurrent resolve cannot double-claim.
+func (s *firestoreParkStore) Sweep(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
+	// Collect candidate session ids (this workflow's, parked + stale), then claim each in its
+	// own transaction so a concurrent resolve cannot double-claim.
 	it := s.col().Where("pr_key", "!=", "").Documents(ctx)
 	defer it.Stop()
 	type stale struct{ sessionID, prKey string }
@@ -144,6 +164,9 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 		if err := snap.DataTo(&d); err != nil {
 			return nil, err
 		}
+		if d.Workflow != workflow {
+			continue // another engine's run: not ours to sweep
+		}
 		if !d.ParkedAt.IsZero() && d.ParkedAt.Before(cutoff) {
 			candidates = append(candidates, stale{d.SessionID, d.PRKey})
 		}
@@ -154,7 +177,7 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 	for _, c := range candidates {
 		// Claim each candidate; a per-doc error skips it (it stays parked for the next sweep)
 		// rather than discarding the docs already claimed this pass.
-		rec, ok, err := s.claimStaleBySession(ctx, c.sessionID, c.prKey, cutoff)
+		rec, ok, err := s.claimStaleBySession(ctx, workflow, c.sessionID, c.prKey, cutoff)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -168,10 +191,11 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, cutoff time.Time) ([]Par
 }
 
 // claimStaleBySession is the sweep's per-doc atomic claim, keyed by session id. Inside the
-// transaction it re-checks that the doc still carries the expected (stale) pr_key and is
-// still older than cutoff, so a concurrent resolve+re-park between the scan and the claim
-// leaves the fresh park untouched instead of clearing it with a false timeout.
-func (s *firestoreParkStore) claimStaleBySession(ctx context.Context, sid, prKey string, cutoff time.Time) (ParkRecord, bool, error) {
+// transaction it re-checks that the doc still belongs to this workflow, still carries the
+// expected (stale) pr_key, and is still older than cutoff, so a concurrent resolve+re-park
+// between the scan and the claim leaves the fresh park untouched instead of clearing it
+// with a false timeout.
+func (s *firestoreParkStore) claimStaleBySession(ctx context.Context, workflow, sid, prKey string, cutoff time.Time) (ParkRecord, bool, error) {
 	var rec ParkRecord
 	var found bool
 	err := s.client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
@@ -187,8 +211,8 @@ func (s *firestoreParkStore) claimStaleBySession(ctx context.Context, sid, prKey
 		if err := snap.DataTo(&d); err != nil {
 			return err
 		}
-		if d.PRKey != prKey || d.ParkedAt.IsZero() || !d.ParkedAt.Before(cutoff) {
-			return nil // resolved and/or re-parked since the scan — not ours to sweep
+		if d.Workflow != workflow || d.PRKey != prKey || d.ParkedAt.IsZero() || !d.ParkedAt.Before(cutoff) {
+			return nil // another workflow's, or resolved and/or re-parked since the scan
 		}
 		if err := tx.Update(snap.Ref, []firestore.Update{{Path: "pr_key", Value: ""}}); err != nil {
 			return err
@@ -226,17 +250,25 @@ func (s *firestoreParkStore) Delete(ctx context.Context, sessionID string) error
 	return err
 }
 
-func (s *firestoreParkStore) ParkedCount(ctx context.Context) (int, error) {
+func (s *firestoreParkStore) ParkedCount(ctx context.Context, workflow string) (int, error) {
 	it := s.col().Where("pr_key", "!=", "").Documents(ctx)
 	defer it.Stop()
 	n := 0
 	for {
-		if _, err := it.Next(); err == iterator.Done {
+		snap, err := it.Next()
+		if err == iterator.Done {
 			break
-		} else if err != nil {
+		}
+		if err != nil {
 			return 0, err
 		}
-		n++
+		var d firestoreParkDoc
+		if err := snap.DataTo(&d); err != nil {
+			return 0, err
+		}
+		if d.Workflow == workflow {
+			n++
+		}
 	}
 	return n, nil
 }

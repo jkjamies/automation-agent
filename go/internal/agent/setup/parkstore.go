@@ -18,42 +18,52 @@ import (
 // the same interface back the in-memory, sqlite, and firestore implementations.
 type ParkRecord struct {
 	SessionID string
-	PRKey     string    // empty until the run parks; the resume index
-	CallID    string    // the parked long-running call id
-	Attempts  int       // attempts made so far (counted by the caller, not GitHub)
-	Params    string    // opaque, caller-serialized run inputs
-	ParkedAt  time.Time // zero until parked; the sweep cutoff field
+	// Workflow names the engine that owns this run ("lint" | "coverage"). Every engine
+	// shares ONE store (one Firestore instance, one collection), so this is the
+	// discriminator that keeps them from claiming each other's runs: ResolveByPRKey and
+	// Sweep both match on it. Without it, whichever engine sweeps first resolves every
+	// stale run — reporting it under the wrong workflow's title and check name, and
+	// deleting the ADK session under the wrong app name (so it leaks instead).
+	Workflow string
+	PRKey    string    // empty until the run parks; the resume index
+	CallID   string    // the parked long-running call id
+	Attempts int       // attempts made so far (counted by the caller, not GitHub)
+	Params   string    // opaque, caller-serialized run inputs
+	ParkedAt time.Time // zero until parked; the sweep cutoff field
 }
-
-// Parked reports whether the record is currently parked awaiting CI.
-func (r ParkRecord) Parked() bool { return r.PRKey != "" }
 
 // ParkStore persists suspended fix runs so a resume — or, with a durable backend, a
 // process restart — can continue them. A record has two distinct lifetimes: the per-run
 // record (keyed by SessionID) lives for the whole multi-attempt run, while the PRKey index
 // is per-park — claimed by ResolveByPRKey and re-established on each re-park.
 //
-// Implementations MUST make ResolveByPRKey (and Sweep) an atomic claim: for one PRKey
-// exactly one concurrent caller gets ok=true and all others ok=false. That single-winner
-// guarantee is what makes a late or duplicate CI webhook — or a timeout racing a webhook —
-// safe: the loser finds nothing and no-ops.
+// One store instance is shared by every fix engine (a single Firestore instance and
+// collection in the cloud), so the claim operations are scoped by workflow: an engine only
+// ever resolves or sweeps records it owns. See ParkRecord.Workflow.
+//
+// Implementations MUST make ResolveByPRKey (and Sweep) an atomic claim: for one
+// (workflow, PRKey) exactly one concurrent caller gets ok=true and all others ok=false.
+// That single-winner guarantee is what makes a late or duplicate CI webhook — or a timeout
+// racing a webhook — safe: the loser finds nothing and no-ops.
 type ParkStore interface {
 	// Put creates or replaces the per-run record keyed by record.SessionID, (re)establishing
 	// the PRKey index when record.PRKey is non-empty.
 	Put(ctx context.Context, record ParkRecord) error
 	// Get returns the per-run record for sessionID (ok=false if absent).
 	Get(ctx context.Context, sessionID string) (ParkRecord, bool, error)
-	// ResolveByPRKey atomically claims the parked record for prKey: it clears the PRKey
-	// index (so a later duplicate no-ops) and returns the record. The per-run record is
+	// ResolveByPRKey atomically claims workflow's parked record for prKey: it clears the
+	// PRKey index (so a later duplicate no-ops) and returns the record. The per-run record is
 	// retained so a retry can still read its params — terminal cleanup is Delete. ok=false
-	// for late/duplicate/unknown callers.
-	ResolveByPRKey(ctx context.Context, prKey string) (ParkRecord, bool, error)
+	// for late/duplicate/unknown callers, and for a record owned by a different workflow
+	// (which is left untouched — claiming it would strand the engine that owns it).
+	ResolveByPRKey(ctx context.Context, workflow, prKey string) (ParkRecord, bool, error)
 	// Delete removes the per-run record (and any lingering index) for sessionID. Terminal
 	// cleanup; no-op if absent.
 	Delete(ctx context.Context, sessionID string) error
-	// Sweep atomically claims and returns every parked record whose ParkedAt is before
-	// cutoff (CI never reported). Like ResolveByPRKey, each record is claimed once, and the
-	// returned records keep their PRKey so the caller knows which PR timed out.
+	// Sweep atomically claims and returns every one of workflow's parked records whose
+	// ParkedAt is before cutoff (CI never reported). Like ResolveByPRKey, each record is
+	// claimed once, and the returned records keep their PRKey so the caller knows which PR
+	// timed out. Records belonging to another workflow are never touched.
 	//
 	// A claim is re-validated against cutoff inside the atomic step, so a record that was
 	// resolved and re-parked (fresh) after the scan is left alone rather than swept.
@@ -61,9 +71,9 @@ type ParkStore interface {
 	// records already claimed in this pass — they are returned alongside a non-nil error, and
 	// the caller MUST process them (notify/clear) before propagating the error, or those
 	// claimed runs strand with their PRKey cleared.
-	Sweep(ctx context.Context, cutoff time.Time) ([]ParkRecord, error)
-	// ParkedCount reports how many records are currently parked (PRKey-indexed).
-	ParkedCount(ctx context.Context) (int, error)
+	Sweep(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error)
+	// ParkedCount reports how many of workflow's records are currently parked (PRKey-indexed).
+	ParkedCount(ctx context.Context, workflow string) (int, error)
 }
 
 // NewParkStore builds the park-record store for the configured backend, mirroring the
@@ -81,33 +91,40 @@ func NewParkStore(ctx context.Context, cfg config.Config) (ParkStore, error) {
 	}
 }
 
-// memoryParkStore keeps park records in memory: today's behavior, used by tests and by
-// any backend until its durable store lands. bySession holds the per-run records; index
-// maps an active PRKey to its session id. One mutex guards both, so ResolveByPRKey/Sweep
-// claim atomically.
+// memoryParkStore keeps park records in memory: the zero-dependency default, used by tests
+// and ephemeral local runs. bySession holds the per-run records; index maps an active
+// (workflow, PRKey) to its session id. One mutex guards both, so ResolveByPRKey/Sweep claim
+// atomically.
 type memoryParkStore struct {
 	mu        sync.Mutex
 	bySession map[string]ParkRecord
-	index     map[string]string // prKey -> sessionID
+	index     map[indexKey]string // (workflow, prKey) -> sessionID
 }
+
+// indexKey scopes the resume index by workflow, so the engines sharing one store cannot
+// collide on — or claim — each other's PR keys.
+type indexKey struct{ workflow, prKey string }
+
+// key builds the record's index key. Only meaningful while the record is parked.
+func (r ParkRecord) key() indexKey { return indexKey{workflow: r.Workflow, prKey: r.PRKey} }
 
 // NewMemoryParkStore returns an in-memory ParkStore.
 func NewMemoryParkStore() ParkStore {
-	return &memoryParkStore{bySession: map[string]ParkRecord{}, index: map[string]string{}}
+	return &memoryParkStore{bySession: map[string]ParkRecord{}, index: map[indexKey]string{}}
 }
 
 func (m *memoryParkStore) Put(_ context.Context, r ParkRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Drop a stale index entry if this session was previously parked under a different key.
-	if prev, ok := m.bySession[r.SessionID]; ok && prev.PRKey != "" && prev.PRKey != r.PRKey {
-		delete(m.index, prev.PRKey)
+	if prev, ok := m.bySession[r.SessionID]; ok && prev.PRKey != "" && prev.key() != r.key() {
+		delete(m.index, prev.key())
 	}
 	if r.PRKey != "" {
-		// One active record per PRKey: if a different session currently owns this key, un-park
-		// it so the index has a single winner. Otherwise resolve/sweep could return either
-		// session, and a later Delete of the displaced session would strand this one.
-		if owner, ok := m.index[r.PRKey]; ok && owner != r.SessionID {
+		// One active record per (workflow, PRKey): if a different session currently owns this
+		// key, un-park it so the index has a single winner. Otherwise resolve/sweep could return
+		// either session, and a later Delete of the displaced session would strand this one.
+		if owner, ok := m.index[r.key()]; ok && owner != r.SessionID {
 			if prev, ok := m.bySession[owner]; ok {
 				prev.PRKey = ""
 				m.bySession[owner] = prev
@@ -116,7 +133,7 @@ func (m *memoryParkStore) Put(_ context.Context, r ParkRecord) error {
 	}
 	m.bySession[r.SessionID] = r
 	if r.PRKey != "" {
-		m.index[r.PRKey] = r.SessionID
+		m.index[r.key()] = r.SessionID
 	}
 	return nil
 }
@@ -128,27 +145,31 @@ func (m *memoryParkStore) Get(_ context.Context, sessionID string) (ParkRecord, 
 	return r, ok, nil
 }
 
-func (m *memoryParkStore) ResolveByPRKey(_ context.Context, prKey string) (ParkRecord, bool, error) {
+func (m *memoryParkStore) ResolveByPRKey(_ context.Context, workflow, prKey string) (ParkRecord, bool, error) {
 	if prKey == "" {
 		return ParkRecord{}, false, nil // never resolve by an empty key (parity with sqlite)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sid, ok := m.index[prKey]
+	k := indexKey{workflow: workflow, prKey: prKey}
+	sid, ok := m.index[k]
 	if !ok {
 		return ParkRecord{}, false, nil
 	}
-	return m.claimLocked(prKey, sid), true, nil
+	return m.claimLocked(k, sid), true, nil
 }
 
-func (m *memoryParkStore) Sweep(_ context.Context, cutoff time.Time) ([]ParkRecord, error) {
+func (m *memoryParkStore) Sweep(_ context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []ParkRecord
-	for prKey, sid := range m.index {
+	for k, sid := range m.index {
+		if k.workflow != workflow {
+			continue // another engine's run: not ours to claim
+		}
 		if r := m.bySession[sid]; !r.ParkedAt.IsZero() && r.ParkedAt.Before(cutoff) {
-			claimed := m.claimLocked(prKey, sid)
-			claimed.PRKey = prKey // the timeout sweep needs to know which PR this was
+			claimed := m.claimLocked(k, sid)
+			claimed.PRKey = k.prKey // the timeout sweep needs to know which PR this was
 			out = append(out, claimed)
 		}
 	}
@@ -157,8 +178,8 @@ func (m *memoryParkStore) Sweep(_ context.Context, cutoff time.Time) ([]ParkReco
 
 // claimLocked clears the PRKey index for sid and returns the (now un-parked) record. The
 // per-run record is retained for a possible retry. The caller must hold m.mu.
-func (m *memoryParkStore) claimLocked(prKey, sid string) ParkRecord {
-	delete(m.index, prKey)
+func (m *memoryParkStore) claimLocked(k indexKey, sid string) ParkRecord {
+	delete(m.index, k)
 	r := m.bySession[sid]
 	r.PRKey = ""
 	m.bySession[sid] = r
@@ -169,18 +190,24 @@ func (m *memoryParkStore) Delete(_ context.Context, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Only drop the index entry while it still points at this session: another session may
-	// have since claimed the same PRKey (see Put), and we must not strand its active park.
+	// have since claimed the same key (see Put), and we must not strand its active park.
 	if r, ok := m.bySession[sessionID]; ok && r.PRKey != "" {
-		if owner, ok := m.index[r.PRKey]; ok && owner == sessionID {
-			delete(m.index, r.PRKey)
+		if owner, ok := m.index[r.key()]; ok && owner == sessionID {
+			delete(m.index, r.key())
 		}
 	}
 	delete(m.bySession, sessionID)
 	return nil
 }
 
-func (m *memoryParkStore) ParkedCount(_ context.Context) (int, error) {
+func (m *memoryParkStore) ParkedCount(_ context.Context, workflow string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.index), nil
+	n := 0
+	for k := range m.index {
+		if k.workflow == workflow {
+			n++
+		}
+	}
+	return n, nil
 }

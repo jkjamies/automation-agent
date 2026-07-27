@@ -239,7 +239,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
-	defer os.RemoveAll(gitRepo.Dir())
+	defer func() { _ = os.RemoveAll(gitRepo.Dir()) }()
 
 	edits, err := e.spec.Analyze(ctx, AnalyzeInput{LLM: e.d.LLM, CodeLLM: e.d.CodeLLM, RepoDir: gitRepo.Dir(), Work: work, Feedback: rp.feedback, Log: e.d.Log})
 	if err != nil {

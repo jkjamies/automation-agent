@@ -38,7 +38,8 @@ func TestStandardsCacheKeyChangesWithSHA(t *testing.T) {
 	if standardsCacheKey("o", "r", base) == standardsCacheKey("o", "r", changed) {
 		t.Error("a changed blob SHA must change the cache key (else stale rules)")
 	}
-	if standardsCacheKey("o", "r", base) != standardsCacheKey("o", "r", base) {
+	first, second := standardsCacheKey("o", "r", base), standardsCacheKey("o", "r", base)
+	if first != second {
 		t.Error("same inputs must produce the same key")
 	}
 }

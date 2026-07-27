@@ -17,6 +17,10 @@ type GitHub interface {
 	CreatePR(ctx context.Context, owner, repo string, in githubapi.PRInput) (githubapi.PR, error)
 	AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error
 	Compare(ctx context.Context, owner, repo, base, head string) (githubapi.Comparison, error)
+	// DefaultBranch resolves the repo's default branch, which is the base a kickoff works
+	// from unless it names one explicitly. Resolved rather than assumed: a hardcoded "main"
+	// opens the PR against a branch that may not exist.
+	DefaultBranch(ctx context.Context, owner, repo string) (string, error)
 }
 
 // FileEdit is a whole-file write an analyze step produces (a rewritten source file,
@@ -54,18 +58,22 @@ type ApplyResult struct {
 
 // Open clones the repo into a fresh temp dir and checks out the agent branch — the
 // single checkout the explorer reads, the executor writes into, and the commit step
-// pushes. NewBranch=true creates the branch from HEAD (kickoff); false checks out the
-// existing remote branch (retry). The caller must os.RemoveAll(repo.Dir()) when done.
+// pushes. NewBranch=true creates the branch from the base branch (kickoff); false checks
+// out the existing remote branch (retry). The caller must os.RemoveAll(repo.Dir()) when done.
+//
+// The clone checks out cfg.Base, so the branch a kickoff creates is cut from the same ref
+// its PR will target. Cloning the remote's default instead would silently branch off the
+// wrong ref whenever Base is not the default.
 func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	dir, err := os.MkdirTemp("", "agentfix-*")
 	if err != nil {
 		return nil, fmt.Errorf("tempdir: %w", err)
 	}
-	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, gitrepo.Auth{
+	repo, err := gitrepo.Clone(ctx, cfg.CloneURL, dir, cfg.Base, gitrepo.Auth{
 		Provider: cfg.Provider, Repo: cfg.Owner + "/" + cfg.Repo, SSHKey: cfg.SSHKey,
 	})
 	if err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir) // best-effort cleanup of the temp dir; the clone error is what matters
 		return nil, err
 	}
 	if cfg.NewBranch {
@@ -74,7 +82,7 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 		err = repo.CheckoutRemote(cfg.Branch)
 	}
 	if err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir) // best-effort cleanup; the checkout error is what matters
 		return nil, err
 	}
 	return repo, nil
@@ -120,7 +128,7 @@ func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit)
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	defer os.RemoveAll(repo.Dir())
+	defer func() { _ = os.RemoveAll(repo.Dir()) }()
 	return Commit(ctx, gh, repo, cfg, edits)
 }
 

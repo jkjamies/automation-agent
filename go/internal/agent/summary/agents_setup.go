@@ -1,3 +1,7 @@
+// Package summary is the daily commit-digest workflow: parallel per-repo commit
+// fetchers, an LLM summarizer over their combined output, and a notifier that posts the
+// digest to Slack or Teams. It is one-shot — fired by the daily Cloud Scheduler trigger —
+// with no suspend/resume.
 package summary
 
 import (

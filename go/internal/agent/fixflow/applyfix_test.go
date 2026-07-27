@@ -28,6 +28,10 @@ type fakeGH struct {
 	fileContents map[string]string
 	comparison   githubapi.Comparison
 	compareErr   error
+	// defaultBranch overrides the branch DefaultBranch reports; defaultBranchErr makes the
+	// lookup fail, so tests can pin what a kickoff does when the base cannot be resolved.
+	defaultBranch    string
+	defaultBranchErr error
 }
 
 func (f *fakeGH) Compare(_ context.Context, _, _, _, _ string) (githubapi.Comparison, error) {
@@ -52,6 +56,16 @@ func (f *fakeGH) CreatePR(_ context.Context, _, _ string, in githubapi.PRInput) 
 	}
 	f.created = &in
 	return githubapi.PR{Number: 42, Branch: in.Head, Title: in.Title, URL: "https://gh/pr/42"}, nil
+}
+
+func (f *fakeGH) DefaultBranch(_ context.Context, _, _ string) (string, error) {
+	if f.defaultBranchErr != nil {
+		return "", f.defaultBranchErr
+	}
+	if f.defaultBranch != "" {
+		return f.defaultBranch, nil
+	}
+	return "master", nil // what git.PlainInit gives the seeded remotes
 }
 
 func (f *fakeGH) AddLabels(_ context.Context, _, _ string, _ int, labels ...string) error {
@@ -93,6 +107,66 @@ func seedRemote(t *testing.T) string {
 		t.Fatalf("commit: %v", err)
 	}
 	return dir
+}
+
+// seedRemoteWithBranch seeds a remote whose default branch is master and which also carries
+// `branch`, holding one file master does not. That marker file is how a test proves which ref
+// a fix branch was actually cut from.
+func seedRemoteWithBranch(t *testing.T, branch string) string {
+	t.Helper()
+	dir := seedRemote(t)
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open seeded remote: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branch), Create: true}); err != nil {
+		t.Fatalf("create %s: %v", branch, err)
+	}
+	marker := "only-on-" + branch + ".txt"
+	if err := os.WriteFile(filepath.Join(dir, marker), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add(marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Commit("branch-only change", &git.CommitOptions{
+		Author: &object.Signature{Name: "seed", Email: "s@x", When: time.Unix(2, 0)},
+	}); err != nil {
+		t.Fatalf("commit on %s: %v", branch, err)
+	}
+	// Leave the remote's HEAD on master so a clone that ignores the requested base lands
+	// there — which is exactly the mistake the test is looking for.
+	if err := wt.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName("master")}); err != nil {
+		t.Fatalf("restore master: %v", err)
+	}
+	return dir
+}
+
+// branchHasFile reports whether path exists in the tree of branch on the given repo.
+func branchHasFile(t *testing.T, dir, branch, path string) bool {
+	t.Helper()
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", branch, err)
+	}
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("commit for %s: %v", branch, err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("tree for %s: %v", branch, err)
+	}
+	_, err = tree.File(path)
+	return err == nil
 }
 
 func applyCfg(remote string) ApplyConfig {

@@ -48,7 +48,6 @@ The detailed, copy-paste steps for each item are in
 
 - [ ] **Orphan-session GC** for sessions created but never parked.
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
-- [ ] **CI runs the Firestore emulator** so `*_firestore.go` folds into measured coverage.
 - [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
       per-port parity is tracked per-PR (see
       [`okf/standards/language-parity.md`](okf/standards/language-parity.md)).
