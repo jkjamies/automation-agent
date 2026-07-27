@@ -84,24 +84,19 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	// Confirm the configured Ollama tags actually exist before accepting any work. Building a
+	// Report whether the configured Ollama tags actually exist, once, at startup. Building a
 	// model only builds a client, so a tag that was never pulled — or a family renamed between
-	// releases — would first fail on the initial generation, after a webhook was accepted, a
-	// task dispatched, and a repository cloned.
+	// releases — otherwise stays silent until the first generation, which happens after a
+	// webhook was accepted, a task dispatched, and a repository cloned; the failure then reads
+	// as an opaque error deep inside an agent run rather than as "that model isn't here".
 	//
-	// The two failure modes get opposite treatment. A server that is up but lacks the model is
-	// a configuration error: every run will fail the same way, so stop now with a message
-	// naming the tag. A server that is simply not up yet is ordinary in local development
-	// (Ollama started after the service, or not at all for a read-only flow), so warn and
-	// continue rather than making startup order matter.
+	// Advisory only: configuring the deployment is the operator's job, and this must not decide
+	// whether the process boots. Ollama not being up yet is ordinary anyway (started after the
+	// service, or not at all for a read-only flow), so both outcomes are the same one-line
+	// warning carrying the detail.
 	if cfg.LLMProvider == config.ProviderOllama {
-		err := setup.VerifyOllamaModels(sigCtx, cfg.OllamaHost, cfg.OllamaModel, cfg.OllamaCodeModel)
-		switch {
-		case errors.Is(err, setup.ErrOllamaUnreachable):
-			logger.Warn("could not reach Ollama to verify the configured models; continuing, but any model call will fail until it is up",
-				"host", cfg.OllamaHost, "err", err)
-		case err != nil:
-			return err
+		if err := setup.VerifyOllamaModels(sigCtx, cfg.OllamaHost, cfg.OllamaModel, cfg.OllamaCodeModel); err != nil {
+			logger.Warn("could not verify the configured Ollama models; model calls may fail", "err", err)
 		}
 	}
 

@@ -2,7 +2,6 @@ package setup
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,25 +12,22 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
-// ErrOllamaUnreachable reports that the Ollama server could not be contacted at all, as
-// distinct from being contacted and lacking a model. The two want opposite responses: a server
-// that is not up yet is ordinary during local development and must not block startup, while a
-// server that is up and does not have the configured model is a configuration error that will
-// fail every run until someone fixes it.
-var ErrOllamaUnreachable = errors.New("ollama server unreachable")
-
 // preflightTimeout bounds the inventory call. It only lists locally-present models, so it is
 // fast when the server is healthy; the bound exists so a wedged server cannot hang startup.
 const preflightTimeout = 5 * time.Second
 
 // VerifyOllamaModels reports whether every configured tag is present on the Ollama server.
 //
-// It exists because nothing else fails early: NewOllamaModel only builds a client, so a tag
-// that was never pulled — or a family that was renamed between releases — constructs fine and
-// first errors on the initial generation. By then a webhook has been accepted, a task
-// dispatched, and a repository cloned, and the failure surfaces as an opaque drive error deep
-// inside an agent run. Checking at startup turns a silent misconfiguration into one message
-// naming the tag and the command that fixes it.
+// It exists to make a stale tag legible, not to police configuration. NewOllamaModel only
+// builds a client, so a tag that was never pulled — or a family that was renamed between
+// releases — constructs fine and first errors on the initial generation. By then a webhook has
+// been accepted, a task dispatched, and a repository cloned, and the failure surfaces as an
+// opaque drive error deep inside an agent run. Asking once at startup turns that into a log
+// line naming the tag, the command that fixes it, and what the server does have.
+//
+// The result is advisory: the caller logs it and carries on. That is why the returned error
+// carries its whole explanation in the message rather than in a sentinel — nothing branches on
+// which failure it was, so nothing needs to distinguish them programmatically.
 //
 // Duplicate and empty tags are skipped, so callers can pass the base and code models directly
 // without pre-filtering (they are frequently the same, and the code tier may be unset).
@@ -49,7 +45,7 @@ func VerifyOllamaModels(ctx context.Context, host string, tags ...string) error 
 
 	list, err := client.List(ctx)
 	if err != nil {
-		return fmt.Errorf("%w at %s: %w", ErrOllamaUnreachable, host, err)
+		return fmt.Errorf("ollama at %s could not be reached: %w", host, err)
 	}
 	present := map[string]bool{}
 	for _, m := range list.Models {
