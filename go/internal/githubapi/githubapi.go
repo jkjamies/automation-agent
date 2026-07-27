@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -94,7 +95,15 @@ func New(provider auth.TokenProvider, opts ...Option) *Client {
 type clientTransport struct{ c *http.Client }
 
 func (t *clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return t.c.Do(req)
+	resp, err := t.c.Do(req)
+	// Client.Do wraps transport errors in *url.Error; RoundTrip is contractually supposed to
+	// return the unwrapped one. Left as-is, the outer client wraps this again and every
+	// connection error logs its URL twice — `Get "…/pulls/7": Get "…/pulls/7": dial tcp …`.
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return resp, ue.Err
+	}
+	return resp, err
 }
 
 // Commit is a minimal commit projection for digests.
