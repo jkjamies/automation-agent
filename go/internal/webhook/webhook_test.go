@@ -171,17 +171,60 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// A body larger than the cap is rejected with 413 rather than silently truncated.
+// A body larger than the ingress cap is rejected with 413 rather than silently truncated.
+// 413 (not 500) is the contract that matters: the body can never be enqueued, so a caller
+// that retries a 5xx would loop on it forever.
 func TestOversizeBodyIsRejected(t *testing.T) {
 	c := &capture{}
 	s := New(c.ingest)
-	oversize := strings.Repeat("x", maxBodyBytes+100)
+	oversize := strings.Repeat("x", maxIngressBytes+100)
 	rec := do(t, s, http.MethodPost, "/webhooks/lint", oversize, nil)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", rec.Code)
 	}
 	if c.env.Payload != nil {
 		t.Errorf("oversize body should not be dispatched, got %d bytes", len(c.env.Payload))
+	}
+}
+
+// A body at the ingress cap is accepted — the cap is the largest enqueueable body, so
+// anything at or under it must pass rather than being rejected defensively.
+func TestBodyAtIngressCapIsAccepted(t *testing.T) {
+	c := &capture{}
+	s := New(c.ingest)
+	rec := do(t, s, http.MethodPost, "/webhooks/lint", strings.Repeat("x", maxIngressBytes), nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if len(c.env.Payload) != maxIngressBytes {
+		t.Errorf("payload = %d bytes, want the full %d", len(c.env.Payload), maxIngressBytes)
+	}
+}
+
+// The dispatch worker receives an already-encoded envelope, which is larger than the raw
+// body that produced it. Capping it at the ingress limit would reject every task carrying
+// a payload near the top of the accepted range.
+func TestDispatchAcceptsAnEncodedMaxPayload(t *testing.T) {
+	var got ingest.Envelope
+	s := New((&capture{}).ingest,
+		WithInternalToken("secret"),
+		WithDispatch(func(_ context.Context, e ingest.Envelope) error { got = e; return nil }))
+
+	body, err := ingest.Encode(ingest.New(ingest.KindLint, "webhook:/lint",
+		[]byte(strings.Repeat("x", ingest.MaxPayloadBytes)), time.Unix(0, 0).UTC()))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(body) <= maxIngressBytes {
+		t.Fatalf("encoded body is %d bytes — not past the ingress cap, so this proves nothing", len(body))
+	}
+	rec := do(t, s, http.MethodPost, "/internal/dispatch", string(body),
+		map[string]string{"Authorization": "Bearer secret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body was %d bytes)", rec.Code, len(body))
+	}
+	if len(got.Payload) != ingest.MaxPayloadBytes {
+		t.Errorf("dispatched payload = %d bytes, want %d", len(got.Payload), ingest.MaxPayloadBytes)
 	}
 }
 

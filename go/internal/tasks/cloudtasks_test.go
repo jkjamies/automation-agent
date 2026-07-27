@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -230,5 +231,34 @@ func TestCloudTasksClose(t *testing.T) {
 	}
 	if err := (&CloudTasks{}).Close(); err != nil {
 		t.Errorf("Close with no client = %v, want nil", err)
+	}
+}
+
+// The two size constants are a pair: a body accepted at ingress (ingest.MaxPayloadBytes)
+// must still fit in a task after encoding (MaxTaskBytes). If that stops holding, a caller
+// gets a 202 at ingress and then a permanent enqueue failure surfaced as a retryable 500 —
+// an infinite retry on a body that can never fit. This pins the arithmetic so raising one
+// constant without the other fails here instead of in production.
+func TestMaxPayloadFitsInATask(t *testing.T) {
+	body, err := ingest.Encode(ingest.New(
+		ingest.KindCoverage,
+		"webhook:/coverage",
+		bytes.Repeat([]byte("x"), ingest.MaxPayloadBytes),
+		// Fixed, and deliberately carrying full nanosecond precision: RFC 3339 trims trailing
+		// zeros, so this is the longest the timestamp can serialize. A boundary test should
+		// measure the worst case, not whatever time.Now() happened to round to.
+		time.Date(2026, 7, 27, 20, 37, 57, 123456789, time.UTC),
+	))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(body) > MaxTaskBytes {
+		t.Errorf("a max-size ingress payload encodes to %d bytes, over the %d-byte task limit",
+			len(body), MaxTaskBytes)
+	}
+	// And the headroom is real rather than accidental — the envelope's other fields must
+	// have room to grow (a longer source string, a different timestamp format).
+	if slack := MaxTaskBytes - len(body); slack < 4<<10 {
+		t.Errorf("only %d bytes of envelope headroom left; the constants are too close", slack)
 	}
 }

@@ -12,8 +12,22 @@ import (
 	"automation-agent/internal/ingest"
 )
 
-// maxBodyBytes caps how much of a webhook body we read.
-const maxBodyBytes = 5 << 20 // 5 MiB
+// Body caps, per route class. They differ because the two classes carry different things:
+// an ingress route receives a raw source body that still has to be wrapped and base64'd
+// into a task, while /internal/dispatch receives that already-encoded envelope.
+const (
+	// maxIngressBytes caps a raw source body (/webhooks/*, /internal/cron/*). It is the
+	// largest body that is still enqueueable after encoding, so anything accepted here can
+	// actually be dispatched. A larger body is rejected with 413 — permanent and honest —
+	// instead of being accepted and then failing at enqueue with a retryable 500 that the
+	// caller would retry forever against a body that can never fit.
+	maxIngressBytes = ingest.MaxPayloadBytes
+
+	// maxDispatchBytes caps the Cloud Tasks worker body, which is a wire envelope already
+	// grown by base64. Capping it at maxIngressBytes would reject every task at the top of
+	// the accepted size range.
+	maxDispatchBytes = ingest.MaxEncodedBytes
+)
 
 // IngestFunc consumes a normalized envelope. It should enqueue work and return
 // quickly; a returned error becomes a 500 to the caller.

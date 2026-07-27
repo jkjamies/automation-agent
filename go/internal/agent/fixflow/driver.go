@@ -43,26 +43,24 @@ type runParams struct {
 	owner, repo, fullRepo string
 	base, report          string
 	feedback              string // previous attempt's CI failure, on retry
-	newBranch             bool   // true on kickoff (create from base); false on retry (reuse branch)
 }
 
 // runParamsJSON is the serialized form stored in ParkRecord.Params. runParams' own fields
 // are unexported (so only this package can build them), so an explicit shim does the
 // marshalling rather than reflecting over the struct directly.
 type runParamsJSON struct {
-	Owner     string `json:"owner"`
-	Repo      string `json:"repo"`
-	FullRepo  string `json:"full_repo"`
-	Base      string `json:"base"`
-	Report    string `json:"report"`
-	Feedback  string `json:"feedback"`
-	NewBranch bool   `json:"new_branch"`
+	Owner    string `json:"owner"`
+	Repo     string `json:"repo"`
+	FullRepo string `json:"full_repo"`
+	Base     string `json:"base"`
+	Report   string `json:"report"`
+	Feedback string `json:"feedback"`
 }
 
 func marshalRunParams(rp *runParams) (string, error) {
 	b, err := json.Marshal(runParamsJSON{
 		Owner: rp.owner, Repo: rp.repo, FullRepo: rp.fullRepo,
-		Base: rp.base, Report: rp.report, Feedback: rp.feedback, NewBranch: rp.newBranch,
+		Base: rp.base, Report: rp.report, Feedback: rp.feedback,
 	})
 	if err != nil {
 		return "", err
@@ -77,7 +75,7 @@ func unmarshalRunParams(s string) (*runParams, error) {
 	}
 	return &runParams{
 		owner: j.Owner, repo: j.Repo, fullRepo: j.FullRepo,
-		base: j.Base, report: j.Report, feedback: j.Feedback, newBranch: j.NewBranch,
+		base: j.Base, report: j.Report, feedback: j.Feedback,
 	}, nil
 }
 
@@ -284,15 +282,17 @@ func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
 	sid := dr.newSessionID()
 	rp := &runParams{
 		owner: k.Owner(), repo: k.Name(), fullRepo: k.Repo,
-		base: base, report: k.ReportText(), newBranch: true,
+		base: base, report: k.ReportText(),
 	}
 	if err := dr.putParams(ctx, sid, rp); err != nil {
 		return err
 	}
 	res, err := dr.lr.Start(ctx, sid, "Apply the fix and wait for CI.")
 	if err != nil {
-		dr.clear(ctx, sid)
-		return err
+		// Route through failApply, not a bare clear+return: by the time a drive fails the
+		// attempt may already have pushed a commit and opened a PR, so dropping the run
+		// silently leaves that PR with nobody watching it. The dispatcher only logs.
+		return dr.failApply(ctx, sid, k.Repo, fmt.Sprintf("the fix run could not be driven (%v)", err))
 	}
 	return dr.afterDrive(ctx, sid, k.Repo, res, 1)
 }
@@ -360,16 +360,16 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 		return err
 	}
 
+	// A retry that cannot be set up or driven gets the same treatment as a failed apply:
+	// the run is already past its first attempt, so a PR exists and a human needs telling.
 	if err := dr.updateForRetry(ctx, run.SessionID, in.OutputText); err != nil {
-		dr.clear(ctx, run.SessionID)
-		return err
+		return dr.failApply(ctx, run.SessionID, in.FullRepo, fmt.Sprintf("the retry could not be prepared (%v)", err))
 	}
 	res, err := dr.lr.Resume(ctx, run.SessionID, run.CallID, map[string]any{
 		"conclusion": in.Conclusion, "output": in.OutputText,
 	})
 	if err != nil {
-		dr.clear(ctx, run.SessionID)
-		return err
+		return dr.failApply(ctx, run.SessionID, in.FullRepo, fmt.Sprintf("the retry could not be driven (%v)", err))
 	}
 	dr.engine.d.Log.Info("fix retrying", "workflow", dr.engine.spec.Name, "repo", in.FullRepo, "pr", in.PRNumber, "attempt", run.Attempts+1)
 	return dr.afterDrive(ctx, run.SessionID, in.FullRepo, res, run.Attempts+1)
@@ -535,8 +535,8 @@ func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int
 	return nil
 }
 
-// updateForRetry records the previous attempt's CI failure as feedback and switches the
-// run off branch-creation, persisting the change for the retry's apply_fix.
+// updateForRetry records the previous attempt's CI failure as feedback, persisting it for
+// the retry's apply_fix.
 func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) error {
 	rec, ok, err := dr.store.Get(ctx, sid)
 	if err != nil {
@@ -550,7 +550,6 @@ func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) erro
 		return err
 	}
 	rp.feedback = "The previous attempt failed CI with:\n" + feedback
-	rp.newBranch = false
 	blob, err := marshalRunParams(rp)
 	if err != nil {
 		return err

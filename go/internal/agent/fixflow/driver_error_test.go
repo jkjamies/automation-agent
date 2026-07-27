@@ -3,9 +3,14 @@ package fixflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"google.golang.org/adk/v2/session"
 
 	"automation-agent/internal/agent/setup"
 )
@@ -84,16 +89,22 @@ func TestResumeResolveError(t *testing.T) {
 	}
 }
 
-// A store Put failure while recording retry feedback aborts the resume with an error.
+// A store Put failure while recording retry feedback aborts the resume with an error — and
+// notifies. A retry only happens after a first attempt already opened a PR, so a run
+// dropped here would leave that PR unattended with only a log line to show for it.
 func TestResumeRetryPutError(t *testing.T) {
 	store := &erroringStore{ParkStore: setup.NewMemoryParkStore()}
-	e := engineWithStore(t, store, &fakeNotifier{})
+	n := &fakeNotifier{}
+	e := engineWithStore(t, store, n)
 	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
 		t.Fatalf("Kickoff: %v", err)
 	}
 	store.failPut = true // fail the updateForRetry write on the next (failure) resume
 	if err := e.Resume(context.Background(), checkBody("failure", 42, "boom")); err == nil {
 		t.Fatal("expected resume to fail when recording retry feedback errors")
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Errorf("a retry that cannot be prepared must notify for human review, got %+v", n.msgs)
 	}
 }
 
@@ -126,7 +137,7 @@ func TestClearDeleteErrorStillNotifies(t *testing.T) {
 
 // marshalRunParams/unmarshalRunParams round-trip, and a malformed blob is rejected.
 func TestRunParamsRoundTrip(t *testing.T) {
-	in := &runParams{owner: "acme", repo: "api", fullRepo: "acme/api", base: "main", report: "r", feedback: "f", newBranch: true}
+	in := &runParams{owner: "acme", repo: "api", fullRepo: "acme/api", base: "main", report: "r", feedback: "f"}
 	blob, err := marshalRunParams(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -140,5 +151,95 @@ func TestRunParamsRoundTrip(t *testing.T) {
 	}
 	if _, err := unmarshalRunParams("{not json"); err == nil {
 		t.Error("expected an error decoding a malformed params blob")
+	}
+}
+
+// brokenSessionService fails every write, standing in for the durable session backend
+// being unavailable (a Firestore outage). It is the realistic way the drive itself — not
+// the attempt inside it — fails.
+type brokenSessionService struct{ session.Service }
+
+func (brokenSessionService) Create(context.Context, *session.CreateRequest) (*session.CreateResponse, error) {
+	return nil, errors.New("session backend unavailable")
+}
+
+// A kickoff whose drive fails must still tell a human. By the time the drive errors the
+// attempt may already have pushed a commit and opened a PR, so clearing the run and
+// returning only an error leaves that PR with nobody watching it — the dispatcher just
+// logs. This is the same guarantee failApply gives an attempt that fails outright.
+func TestKickoffDriveFailureNotifies(t *testing.T) {
+	n := &fakeNotifier{}
+	e := NewEngine(testSpec(), Deps{
+		GH: &fakeGH{}, Notify: n, MaxIter: 3, CITimeout: time.Hour,
+		SessionService: brokenSessionService{Service: session.InMemoryService()},
+		CloneURL:       func(_, _ string) string { return seedRemote(t) },
+	})
+
+	err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`))
+	if err == nil {
+		t.Fatal("expected the kickoff to fail when the session backend is down")
+	}
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "review") {
+		t.Fatalf("a failed drive must notify for human review, got %+v", n.msgs)
+	}
+	if e.driver.parkedCount() != 0 {
+		t.Errorf("the failed run should be freed, got %d parked", e.driver.parkedCount())
+	}
+}
+
+// A redelivered kickoff must not break the run. The execution transport retries any 5xx,
+// so a second kickoff can arrive for a repo whose agent branch a previous attempt already
+// pushed. Recreating that branch from the base and force-pushing nothing would be a
+// non-fast-forward rejection that every retry repeats identically — so the apply continues
+// the branch that exists instead of trusting the caller's "this is a fresh run".
+func TestRedeliveredKickoffContinuesExistingBranch(t *testing.T) {
+	remote := seedRemote(t)
+	spec := testSpec()
+	attempt := 0
+	spec.Analyze = func(_ context.Context, _ AnalyzeInput) ([]FileEdit, error) {
+		attempt++
+		return []FileEdit{{Path: "a.go", Content: fmt.Sprintf("package a\n// attempt %d\n", attempt)}}, nil
+	}
+	gh := &fakeGH{}
+	e := NewEngine(spec, Deps{
+		GH: gh, Notify: &fakeNotifier{}, MaxIter: 3, CITimeout: time.Hour,
+		CloneURL: func(_, _ string) string { return remote },
+	})
+	body := []byte(`{"repo":"acme/api","base":"master","report":"r"}`)
+
+	if err := e.Kickoff(context.Background(), body); err != nil {
+		t.Fatalf("first kickoff: %v", err)
+	}
+	// The identical delivery again — a fresh run against a branch that now exists.
+	if err := e.Kickoff(context.Background(), body); err != nil {
+		t.Fatalf("redelivered kickoff failed (a retry can never succeed if this errors): %v", err)
+	}
+	if attempt != 2 {
+		t.Fatalf("analyze ran %d times, want 2", attempt)
+	}
+	// The second run's content must be on the branch: proof it continued rather than
+	// recreating from base, which would have been rejected at push.
+	if !branchHasFile(t, remote, "agent/fix", "a.go") {
+		t.Fatal("the agent branch is missing the applied file")
+	}
+	rr, err := git.PlainOpen(remote)
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	ref, err := rr.Reference(plumbing.NewBranchReferenceName("agent/fix"), true)
+	if err != nil {
+		t.Fatalf("resolve agent branch: %v", err)
+	}
+	c, err := rr.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	f, err := c.File("a.go")
+	if err != nil {
+		t.Fatalf("file on branch tip: %v", err)
+	}
+	content, _ := f.Contents()
+	if !strings.Contains(content, "attempt 2") {
+		t.Errorf("branch tip content = %q, want the second attempt's — the redelivery did not land", content)
 	}
 }

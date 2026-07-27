@@ -42,7 +42,6 @@ type ApplyConfig struct {
 	SSHKey        string
 	Base          string // base branch the PR targets
 	Branch        string // agent working branch
-	NewBranch     bool   // true on kickoff (create from base); false on retry (reuse remote branch)
 	Label         string
 	CommitMessage string
 	PRTitle       string
@@ -58,12 +57,15 @@ type ApplyResult struct {
 
 // Open clones the repo into a fresh temp dir and checks out the agent branch — the
 // single checkout the explorer reads, the executor writes into, and the commit step
-// pushes. NewBranch=true creates the branch from the base branch (kickoff); false checks
-// out the existing remote branch (retry). The caller must os.RemoveAll(repo.Dir()) when done.
+// pushes. The caller must os.RemoveAll(repo.Dir()) when done.
 //
 // The clone checks out cfg.Base, so the branch a kickoff creates is cut from the same ref
 // its PR will target. Cloning the remote's default instead would silently branch off the
 // wrong ref whenever Base is not the default.
+//
+// Whether the agent branch is created or continued is decided by the remote, not by the
+// caller — see gitrepo.CheckoutOrCreate. That is what makes an apply safe to repeat: a
+// retry and a redelivered kickoff both land on the existing branch and add to it.
 func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	dir, err := os.MkdirTemp("", "agentfix-*")
 	if err != nil {
@@ -76,12 +78,7 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 		_ = os.RemoveAll(dir) // best-effort cleanup of the temp dir; the clone error is what matters
 		return nil, err
 	}
-	if cfg.NewBranch {
-		err = repo.Checkout(cfg.Branch, true)
-	} else {
-		err = repo.CheckoutRemote(cfg.Branch)
-	}
-	if err != nil {
+	if _, err = repo.CheckoutOrCreate(cfg.Branch); err != nil {
 		_ = os.RemoveAll(dir) // best-effort cleanup; the checkout error is what matters
 		return nil, err
 	}

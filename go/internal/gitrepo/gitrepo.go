@@ -204,6 +204,28 @@ func (r *Repo) CheckoutRemote(branch string) error {
 	return nil
 }
 
+// CheckoutOrCreate checks out branch, continuing the remote's existing branch when there
+// is one and creating it from the current HEAD otherwise. It reports which happened.
+//
+// Existence on the remote is the only reliable signal, which is why this is not a flag the
+// caller passes: a caller that believes it is starting fresh may not be. A redelivered
+// kickoff (the execution transport retries any 5xx) begins a brand-new run against a branch
+// a previous attempt already pushed — recreating that branch from the base and pushing it
+// would be a non-fast-forward rejection, and every retry would fail the same way.
+func (r *Repo) CheckoutOrCreate(branch string) (existed bool, err error) {
+	_, err = r.repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), true)
+	switch {
+	case err == nil:
+		return true, r.CheckoutRemote(branch)
+	case errors.Is(err, plumbing.ErrReferenceNotFound):
+		return false, r.Checkout(branch, true)
+	default:
+		// Anything else (a corrupt ref, an unreadable store) must not be read as "absent" —
+		// that would branch from the wrong commit and push a fix onto an unintended base.
+		return false, fmt.Errorf("resolve origin/%s: %w", branch, err)
+	}
+}
+
 // ErrNoChanges is returned by CommitAll when the working tree is clean (the edits
 // produced no actual change), so callers can distinguish "nothing to do" from a
 // real failure.

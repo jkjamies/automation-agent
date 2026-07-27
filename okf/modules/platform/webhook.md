@@ -40,8 +40,8 @@ sequenceDiagram
     rect rgb(235,255,235)
     Client->>Mux: POST /webhooks/lint | /webhooks/coverage (kickoff JSON)
     Mux->>Srv: handleLint / handleCoverage(w, r)
-    Srv->>Srv: readBody (MaxBytesReader 5 MiB)
-    alt over 5 MiB
+    Srv->>Srv: readBody (MaxBytesReader, ingress cap)
+    alt over the cap
         Srv-->>Client: 413 "request body too large"
     else read error
         Srv-->>Client: 400 "read body"
@@ -61,7 +61,7 @@ sequenceDiagram
     rect rgb(255,245,235)
     Client->>Mux: POST /webhooks/github (check_run)
     Mux->>Srv: handleGitHub(w, r)
-    Srv->>Srv: readBody (MaxBytesReader 5 MiB -> 413 over cap)
+    Srv->>Srv: readBody (MaxBytesReader, ingress cap -> 413 over cap)
     alt secret set
         Srv->>Srv: verifySignature(secret, X-Hub-Signature-256, body)
         Note right of Srv: HMAC-SHA256, hmac.Equal
@@ -110,6 +110,16 @@ and are **disabled (404)** unless that token is set (`internalAuthenticated`); t
 Tasks transport attaches that same token, so `/internal/dispatch` reuses the check verbatim.
 The bearer-vs-OIDC rationale is covered in the
 [deployment standard](/standards/deployment.md). Go 1.22
-method-pattern routing gives 405s for free. Bodies are size-capped at 5 MiB (over-cap →
-`413`, not truncated). Deterministic tooling — no agent imports. Fully tested with a
-local HTTP test harness.
+method-pattern routing gives 405s for free.
+
+Bodies are size-capped per route class, and the two caps differ on purpose. An ingress route
+(`/webhooks/*`, `/internal/cron/*`) reads at most `ingest.MaxPayloadBytes` — the largest raw
+body that still fits in a task once the envelope base64s it — so anything accepted there can
+actually be enqueued. `/internal/dispatch` receives that already-encoded envelope, which is
+larger, so it reads up to `ingest.MaxEncodedBytes`. Over-cap is `413`, never truncation: a
+truncated body would fail HMAC verification and feed malformed JSON downstream, and `413` is
+the honest status because the caller must send less — a retry of the same body can never
+succeed, whereas a `500` would invite the source to retry it forever.
+
+Deterministic tooling — no agent imports. Tested against a local HTTP harness rather than a
+live GitHub, so the routing, auth, and cap behavior are exercised without network.
