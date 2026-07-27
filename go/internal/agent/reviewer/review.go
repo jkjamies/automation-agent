@@ -24,13 +24,21 @@ const (
 // holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
 // score. It returns the scorecard and the gated findings (the caller publishes them); it posts
 // nothing itself.
-func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards) (scorecard, []Finding, error) {
+func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards, stale staleFunc) (scorecard, []Finding, error) {
 	diff := formatDiff(files)
 	cats := selectCategories(files)
 
 	category, err := e.runCategoryReview(ctx, diff, cats, std)
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: category review: %w", err)
+	}
+	// The fan-out is the long pole, so a newer push very plausibly landed during it. Stop before
+	// spending the glue call on findings that will be discarded anyway. The check goes here rather
+	// than inside each lens: the lenses run concurrently, so a per-lens check would ask GitHub the
+	// same question N times at the same instant and still could not stop the calls already in
+	// flight — the stage boundary is the only place the answer can change the outcome.
+	if stale != nil && stale(ctx) {
+		return scorecard{}, nil, errSuperseded
 	}
 	// Glue sees the category findings as "already reported" and skips re-flagging them, so it must
 	// see only the findings that survive the same gates as the final output. Otherwise a finding the

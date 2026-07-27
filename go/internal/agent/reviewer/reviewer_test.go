@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"sync/atomic"
 	"testing"
 
+	"google.golang.org/adk/v2/model"
+
+	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/githubapi"
 )
 
@@ -25,6 +30,8 @@ type fakeGH struct {
 	minimized   []string                     // subject ids passed to MinimizeComment, in order
 	agentCheck  githubapi.CheckResult        // returned by AgentCheck (zero value = not found)
 	headSHA     string                       // returned by PullRequestHeadSHA ("" = no staleness)
+	headSHASeq  []string                     // when set, successive calls pop from here (last value repeats)
+	headSHACall int                          // how many times PullRequestHeadSHA was asked
 	headSHAErr  error                        // forced error from PullRequestHeadSHA
 	tree        []githubapi.TreeEntry        // returned by Tree (standards discovery)
 	treeErr     error                        // forced error from Tree
@@ -62,8 +69,15 @@ func (f *fakeGH) AgentCheck(context.Context, string, string, string, string) (gi
 	return f.agentCheck, nil
 }
 
+// PullRequestHeadSHA can vary across calls, which is what lets a test drive a push landing
+// mid-review: successive calls walk headSHASeq and the final entry repeats.
 func (f *fakeGH) PullRequestHeadSHA(context.Context, string, string, int) (string, error) {
-	return f.headSHA, f.headSHAErr
+	f.headSHACall++
+	if len(f.headSHASeq) == 0 {
+		return f.headSHA, f.headSHAErr
+	}
+	i := min(f.headSHACall-1, len(f.headSHASeq)-1)
+	return f.headSHASeq[i], f.headSHAErr
 }
 
 func (f *fakeGH) Tree(context.Context, string, string, string) ([]githubapi.TreeEntry, bool, error) {
@@ -320,4 +334,94 @@ func TestKickoffStaleness(t *testing.T) {
 			t.Errorf("a head-SHA lookup error must not suppress the review: checks=%d", len(gh.checks))
 		}
 	})
+}
+
+// countingLLM records how many generations it was asked for, so a test can prove an expensive
+// stage was skipped rather than merely that its output went unused.
+type countingLLM struct {
+	json  string
+	calls atomic.Int64
+}
+
+func (m *countingLLM) Name() string { return "counting" }
+
+func (m *countingLLM) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	m.calls.Add(1)
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(setup.FinalTextResponse(m.json), nil)
+	}
+}
+
+// supersedeBody is a reviewable pull_request delivery for sha1, carrying a real file so the run
+// reaches the expensive stages instead of short-circuiting at intake.
+func supersedeBody() []byte {
+	return []byte(`{"action":"opened","pull_request":{"number":3,"head":{"ref":"x","sha":"sha1"},"base":{"ref":"main"}},"repository":{"full_name":"o/r"}}`)
+}
+
+var supersedeFiles = []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
+
+// A push that lands after the fan-out has already run must not publish. The summary comment is
+// keyed per PR rather than per SHA, so a slower older review would otherwise overwrite the newer
+// one's scorecard — and its reconciliation pass would minimize the newer review's inline
+// comments as OUTDATED. alreadyPublished cannot prevent this: it keys on the head SHA, and two
+// concurrent reviews have different SHAs by construction.
+func TestKickoffDiscardsWorkSupersededBeforePublish(t *testing.T) {
+	// Current at intake and before the fan-out; overtaken by the time the work is done.
+	gh := &fakeGH{files: supersedeFiles, headSHASeq: []string{"sha1", "sha1", "sha1", "sha2"}}
+
+	if err := testEngine(gh).Kickoff(context.Background(), supersedeBody()); err != nil {
+		t.Fatalf("a superseded run is not a failure: %v", err)
+	}
+	if gh.review != nil || len(gh.upserts) != 0 || len(gh.checks) != 0 || len(gh.minimized) != 0 {
+		t.Errorf("a superseded review must publish nothing: review=%v upserts=%d checks=%d minimized=%d",
+			gh.review, len(gh.upserts), len(gh.checks), len(gh.minimized))
+	}
+}
+
+// Losing the race before the fan-out must skip the fan-out itself, not just its output. That is
+// the expensive stage, and a doomed run holds LLM concurrency slots the review that will actually
+// publish is waiting on.
+func TestKickoffSkipsFanOutWhenSupersededEarly(t *testing.T) {
+	gh := &fakeGH{files: supersedeFiles, headSHASeq: []string{"sha1", "sha2"}}
+	llm := &countingLLM{json: "[]"}
+
+	e := testEngine(gh, func(d *Deps) { d.BaseLLM, d.CodeLLM = llm, llm })
+	if err := e.Kickoff(context.Background(), supersedeBody()); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if n := llm.calls.Load(); n != 0 {
+		t.Errorf("model called %d times after losing the race; the fan-out must not run at all", n)
+	}
+	if len(gh.checks) != 0 {
+		t.Errorf("nothing should be published, got %d checks", len(gh.checks))
+	}
+}
+
+// The guard must not fire on a run that still owns the PR — otherwise it would suppress every
+// review rather than only the superseded ones.
+func TestKickoffPublishesWhenStillCurrent(t *testing.T) {
+	gh := &fakeGH{files: supersedeFiles, headSHA: "sha1"}
+
+	if err := testEngine(gh).Kickoff(context.Background(), supersedeBody()); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if len(gh.checks) != 1 {
+		t.Fatalf("a current review must publish its check, got %d", len(gh.checks))
+	}
+	if len(gh.upserts) != 1 {
+		t.Errorf("a current review must upsert its summary, got %d", len(gh.upserts))
+	}
+}
+
+// A GitHub lookup failure must not discard completed work: the check is best-effort, and losing a
+// real review to a transient error is worse than the overwrite it guards against.
+func TestKickoffPublishesWhenStalenessLookupFails(t *testing.T) {
+	gh := &fakeGH{files: supersedeFiles, headSHA: "sha2", headSHAErr: errors.New("boom")}
+
+	if err := testEngine(gh).Kickoff(context.Background(), supersedeBody()); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if len(gh.checks) != 1 {
+		t.Errorf("a lookup error must not suppress the review, got %d checks", len(gh.checks))
+	}
 }
