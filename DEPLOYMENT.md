@@ -25,18 +25,28 @@ The detailed, copy-paste steps for each item are in
 - [ ] Cloud Run service account: `roles/datastore.user` (+ `roles/aiplatform.user` for
       Gemini-on-Vertex, + `roles/cloudtasks.enqueuer` for the execution transport). ADC is
       automatic on Cloud Run.
-- [ ] Secrets in **Secret Manager**: `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
-      `INTERNAL_TOKEN`, notifier URL.
+- [ ] **GitHub App** registered (one App, one org): permissions Contents / Pull requests /
+      Checks (Read & write) + Metadata, subscribed to **Check run** *and* **Pull request**,
+      installed on selected repos. Yields `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
+      the private-key PEM.
+- [ ] Secrets in **Secret Manager**: `GITHUB_APP_PRIVATE_KEY` (the PEM),
+      `GITHUB_WEBHOOK_SECRET`, `INTERNAL_TOKEN`, notifier URL. (`GITHUB_TOKEN` is the local-dev
+      PAT fallback — unused in App mode, and not the production path.)
 - [ ] Deploy `cmd/agent` (`make docker`) to Cloud Run with `SESSION_BACKEND=firestore`,
-      `LLM_PROVIDER=gemini`, `TASKS_BACKEND=cloudtasks` (+ the queue vars below), and the
-      secrets/`REPOS` as env.
+      `LLM_PROVIDER=gemini`, `TASKS_BACKEND=cloudtasks` (+ the queue vars below), the
+      `GITHUB_APP_*` values, and the secrets/`REPOS` as env. `REPOS` is **required** in App
+      mode — an empty list is rejected rather than acting on every repo the App can see.
 - [ ] **Cloud Tasks queue** (`gcloud tasks queues create <name> --location=<region>`) for the
       in-request execution transport. Set `TASKS_LOCATION`, `TASKS_QUEUE`, and
       `DISPATCH_URL=https://<service>/internal/dispatch` (the queue POSTs here carrying the
       `INTERNAL_TOKEN` Bearer; `TASKS_DISPATCH_DEADLINE` defaults to `30m`). Without this,
       multi-minute compute is throttled after the 202 on scale-to-zero.
-- [ ] GitHub **Check runs** webhook → `https://<service>/webhooks/github` (HMAC =
-      `GITHUB_WEBHOOK_SECRET`).
+- [ ] App webhook URL → `https://<service>/webhooks/github` (HMAC = `GITHUB_WEBHOOK_SECRET`,
+      the *same string* on both sides). One URL takes both events, routed by `X-GitHub-Event`:
+      `check_run` resumes a parked fix, `pull_request` kicks off the reviewer.
+- [ ] **PR reviewer** (optional, off by default): set `REVIEW_ENABLED=true` **and** subscribe
+      the App to **Pull request**. Both are needed — with either missing the reviewer produces
+      no reviews and no error, which is a slow thing to diagnose.
 - [ ] Two Cloud Scheduler jobs (Bearer `INTERNAL_TOKEN`): `/internal/cron/daily` (the daily
       digest) and `/internal/sweep` (the durable timeout sweep, which also reaps orphaned
       runs). Cloud Scheduler is the only trigger — the service runs no in-process cron.
