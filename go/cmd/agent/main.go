@@ -119,7 +119,7 @@ func run(logger *slog.Logger) error {
 			authoredLogin = login
 		}
 	}
-	gh := githubapi.New(provider, githubapi.WithAuthoredLogin(authoredLogin))
+	gh := githubapi.New(provider, githubapi.WithAuthoredLogin(authoredLogin), githubapi.WithLogger(logger))
 	// SSH only authenticates the git transport (clone/push). The GitHub REST API — opening
 	// and labeling PRs, reading the CI check — still needs a token (or `gh` login). Warn
 	// rather than fail so read-only/dry-run flows still work, but PR operations will not.

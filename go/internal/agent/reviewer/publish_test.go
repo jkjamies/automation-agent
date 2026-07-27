@@ -32,6 +32,12 @@ func TestPublishRoutesFindings(t *testing.T) {
 	if c.Path != "a.go" || c.Line != 2 || c.Side != "RIGHT" {
 		t.Errorf("inline target = %+v, want a.go:2 RIGHT", c)
 	}
+	// The review must be pinned to the SHA the diff (and so every line number above) came from.
+	// Unpinned, GitHub resolves the lines against whatever HEAD is current when the call lands,
+	// which after a mid-review push means wrong anchors or a 422 that takes the whole publish down.
+	if gh.review.CommitID != meta.headSHA {
+		t.Errorf("review CommitID = %q, want the reviewed head SHA %q", gh.review.CommitID, meta.headSHA)
+	}
 	for _, want := range []string{"🔒 Security", "```suggestion", "Prompt for AI agents"} {
 		if !strings.Contains(c.Body, want) {
 			t.Errorf("inline body missing %q:\n%s", want, c.Body)

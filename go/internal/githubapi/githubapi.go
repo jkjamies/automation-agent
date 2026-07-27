@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -42,32 +43,58 @@ type Client struct {
 }
 
 // Option configures a Client at construction.
-type Option func(*Client)
+type Option func(*options)
+
+// options holds construction-time settings consumed while building the client rather than stored
+// on it (the logger belongs to the transport, not to Client).
+type options struct {
+	authoredLogin string
+	log           *slog.Logger
+}
 
 // WithAuthoredLogin sets the login this client authors content as, so UpsertMarkerComment can edit
 // only the comments it actually posted. An empty login leaves ownership to the author-type
 // fallback (see ownsComment).
 func WithAuthoredLogin(login string) Option {
-	return func(c *Client) { c.authoredLogin = login }
+	return func(o *options) { o.authoredLogin = login }
+}
+
+// WithLogger gives the rate-limit transport somewhere to report waits and give-ups. Without it
+// those events are silent, which is the one thing a rate limit must not be.
+func WithLogger(log *slog.Logger) Option {
+	return func(o *options) { o.log = log }
 }
 
 // New builds a Client whose every REST request is authenticated by a fresh token
 // from the provider (a static PAT, or an auto-refreshed App installation token).
 // A StaticProvider holding an empty token yields an unauthenticated client (fine
 // for public reads and tests).
+//
+// The transports nest deliberately: rate-limit retry sits outside auth, so a replayed request
+// re-mints its token (an App installation token can expire across a wait), and so the retry also
+// covers the GraphQL calls that borrow this client.
 func New(provider auth.TokenProvider, opts ...Option) *Client {
-	gh := github.NewClient(&http.Client{
-		Timeout:   httpTimeout,
-		Transport: auth.NewRoundTripper(nil, provider),
-	})
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	// httpTimeout bounds one attempt. The rate-limit wait happens between attempts, outside this
+	// inner client's clock, so the retry budget is not silently capped by the per-request timeout.
+	inner := &http.Client{Timeout: httpTimeout, Transport: auth.NewRoundTripper(nil, provider)}
+	gh := github.NewClient(&http.Client{Transport: newRateLimitTransport(&clientTransport{c: inner}, o.log)})
 	// An App installation token posts comments as the app's bot user; a PAT posts as a human.
 	// This distinguishes the two for the marker-upsert ownership fallback (see ownsComment).
 	_, appAuthored := provider.(*auth.AppProvider)
-	c := &Client{gh: gh, appAuthored: appAuthored}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c
+	return &Client{gh: gh, appAuthored: appAuthored, authoredLogin: o.authoredLogin}
+}
+
+// clientTransport adapts an *http.Client back to a RoundTripper so the per-attempt timeout still
+// applies beneath the retry loop, and so redirect handling stays with a client rather than a bare
+// transport (which has none).
+type clientTransport struct{ c *http.Client }
+
+func (t *clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.c.Do(req)
 }
 
 // Commit is a minimal commit projection for digests.
@@ -125,10 +152,24 @@ type ReviewComment struct {
 type ReviewInput struct {
 	Body     string
 	Comments []ReviewComment
+	// CommitID is the head SHA the findings were computed against. It must be set whenever
+	// Comments is non-empty: GitHub resolves an inline comment's line against a specific commit,
+	// and omitting it makes the API resolve against whatever HEAD is at post time. A push landing
+	// between the diff fetch and this call would then either anchor a comment to the wrong line or
+	// 422 the whole review — taking the summary comment and the check down with it, since publish
+	// aborts on the first error. Pinning the SHA makes the review either land on the diff it was
+	// computed from or fail cleanly as superseded.
+	CommitID string
 }
 
 // CreateReview posts an advisory (COMMENT) pull-request review with optional inline comments.
 func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, in ReviewInput) error {
+	// An inline comment without a pinned commit is the failure mode CommitID exists to prevent, so
+	// reject it here rather than let GitHub resolve it against a moving HEAD. A body-only review has
+	// no lines to resolve and is fine unpinned.
+	if in.CommitID == "" && len(in.Comments) > 0 {
+		return fmt.Errorf("create review %s/%s#%d: inline comments require a commit id", owner, repo, number)
+	}
 	comments := make([]*github.DraftReviewComment, 0, len(in.Comments))
 	for _, rc := range in.Comments {
 		comments = append(comments, &github.DraftReviewComment{
@@ -138,6 +179,9 @@ func (c *Client) CreateReview(ctx context.Context, owner, repo string, number in
 	req := &github.PullRequestReviewRequest{Event: ptr("COMMENT"), Comments: comments}
 	if in.Body != "" {
 		req.Body = ptr(in.Body)
+	}
+	if in.CommitID != "" {
+		req.CommitID = ptr(in.CommitID)
 	}
 	if _, _, err := c.gh.PullRequests.CreateReview(ctx, owner, repo, number, req); err != nil {
 		return fmt.Errorf("create review %s/%s#%d: %w", owner, repo, number, err)
