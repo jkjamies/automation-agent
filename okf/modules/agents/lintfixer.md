@@ -43,9 +43,7 @@ flowchart TD
 - **Kickoff** (`KindLint`) → `Engine.Kickoff`: parse the trusted `{repo, base, report}` envelope → `Triage` (LLM normalizes the arbitrary report) → clone + checkout → read each affected file from the local checkout (`fixflow.ReadFile`) → analyze (one parallel agent per file) → `apply_fix` (branch, commit, push, labeled PR) → suspend on `await_ci`.
 - **Resume** (`KindCI`) → `Engine.Resume` (the fixflow Driver): on the agent verify check completing — success → notify; failure & attempts < max → re-analyze with CI feedback and push onto the same branch; failure & attempts ≥ max → notify "needs human review" + PR link. Terminal results post a **status-aware summary** (what changed on the PR via `GH.Compare` + the targeted findings). Attempts are counted in the `ParkStore` record, not derived from GitHub SHAs. A parked run whose CI never reports is freed by its per-run `CI_TIMEOUT` soft timer or, durably, by the `/internal/sweep` catch-all (→ "needs human review").
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `lint.go` — `NewEngine(fixflow.Deps)`: the lint `Spec` (branch/label/check + titles) that configures the shared fixflow engine.
 - `triage.go` — LLM report normalization (format-agnostic).

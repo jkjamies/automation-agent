@@ -1,7 +1,7 @@
 ---
 type: Standard
 title: Go style
-description: Idiomatic Go conventions for the reference port — formatting, errors, naming, dependency injection, configuration, and context.
+description: Idiomatic Go conventions for the service — formatting, errors, naming, dependency injection, configuration, and context.
 tags: [go, style, conventions]
 sensitivity: internal
 bundle: automation-agent

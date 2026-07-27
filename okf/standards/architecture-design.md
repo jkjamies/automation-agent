@@ -13,8 +13,7 @@ timestamp: 2026-07-04T00:00:00Z
 > This is the living design doc for the system. The CI feedback loop runs on
 > **durable sessions** (§8): one `SESSION_BACKEND` env selects an in-memory (default),
 > sqlite (durable local), or firestore (cloud) backend, so a parked run survives a process
-> restart — the change that unlocks Cloud Run scale-to-zero. Per-port parity is tracked
-> per-PR (see [Language parity](/standards/language-parity.md)).
+> restart — the change that unlocks Cloud Run scale-to-zero.
 
 A single long-running Go service that ingests events from many sources, routes every
 ingest through a **Root Agent**, and runs three workflow agents: a **Summary** workflow
@@ -180,13 +179,12 @@ automation-agent/
 ├── .gitignore                     # ignores: /specs/* (keep .gitkeep), .env, *.db, build/test artifacts
 ├── .env.example
 │
-├── okf/                           # the knowledge bundle (Open Knowledge Format; port-agnostic)
+├── okf/                           # the knowledge bundle (Open Knowledge Format)
 │   ├── index.md                   # bundle entry point — start here, follow links
 │   ├── orientation/               # what the system is, event flow, suspend/resume, glossary
 │   ├── standards/                 # the rules + canonical design/reference docs
 │   │   ├── architecture-design.md # THE authoritative design (this document)
 │   │   ├── architecture.md        # the import boundaries ARCH enforces
-│   │   ├── language-parity.md     # the cross-language 1:1 contract
 │   │   ├── ci-integration.md      # how CI sends lint/coverage reports
 │   │   ├── deployment.md          # local + cloud deployment
 │   │   ├── local-development.md   # running the agent locally
@@ -194,7 +192,7 @@ automation-agent/
 │   │   ├── testing.md             # 80% rule, no-LLM-assert rule
 │   │   ├── agent-build-pattern.md # the setup-vs-logic split
 │   │   └── documentation.md       # the docs-move-with-the-code rule
-│   ├── modules/                   # per-component concepts: agents/ platform/ ports/
+│   ├── modules/                   # per-component concepts: agents/ platform/
 │   └── tooling/                   # CI gates, specs & templates, deployment tooling
 │
 ├── .agents/                       # spec templates
@@ -207,7 +205,7 @@ automation-agent/
 ├── specs/                         # local dev/review docs (`/specs/*` gitignored; `.gitkeep` kept)
 │   └── .gitkeep
 │
-├── go/                            # the Go port (source of truth); siblings: python/ kotlin/ javascript/
+├── go/                            # the service
 │   ├── README.md / Makefile / go.mod / go.sum / Dockerfile
 │   ├── .golangci.yml
 │   │
@@ -275,9 +273,6 @@ automation-agent/
 │           ├── slack.go
 │           └── teams.go               # plan for Workflows/Adaptive Card (O365 connectors deprecating)
 │
-├── python/                        # the Python port (mirrors go/ topology)
-├── kotlin/                        # the Kotlin port (mirrors go/ topology)
-└── javascript/                    # the TypeScript port (mirrors go/ topology)
 ```
 
 Suspend/resume state is split across two `internal/agent/setup`-owned stores, both selected
@@ -371,7 +366,7 @@ uses branch `automation-agent/test-coverage`, check `agent-coverage-verify`.
 
 > **Durable sessions.** One `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`) selects
 > two provider-switched stores; `memory` is the zero-dependency default, `firestore` is the
-> prod path. Per-port parity is tracked per-PR (see [Language parity](/standards/language-parity.md)).
+> prod path.
 
 > **Scope: the fixers only.** This section describes the lint/coverage fixers, which wait on
 > CI and so suspend/resume. The **Reviewer** does **not** park: it has no CI to wait on, so it
@@ -640,8 +635,8 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
   `AGENTS.md` is the auto-loaded guardrail sheet + pointer to `okf/index.md`. Each agent
   has one concept at [`/modules/agents/<name>.md`](/modules/agents/index.md) documenting
   both the `agents_setup.go` and `<name>.go` halves; platform packages live at
-  [`/modules/platform/<name>.md`](/modules/platform/index.md), ports at
-  [`/modules/ports/<name>.md`](/modules/ports/index.md).
+  [`/modules/platform/<name>.md`](/modules/platform/index.md), and the service's own layout
+  and build targets at [`/modules/service.md`](/modules/service.md).
 - **Docs + diagrams move with the code (a change is not done until they do).** `docs_test`
   only checks bundle **conformance** (frontmatter, per-directory indexes, resolving links),
   not that content is current — freshness is on the author. When an agent, ingest `Kind`,
@@ -649,7 +644,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
   (the component's bundle concept; the [event-flow](/orientation/event-flow.md) +
   [root dispatcher](/modules/agents/root-dispatcher.md) diagrams; the §2/§13 and
   [Deployment](/standards/deployment.md) topology diagrams; `.env.example` +
-  the §12 config table) in the same change, mirrored across all ports. Full checklist:
+  the §12 config table) in the same change. Full checklist:
   [Documentation & diagrams](/standards/documentation.md).
 - **specs/** — gitignored developer memory. `make spec name=add-jira-ingest kind=add`
   copies `.agents/templates/add.spec.md` → `specs/2026-…-add-jira-ingest.md`. Templates:
@@ -795,8 +790,8 @@ Balancer, with a **self-hosted API gateway** on the operator's own network as th
 door. The gateway is the IAM-authenticated caller — it enforces the webhook edge policies (HMAC,
 GitHub IP allowlist, replay window, rate-limit) and presents a Google OIDC token to `/internal/*`
 (`INTERNAL_AUTH=oidc`), so a private Cloud Run still receives webhook-originated traffic and the
-shared bearer goes away. The HTTP contract is identical across ports, so the gateway config is
-port-agnostic. Architecture detail in
+shared bearer goes away. The gateway sits in front of the HTTP contract, so its config is
+independent of the service internals. Architecture detail in
 [Deployment § Private ingress](/standards/deployment.md#private-ingress); rollout intent in
 `DEPLOYMENT.md`.
 
@@ -826,12 +821,10 @@ The system is composed of independently testable layers:
   (success / max-iter / timeout) enrich notifications via `githubapi.Compare`.
 - Cloud Scheduler ingress drives `/internal/cron/daily` + `/internal/sweep` (durable timeout
   catch-all), Bearer-authed via `INTERNAL_TOKEN`.
-- The ports stay in lockstep on the durable-session design; per-port parity is tracked per-PR
-  (see [Language parity](/standards/language-parity.md)).
 
-Planned hardening outside this design: orphan-session GC (sessions that crash between
-create-and-park), Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager, and CI
-running the Firestore emulator — see `DEPLOYMENT.md`.
+Outside the scope of this design: reclaiming sessions that crash between create-and-park, and
+the infrastructure definition itself (Firestore, Cloud Run, Scheduler, Secret Manager). Both are
+operational concerns rather than architectural ones; `DEPLOYMENT.md` is where they are tracked.
 
 ---
 
@@ -841,7 +834,7 @@ running the Firestore emulator — see `DEPLOYMENT.md`.
    the ADK `session.Service` + `setup.ParkStore`: `memory` (default, non-durable — the old
    behavior) | `sqlite` (durable local) | `firestore` (durable cloud, scale-to-zero). With a
    durable backend a restart resumes parked runs; GitHub still holds the durable PR artifacts.
-   Per-port parity is tracked per-PR (see [Language parity](/standards/language-parity.md)). See §8.
+   See §8.
 2. **Notify.** The `Notifier` interface has both Slack and Teams impls; choice is one
    env var. Teams targets the new **Workflows/Adaptive Card** format (O365 connectors
    deprecating).

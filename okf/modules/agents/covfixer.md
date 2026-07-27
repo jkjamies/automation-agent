@@ -35,9 +35,7 @@ flowchart TD
 
 Generated tests that don't compile or don't raise coverage are rejected by the `agent-coverage-verify` check and retried with the CI output as feedback — the same loop as the [lint-fixer](/modules/agents/lintfixer.md).
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `coverage.go` — `NewEngine(Deps)`: the coverage `Spec` (branch/label/check + titles).
 - `triage.go` — coverage report → `[]fixflow.FileWork` (files + uncovered regions).

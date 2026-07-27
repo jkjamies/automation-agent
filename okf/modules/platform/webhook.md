@@ -109,7 +109,7 @@ pick the target repo. The `/internal/*` endpoints use a **Bearer token** (`INTER
 and are **disabled (404)** unless that token is set (`internalAuthenticated`); the Cloud
 Tasks transport attaches that same token, so `/internal/dispatch` reuses the check verbatim.
 The bearer-vs-OIDC rationale is covered in the
-[deployment standard](/standards/deployment.md). In the Go reference port, Go 1.22
+[deployment standard](/standards/deployment.md). Go 1.22
 method-pattern routing gives 405s for free. Bodies are size-capped at 5 MiB (over-cap →
 `413`, not truncated). Deterministic tooling — no agent imports. Fully tested with a
 local HTTP test harness.

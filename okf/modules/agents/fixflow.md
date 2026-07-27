@@ -51,9 +51,7 @@ flowchart TD
     SW["/internal/sweep -> SweepTimeouts (durable catch-all)"] -.-> TON
 ```
 
-## Reference implementation layout (Go port)
-
-The same structure exists in each port; the Go port is the reference.
+## Implementation layout
 
 - `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
 - `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record **and** the ADK session.

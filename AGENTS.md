@@ -1,9 +1,8 @@
 # automation-agent
 
 An event-driven automation service (daily summaries, autonomous lint/coverage fixers
-with a PR + CI loop, and a PR reviewer) built on the Agent Development Kit, maintained
-as parallel language ports of one design: `go/` (reference) · `python/` · `kotlin/` ·
-`javascript/`.
+with a PR + CI loop, and a PR reviewer) built on the Agent Development Kit for Go. The
+service lives in `go/`.
 
 ## Knowledge — start here
 
@@ -14,14 +13,14 @@ Format: markdown concepts with YAML frontmatter, cross-linked). Start at
 Before non-trivial work in an area, read its concept:
 
 - What the system is & how events flow → [`okf/orientation/`](okf/orientation/index.md)
-- Rules every change obeys (parity, testing, style, docs, security, webhooks…) →
+- Rules every change obeys (testing, style, docs, security, webhooks…) →
   [`okf/standards/`](okf/standards/index.md)
 - A specific agent/workflow (fixflow, reviewer, summary, dispatcher, setup) →
   [`okf/modules/agents/`](okf/modules/agents/index.md)
 - A platform package (config, githubapi, gitrepo, ingest, webhook, notify, obs, tasks,
   auth) → [`okf/modules/platform/`](okf/modules/platform/index.md)
-- A language port (layout, build/run/test, quirks) →
-  [`okf/modules/ports/`](okf/modules/ports/index.md)
+- The service's layout, build targets, and conventions →
+  [`okf/modules/service.md`](okf/modules/service.md)
 
 Ops runbook (env, GCP setup, `/internal/*` hooks): `DEPLOYMENT.md`.
 
@@ -40,23 +39,13 @@ skill over improvising its procedure.
 These are enforced by architecture tests and review; violating any of them fails the
 gate or the PR:
 
-- **Run the port's local gate before proposing changes**: `make ci` from `go/`,
-  `python/`, or `javascript/`; `./gradlew build` from `kotlin/`.
-- **Two-pair parity.** Go↔Python are the modern pair: behavior changes land in Go first
-  and are mirrored into Python in the same logical change. Kotlin↔TypeScript are
-  feature-frozen (a critical fix touching one lands in both). No parity requirement
-  across pairs; external contracts (routes, check names, payloads) match across all
-  four. Full rules: [`okf/standards/language-parity.md`](okf/standards/language-parity.md).
+- **Run the local gate before proposing changes**: `make ci` from `go/`. It runs
+  tidy + vet + lint + arch + test + coverage, and is what CI runs too.
 - **Import boundaries**: tooling packages never import agents; provider SDKs
-  (Ollama/Gemini/genai) only inside the port's `agent/setup` layer; nothing imports
+  (Ollama/Gemini/genai) only inside the `agent/setup` layer; nothing imports
   `cmd`; the config layer is the only place that reads environment variables.
-- **Testing**: coverage ≥ 80 % per port; never assert on LLM output content; tests stay
+- **Testing**: coverage ≥ 80 %; never assert on LLM output content; tests stay
   deterministic.
-- **No cross-language mentions in port code/comments** — code in one port never names
-  another stack (no "mirrors the Go version", no goroutine/asyncio references in the
-  other language). Repo-level docs (this file, `/okf`) are exempt.
-- **Kotlin: never use the `!!` not-null assertion** (use `requireNotNull`/`?:`/
-  `shouldNotBeNull` instead).
 - **Prompts are markdown** under each agent's `prompts/` directory, loaded from embedded
   resources — never inline prompt strings in code.
 - **Docs are factual, never status trackers** — no "done/pending/Phase X" outside

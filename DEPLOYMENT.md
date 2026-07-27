@@ -5,9 +5,6 @@
 > auth rationale, full GCP walkthrough, prod-vs-local stack table) is the source of truth
 > in [`okf/standards/deployment.md`](okf/standards/deployment.md).
 >
-> Scope: the GCP walkthrough below uses the Go service (`go/`) as the worked example; the
-> same durable-sessions design, `SESSION_BACKEND` switch, and env vars apply to every port.
-> Per-port parity is tracked per-PR (see [`okf/standards/language-parity.md`](okf/standards/language-parity.md)).
 
 ## Where to find what
 
@@ -48,9 +45,6 @@ The detailed, copy-paste steps for each item are in
 
 - [ ] **Orphan-session GC** for sessions created but never parked.
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
-- [ ] **Cross-port parity:** keep the ports in lockstep on the durable-session design;
-      per-port parity is tracked per-PR (see
-      [`okf/standards/language-parity.md`](okf/standards/language-parity.md)).
 - [ ] **OIDC instead of a shared bearer** for `/internal/*`.
 - [ ] **Private ingress** — front the service with a self-hosted API gateway and make Cloud Run
       private so each operator deploys an instance reachable only on their own network. Phased
@@ -74,9 +68,8 @@ Phased so each step is independently testable:
       `ingress=internal-and-cloud-load-balancing` + Internal ALB + serverless NEG; prove a curl
       with an OIDC token works and the public URL is dead. *(No app change.)*
 - [ ] **Phase 1 — app auth.** Add `INTERNAL_AUTH` (`bearer`|`oidc`|`both`) + an OIDC verifier
-      (signature + `aud` = service URL + allowed SA email) in Go; switch Cloud Scheduler to OIDC;
-      mirror to `python/`, `kotlin/`, `javascript/`. Retires `INTERNAL_TOKEN` and folds in the
-      existing OIDC TODO above.
+      (signature + `aud` = service URL + allowed SA email) in Go; switch Cloud Scheduler to OIDC.
+      This retires `INTERNAL_TOKEN` and subsumes the OIDC item listed above.
 - [ ] **Phase 2 — gateway.** Deploy the self-hosted API gateway on the operator network;
       implement the HMAC / GitHub IP-allowlist / replay-window / rate-limit / size-cap policies +
       OIDC mint + mTLS; route `/webhooks/*` (and optionally cron) through it.

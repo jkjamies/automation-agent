@@ -23,7 +23,7 @@ What state must be carried over and how (recall: GitHub is the source of truth f
 lint-fixer; a store only enters on scale-out — see `okf/standards/architecture-design.md` §8).
 
 ## Test plan
-Tests proving parity before/after each step. Coverage ≥80%.
+Tests proving equivalent behavior before/after each step. Coverage ≥80%.
 
 ## Rollback
 Per-step rollback, and the point of no return (if any).

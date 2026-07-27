@@ -17,7 +17,7 @@ These are binding review criteria.
 ## Where knowledge lives
 
 - **This bundle (`okf/`) is the canonical home of system knowledge** — orientation,
-  standards, module concepts (agents / platform / ports), and tooling. Concepts are
+  standards, module concepts (agents / platform), and tooling. Concepts are
   self-contained: they carry the knowledge; they never defer to a source file for it.
   The format itself (frontmatter schema, type taxonomy, timestamp semantics, link
   convention) is specified in [OKF format](/standards/okf-format.md).
@@ -32,7 +32,7 @@ These are binding review criteria.
   frontmatter `type`, every directory has an `index.md`, bundle-absolute links resolve,
   the root `AGENTS.md` points at the bundle index) — **content freshness is on the
   author.**
-- The ops runbook (`DEPLOYMENT.md`) and per-port `README.md` files remain thin
+- The ops runbook (`DEPLOYMENT.md`) and the repo `README.md` remain thin
   operational surfaces; anything conceptual links into the bundle.
 - The bundle's `log.md` is the OKF-reserved chronological history file (a changelog of
   the bundle itself, defined by the format) — it is not a concept and the
@@ -42,7 +42,7 @@ These are binding review criteria.
 
 - Bundle concepts describe **how the system works right now**, factually. Never
   annotate them with migration status — no "removed the cron", "Phase D done",
-  "pending parity", "TODO: weekly". Describe the new reality; let the diff and the PR
+  "pending review", "TODO: weekly". Describe the new reality; let the diff and the PR
   carry the "what changed".
 - Progress tracking lives in **specs** and the task list, **not** in concepts.
   **Plan/spec docs (`specs/`, `.agents/templates/`) are exempt** — their job *is* to
@@ -62,20 +62,18 @@ sweep:
   deployment) and [Deployment](/standards/deployment.md) topology diagrams;
 - [Webhooks & CI check names](/standards/webhooks.md) — the webhook-route +
   CI-check-name registry — and [CI Integration](/standards/ci-integration.md) (both
-  tables must stay in lockstep with the engine `Spec`s in every port);
-- every `.env.example` that carries the var (repo root, `python/`, `javascript/`) + the
+  tables must stay in lockstep with the engine `Spec`s);
+- the repo-root `.env.example` (when the var is carried there) + the
   [Architecture & Build Plan](/standards/architecture-design.md) §12 config table (for
   any new/removed env var).
 
 **Before opening the PR, grep the repo for the old name / route / `Kind`** to confirm
 nothing stale remains — diagrams included.
 
-## One bundle for all ports
+## One bundle, one system
 
-The bundle documents **one system**. Per-port differences live in the
-[port concepts](/modules/ports/index.md), not as parallel doc trees. When a change
-lands in the modern pair (Go first, mirrored to Python), the concept updates once —
-see [Language parity](/standards/language-parity.md).
+The bundle documents **one system** in one place. A concept is updated in the same change
+that alters the behavior it describes — there are no parallel doc trees to keep in step.
 
 ## Diagram conventions
 

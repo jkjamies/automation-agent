@@ -40,13 +40,12 @@ The spec is the input AND the output. This skill mutates the spec file in place.
 
 Explore these before asking — cite the concept, never inline its content:
 
-- `okf/standards/language-parity.md` — two-pair contract; Go-first workflow rule
-- `okf/standards/architecture-design.md` — the language-neutral design and boundaries
-- `okf/standards/webhooks.md` — webhook routes + check names (all-four-port contracts)
+- `okf/standards/architecture-design.md` — the authoritative design and boundaries
+- `okf/standards/webhooks.md` — webhook routes + check names (external contracts)
 - `okf/orientation/suspend-resume-design.md` — durable park/resume mechanics
 - `okf/standards/testing.md` — coverage floor, no LLM-output assertions
 - `okf/standards/documentation.md` — which okf concepts/diagrams move with a change
-- `okf/modules/agents/*.md`, `okf/modules/platform/`, `okf/modules/ports/` — unit concepts
+- `okf/modules/agents/*.md`, `okf/modules/platform/`, `okf/modules/service.md` — unit concepts
 
 ## Steps
 
@@ -78,39 +77,34 @@ Resolve dependencies before dependents:
 1. **Identity** — H1 title, kind, date (everything hangs off these)
 2. **Context & Motivation** — drives all technical decisions
 3. **Scope** — in/out of scope (add); Target state (migrate); Impact analysis (remove)
-4. **Parity impact** — modern pair only? Go-first then Python in the same logical
-   change; frozen Kotlin/TS untouched by features. If a critical fix must touch the
-   frozen pair, it lands in BOTH frozen ports
-5. **External contracts** — ingest Kind, webhook route, or check-name changes bind all
-   four ports; anything another system observes
-6. **Design / Proposed change** — packages, agents, tools, the ingest→root→workflow
+4. **External contracts** — ingest Kind, webhook route, or check-name changes are
+   observed by GitHub and by every target repo's CI, so they break silently
+5. **Design / Proposed change** — packages, agents, tools, the ingest→root→workflow
    path touched, prompts
-7. **Env/config** — new or changed env vars: identical names, defaults, validation
-   across the pair
-8. **Durable park/resume** — does the change affect suspended workflows, resume keys,
+6. **Env/config** — new or changed env vars: name, default, validation
+7. **Durable park/resume** — does the change affect suspended workflows, resume keys,
    or the CI-wait loop?
-9. **Test plan** — coverage stays ≥80%; never assert on LLM output
-10. **Rollout / rollback** — and per-step reversibility for migrate
-11. **okf bundle updates** — which concepts/diagrams must move with the change
+8. **Test plan** — coverage stays ≥80%; never assert on LLM output
+9. **Rollout / rollback** — and per-step reversibility for migrate
+10. **okf bundle updates** — which concepts/diagrams must move with the change
 
 ### 4. Explore Before Asking
 For each marker, first decide: **can the codebase or bundle answer this?**
 
 | Marker | Look here |
 |--------|-----------|
-| Env var name/default/validation | `.env.example`, Go config package (Go is the reference) |
+| Env var name/default/validation | `.env.example`, `go/internal/config` |
 | Webhook route / check name | `okf/standards/webhooks.md`, ingest package |
 | Agent topology / where logic lives | `okf/standards/architecture-design.md`, `okf/modules/agents/` |
-| Whether the frozen pair is affected | `okf/standards/language-parity.md` (external contracts vs features) |
 | Park/resume interaction | `okf/orientation/suspend-resume-design.md`, session store code |
-| Prompt content/location | `prompts/` markdown in the affected port |
-| Naming/structure conventions | the sibling package in Go and its bundle concept |
+| Prompt content/location | the `prompts/` markdown beside the affected agent |
+| Naming/structure conventions | a sibling package and its bundle concept |
 | Which docs/diagrams move | `okf/standards/documentation.md` |
 
 When grounded, present a confirmation rather than a question:
 
 > Checked `.env.example` and the Go config package — there's no `REVIEW_BATCH_SIZE`
-> yet. I recommend adding it with default `5`, validated ≥1, mirrored in Python.
+> yet. I recommend adding it with default `5`, validated ≥1.
 > Sound good, or reuse an existing knob?
 
 If the codebase doesn't answer it (product intent, priority, business rule), ask.
@@ -160,8 +154,8 @@ unblock them — never silently left in place.
 
 ### 8. Final Pass
 Re-run the step-2 scan. If undeclared markers remain, resume grilling. When clean,
-summarize: decisions resolved, deferrals (and why), and the suggested next step
-(implement Go first, mirror Python; note any all-four-port contract work).
+summarize: decisions resolved, deferrals (and why), and the suggested next step (note any
+external-contract work, which lands with the registry update in the same change).
 
 ## Stop Condition
 All markers are either **resolved (written into the spec)** or **explicitly deferred

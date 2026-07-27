@@ -246,7 +246,6 @@ func (c Config) AppMode() bool { return c.GitHubApp.AppID != 0 }
 // webhook secret, internal token, webhook URLs, and (via GitHubApp) the App
 // private key verbatim. The plain alias drops this String method to avoid
 // infinite recursion. Keep the masked set in sync when adding a secret field.
-// (Mirrors Python's __repr__, JS's inspect redaction, and Kotlin's toString.)
 func (c Config) String() string {
 	type plain Config
 	p := plain(c)

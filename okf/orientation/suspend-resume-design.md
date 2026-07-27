@@ -17,7 +17,7 @@ The resolution is a strict split between **framework** and **infrastructure**:
 
 ## What the framework owns (in-process)
 
-On the modern pair (ADK 2.x), the fix loop is a deterministic **workflow graph**:
+The fix loop is a deterministic **workflow graph**:
 
 ```
 Start → apply_fix ─"fix_applied"→ await_ci (request-input pause)
@@ -39,10 +39,6 @@ Start → apply_fix ─"fix_applied"→ await_ci (request-input pause)
   session events, re-runs `await_ci` (re-entry mode), and routes on the CI conclusion.
 - A replayed (stale or duplicate) interrupt no-ops at the engine level — defense in depth
   behind the ParkStore claim below.
-
-The frozen pair implements the same observable loop on its ADK 1.x-era mechanism
-(long-running tool calls driven by a deterministic sequencer model); the external
-behavior — park, resume by webhook, retry cap, timeout — is identical.
 
 ## What infrastructure owns (survives the process)
 

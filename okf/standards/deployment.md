@@ -14,10 +14,6 @@ The canonical deployment + operations reference. How the service is structured f
 cloud, the HTTP surface, and the step-by-step GCP setup. This is the **source of truth**;
 the repo-root `DEPLOYMENT.md` is a thin checklist pointer back here.
 
-> **Scope:** the GCP walkthrough below uses the **Go** reference (`go/`) as the worked
-> example; the same design, HTTP surface, and `SESSION_BACKEND` switch apply to every port
-> (see [Other ports](#other-ports) for the per-port backend stacks).
->
 > Related: [Local development](/standards/local-development.md) (run it on your machine) ·
 > [Testing](/standards/testing.md) (Firestore emulator) ·
 > [CI Integration](/standards/ci-integration.md) (driving the fixers from CI) ·
@@ -299,10 +295,6 @@ These pieces harden a deployment but are not required to stand one up:
   (≈ `CI_TIMEOUT × MAX_ITERATIONS` + margin, ~6–24h), working for firestore + sqlite, riding
   `/internal/sweep` or a Firestore native TTL policy on `_sessions`.
 - **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
-- **CI running the Firestore emulator** so `*_firestore.go` folds back into measured
-  coverage (see [Testing](/standards/testing.md)).
-- **Cross-port parity** on the durable-session design — kept in lockstep per the parity
-  contract; any deliberate gap is recorded in the PR that introduces it.
 - **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
 
 ---
@@ -411,22 +403,7 @@ Cron and the sweep are **always** GCP-internal regardless of GitHub flavor; only
 
 The defaults reproduce the public-URL behavior, so this posture is selected entirely through
 config + infra. The agent logic (`fixflow`, sessions, park store, `REPOS`) is unchanged; the
-architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`), which
-lands Go-first and mirrors per the parity contract.
+architecture adds only an OIDC auth mode on `/internal/*` (optionally `/webhooks/*`).
 
 ---
 
-## Other ports
-
-The mental model, HTTP surface (`/webhooks/*` + `/internal/*`), env vars, and GCP steps
-above apply to every port — they share one design and the `SESSION_BACKEND` switch. The
-per-port difference is only the backend SDKs sitting behind the same interfaces:
-
-| Port | sqlite session | firestore session | firestore park store |
-|---|---|---|---|
-| Go `go/` | adk `database` (gorm) | hand-rolled `session.Service` | custom on `cloud.google.com/go/firestore` |
-| Python `python/` | adk `SqliteSessionService` | adk **native** `FirestoreSessionService` | custom on `google-cloud-firestore` |
-
-Each port builds its own container (`cd <port> && make docker`, building that port's
-`cmd/agent`). Any deliberate difference in a port's backend SDKs or coverage is recorded in
-the PR that introduces it.

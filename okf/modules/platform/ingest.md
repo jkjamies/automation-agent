@@ -1,7 +1,7 @@
 ---
 type: Platform-Package
 title: Ingress Envelope
-description: The normalized Envelope every ingress source reduces to before reaching the root agent, plus its cross-port JSON wire codec for the Cloud Tasks boundary.
+description: The normalized Envelope every ingress source reduces to before reaching the root agent, plus the JSON wire codec that carries it across the Cloud Tasks boundary.
 resource: go/internal/ingest
 tags: [ingress, envelope, wire-contract]
 sensitivity: internal
@@ -42,7 +42,7 @@ to the [summary](/modules/agents/summary.md),
 [lint-fixer](/modules/agents/lintfixer.md), and
 [coverage-fixer](/modules/agents/covfixer.md) workflows.
 
-Adding a new ingress (e.g. Jira) means adding a `Kind` here (including its `Valid()` entry and the cross-port wire contract), a handler that emits
+Adding a new ingress (e.g. Jira) means adding a `Kind` here (including its `Valid()` entry and the wire contract), a handler that emits
 an `Envelope` — the root agent's routing is the only other place that changes.
 
 ## Wire codec
@@ -50,7 +50,7 @@ an `Envelope` — the root agent's routing is the only other place that changes.
 `Encode`/`Decode` are the envelope's JSON wire form, used when it crosses the Cloud Tasks
 boundary ([tasks](/modules/platform/tasks.md) → `POST /internal/dispatch`). The form —
 `kind`/`source` strings, `received_at` RFC 3339, `payload` standard base64 — is an
-external contract and must stay byte-identical across all four language ports. `Decode`
+external contract and must stay byte-identical for anything that reads it. `Decode`
 rejects an unknown `Kind` as a permanent (poison) error so the worker acks rather than
 retries it. The in-process transport passes the struct directly and never touches the
 codec.

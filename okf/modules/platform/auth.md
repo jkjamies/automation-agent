@@ -37,11 +37,10 @@ flowchart TD
 - `TokenProvider.Token(ctx, repo)` — the seam. `repo` is `"owner/name"`. PAT mode
   returns the same constant for every repo; App mode mints/caches a short-lived
   (~1h) installation token and refreshes it before expiry. The seam is the
-  **cross-port contract** ([language parity](/standards/language-parity.md)); the
-  library used to implement it is per-port detail.
+  contract; the library behind it is an implementation detail.
 - `StaticProvider` — constant token. Backs the PAT fallback and the empty
   (anonymous, public-read/test) client. An empty token is valid.
-- `AppProvider` — in the Go reference port, wraps `ghinstallation/v2.Transport`
+- `AppProvider` — wraps `ghinstallation/v2.Transport`
   pinned to **one** installation id — a deliberate design constraint: each
   deployment serves a single GitHub org/installation — so there is no
   per-owner cache and no dynamic `repo→installation` resolution. The `repo`

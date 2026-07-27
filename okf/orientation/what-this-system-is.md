@@ -1,7 +1,7 @@
 ---
 type: Architecture
 title: What this system is
-description: An event-driven automation service that summarizes repo activity, autonomously fixes lint/coverage failures via PR + CI loops, and reviews pull requests — implemented as parallel language ports of one design.
+description: An event-driven automation service that summarizes repo activity, autonomously fixes lint/coverage failures via PR + CI loops, and reviews pull requests.
 tags: [orientation, overview]
 sensitivity: internal
 bundle: automation-agent
@@ -28,21 +28,15 @@ one entry point, routed by event `Kind`. Deterministic tooling
 ([githubapi](/modules/platform/githubapi.md), [gitrepo](/modules/platform/gitrepo.md),
 [webhook](/modules/platform/webhook.md), [notify](/modules/platform/notify.md)) is
 agent-free — agents call it; it never imports agents. That boundary is enforced by
-architecture tests in every port.
+architecture tests.
 
-## The two defining design facts
+## The defining design fact
 
-1. **The CI wait is durable and infrastructure-owned.** A fix cannot be confirmed for
-   20–40+ minutes while CI runs, and the service deploys on scale-to-zero Cloud Run — so
-   a fix run *parks* (a durable workflow pause persisted in the session store) and
-   *resumes* when a GitHub `check_run` webhook reports back. No in-process wait, no
-   resident worker. See [suspend/resume design](/orientation/suspend-resume-design.md).
-
-2. **One design, parallel ports, two parity pairs.** The same service exists in Go
-   (reference), Python, Kotlin, and TypeScript. Go↔Python form the modern pair on the
-   ADK 2.x line; Kotlin↔TypeScript are the frozen pair. The contract is behavioral, not
-   syntactic. See the [parity standard](/standards/language-parity.md) and
-   [ports](/modules/ports/index.md).
+**The CI wait is durable and infrastructure-owned.** A fix cannot be confirmed for 20–40+
+minutes while CI runs, and the service deploys on scale-to-zero Cloud Run — so a fix run
+*parks* (a durable workflow pause persisted in the session store) and *resumes* when a
+GitHub `check_run` webhook reports back. No in-process wait, no resident worker. See
+[suspend/resume design](/orientation/suspend-resume-design.md).
 
 ## Model strategy
 

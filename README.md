@@ -2,19 +2,22 @@
 
 A lightweight, long-running Go service that ingests events from many sources
 (Cloud Scheduler today; GitHub/Jira/Confluence/human later), routes every ingest through a
-**root agent**, and runs three workflow agents:
+**root agent**, and runs four workflow agents:
 
 - **Summary** — daily digest of the last 24h of commits across N repos,
   posted to Slack or Teams.
 - **Lint-fixer** — consumes an agnostic lint payload, opens a PR with a fix, and
-  loops (max 3) on CI feedback before posting a result. Suspend/resume rides on
-  ADK long-running tools plus a **pluggable durable backend** (`SESSION_BACKEND` =
+  loops (max 3) on CI feedback before posting a result. Suspend/resume rides on a
+  workflow graph whose `await_ci` node pauses on a request-input interrupt, plus a
+  **pluggable durable backend** (`SESSION_BACKEND` =
   `memory` | `sqlite` | `firestore`): with a durable backend a process restart
   **resumes cleanly** instead of stranding in-flight runs, and terminal results post
   a status-aware summary (what changed on the PR + the targeted findings).
 - **Coverage-fixer** — consumes an agnostic coverage report (JaCoCo, lcov, `go cover`,
   …) and opens a PR adding tests for *meaningful* uncovered logic, with the same CI
   loop. Shares the `fixflow` engine with the lint-fixer.
+- **Reviewer** — an in-house PR code reviewer: one-shot, advisory, comment-only, and
+  steered off the reviewed repo's own standards docs. Off by default (`REVIEW_ENABLED`).
 
 Built on the [Agent Development Kit for Go](https://github.com/google/adk-go),
 local-first on **Ollama + Gemma**, with a config switch to **Gemini/Vertex** for
@@ -22,25 +25,6 @@ cloud deployment.
 
 > **Design doc:** [`okf/standards/architecture-design.md`](okf/standards/architecture-design.md) is the source of
 > truth for the architecture and decisions.
-
-## Ports (Go · Kotlin · Python · TypeScript)
-
-The Go implementation in [`go/`](go/) is the canonical reference. It is mirrored by
-sibling ports that must **all stay 1:1 in functionality** — same structure, public
-surface, config, and external contracts. Every language is held to the same parity
-contract; a behavior change lands in Go first and is mirrored into every existing port in
-the same change (see [`okf/standards/language-parity.md`](okf/standards/language-parity.md)):
-
-- **Kotlin** — [`kotlin/`](kotlin/), built on [ADK for Kotlin](https://github.com/google/adk-kotlin)
-  (`com.google.adk:google-adk-kotlin-core:0.4.0`). A functional 1:1 port (`./gradlew build`
-  green).
-- **Python** — [`python/`](python/), built on `google-adk` from PyPI. A functional 1:1
-  port (`make ci` green).
-- **TypeScript** — [`javascript/`](javascript/), built on the official
-  [ADK for JavaScript](https://github.com/google/adk-js) (`@google/adk`). A functional 1:1
-  port (`make ci` green).
-
-Each port uses its language's **native ADK**, so parity is functional, not version-matched.
 
 ## Quick start
 
@@ -75,8 +59,7 @@ validated against the emulator): the summary, lint-fixer, and coverage-fixer wor
 root dispatcher, the deterministic tooling, and the durable-sessions design (the
 `SESSION_BACKEND` switch, the `ParkStore` seam, Firestore session/park backends,
 status-aware summaries, and the Cloud Scheduler `/internal` ingress). The core service runs
-locally and the LLM steps are verified against real Gemma. The Kotlin, Python, and
-TypeScript ports mirror it (each port's `ci` gate green).
+locally and the LLM steps are verified against real Gemma.
 
 To run against live repos and cloud infrastructure you supply the surrounding pieces:
 
@@ -106,17 +89,16 @@ OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
 | Path | Purpose |
 |---|---|
 | `go/` | the canonical Go implementation (`cmd/`, `internal/`, `ARCH/`, `Makefile`) |
-| `kotlin/` · `python/` · `javascript/` | the sibling ports, each mirroring `go/` |
 | `.agents/` | skills and spec templates |
 | `specs/` | developer memory (gitignored) — created from `.agents/templates` |
 
-Inside `go/` (mirrored by each port):
+Inside `go/`:
 
 | Path | Purpose |
 |---|---|
 | `go/cmd/agent` | service entrypoint |
 | `go/cmd/playground` | local ADK web UI (dev only; never deployed) |
-| `go/internal/agent` | root / summary / lintfixer / covfixer agents + shared `setup` + `fixflow` |
+| `go/internal/agent` | root / summary / lintfixer / covfixer / reviewer agents + shared `setup` + `fixflow` |
 | `go/internal/{githubapi,gitrepo,webhook,notify,tasks,obs}` | deterministic tooling (`tasks` = execution transport; `obs` = distributed tracing, off by default) |
 | `go/internal/{config,ingest}` | configuration + normalized event envelope |
 | `go/ARCH/` | architecture-conformance tests |

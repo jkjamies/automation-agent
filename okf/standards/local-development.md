@@ -14,10 +14,6 @@ How to run the service on your machine — prerequisites, configuration, every r
 and how the local stack differs from prod. Source of truth; read it and you can run the
 agent locally without asking anyone.
 
-> **Scope:** the detailed walkthrough below uses the **Go** reference (`go/`); the same run
-> modes and env vars apply to every port — run them from that port's directory (see
-> [Other ports](#other-ports)).
->
 > Related: [Testing](/standards/testing.md) (running tests) ·
 > [Deployment](/standards/deployment.md) (cloud/GCP) ·
 > [CI Integration](/standards/ci-integration.md) (driving the lint/coverage fixers).
@@ -180,33 +176,3 @@ The image builds **only** `cmd/agent` (the playground is never containerized). P
 `OLLAMA_HOST` at the host's Ollama, or set `LLM_PROVIDER=gemini` to use Vertex.
 
 ---
-
-## Other ports
-
-Every port has the same run modes and `make` targets as Go, run from its own directory.
-
-### Python (`python/`)
-
-Prerequisites: Python 3.13 + [uv](https://github.com/astral-sh/uv), an Ollama with a Gemma
-model (or `LLM_PROVIDER=gemini`), and a `.env` (copy `python/.env.example`).
-
-```bash
-cd python
-make build                        # uv sync
-make run                          # webhooks + /internal cron hooks (cmd/agent), SESSION_BACKEND=memory
-SESSION_BACKEND=sqlite make run   # durable local: parked runs survive a restart
-make playground                   # local ADK web UI
-```
-
-`SESSION_BACKEND` selects the same `memory | sqlite | firestore` backends as Go. Python's
-`SQLITE_DSN` is a **plain file path** (default `automation-agent.db`) — adk's
-`SqliteSessionService` takes a path, not Go's `file:…?_pragma=` DSN — and `firestore` uses
-adk's native `FirestoreSessionService` plus a custom park store on `google-cloud-firestore`.
-The `/internal/*` ingress + `INTERNAL_TOKEN` behave identically.
-
-### TypeScript (`javascript/`) and Kotlin (`kotlin/`)
-
-The same `make run` / `make playground` / `make ci` targets apply to `javascript/`.
-`kotlin/` uses the Gradle wrapper (`./gradlew build`, `./gradlew run`, `./gradlew koverVerify`).
-Any deliberate divergence in a port's run flags or backend SDKs is recorded in
-the PR that introduces it.

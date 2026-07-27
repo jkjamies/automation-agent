@@ -9,7 +9,7 @@ bundle: automation-agent
 timestamp: 2026-07-04T00:00:00Z
 ---
 
-The production shape (any port deploys the same way — the ops runbook with exact
+The production shape (the ops runbook with exact
 commands and environment reference is `DEPLOYMENT.md` at the repo root):
 
 - **Cloud Run (scale-to-zero)** hosts the service. Nothing in the design requires a

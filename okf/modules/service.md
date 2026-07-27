@@ -1,21 +1,17 @@
 ---
-type: Port
-title: Go port (reference)
-description: The reference implementation of automation-agent, built on ADK for Go (google.golang.org/adk/v2 v2.0.0), forming the modern pair with the Python port on the ADK 2.x line.
+type: Architecture
+title: The service — layout, flows, and conventions
+description: The Go service under go/ - its kickoff and resume flows, package layout, build targets, and the conventions the architecture tests enforce.
 resource: go/
-tags: [go, modern-pair, reference, adk-v2]
+tags: [go, service, layout, adk-v2]
 sensitivity: internal
 bundle: automation-agent
 timestamp: 2026-07-04T00:00:00Z
 ---
 
-# Go port (reference)
+# The service — layout, flows, and conventions
 
-The Go implementation under `go/` is the **reference port** of automation-agent. It is built on the Agent Development Kit for Go, `google.golang.org/adk/v2` v2.0.0. The language-neutral design it implements is [/standards/architecture-design.md](/standards/architecture-design.md).
-
-## Pair membership
-
-Go and the [Python port](/modules/ports/python.md) form the **modern pair**: both run on the ADK 2.x line and carry the design forward (workflow graphs, request-input pause/resume). The [Kotlin](/modules/ports/kotlin.md) and [TypeScript](/modules/ports/javascript.md) ports form the frozen pair; there is no parity requirement across the two pairs, but external contracts (webhook routes, check names, payloads) match across all four ports. The full parity rules live in [/standards/language-parity.md](/standards/language-parity.md).
+`automation-agent` is a single Go service under `go/`, built on the Agent Development Kit for Go, `google.golang.org/adk/v2` v2.0.0. The design it implements is [/standards/architecture-design.md](/standards/architecture-design.md).
 
 ## System flow
 
@@ -120,15 +116,15 @@ Run from the `go/` directory; `make help` lists all targets.
 - `make test` — all tests; `make cover` — coverage gate (≥80% over `internal/`; `cmd` is composition-only); `make cover-firestore` — Firestore-backed tests against a running emulator.
 - `make lint` (golangci-lint), `make vet`, `make fmt`, `make tidy`, `make ollama-check`, `make docker`.
 - `make arch` — architecture conformance (`go test ./ARCH/...`).
-- `make ci` — the full local gate: `tidy vet arch test cover`.
+- `make ci` — the full local gate: `tidy vet lint arch test cover`.
 
 ## Conventions
 
 Enforced by `go/ARCH/` + `make ci`:
 
-- **Knowledge lives in the bundle** — this port is documented by the concepts in `/modules/` and the standards; the repo-root `AGENTS.md` is the guardrail sheet + pointer.
+- **Knowledge lives in the bundle** — the service is documented by the concepts in `/modules/` and the standards; the repo-root `AGENTS.md` is the guardrail sheet + pointer.
 - **Build-agent pattern:** `agents_setup.go` is pure wiring (`Build<Name>Agent`); `<name>.go` holds the testable logic. See [/standards/agent-build-pattern.md](/standards/agent-build-pattern.md).
 - **Import boundaries** (arch tests): tooling must not import `internal/agent/...`; provider SDKs (Ollama/Gemini/genai) only in `internal/agent/setup`; nothing imports `cmd/...`.
 - **Prompts are markdown** under each agent's `prompts/` dir, loaded via `embed.FS`.
-- **Testing:** ≥80% coverage; never assert on LLM output content.
+- **Testing:** ≥80% coverage; never assert on LLM output content. The cloud backends need the Firestore emulator (`make cover-firestore`).
 - **Models:** default to local Ollama Gemma; never hardcode a provider in agents.

@@ -15,7 +15,7 @@ bundle encodes *what the system is*. The two are linked in exactly one direction
 
 ## The one-way link rule
 
-- **Skills cite concepts** (by bundle path, e.g. `okf/standards/language-parity.md`)
+- **Skills cite concepts** (by bundle path, e.g. `okf/standards/testing.md`)
   for every house rule they rely on — they never copy standards content, so a rule
   changes in one place.
 - **Concepts never reference skills.** A concept must stand alone when this bundle is
@@ -38,9 +38,9 @@ stale/hand-written spec ──/grill-me──▶ implementation-ready spec
         │
         ▼
 /add-workflow-agent · /add-platform-package · /update · /migrate
-        │                                  (Go first → Python mirror; frozen pair untouched)
+        │
         ▼
-/verify (diff | full | okf) · /run-firestore-tests
+/verify (code | full | okf) · /run-firestore-tests
         │
         ▼
 /update-okf   (concepts + diagrams + indexes move with the change)

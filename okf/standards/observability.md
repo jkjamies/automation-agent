@@ -10,10 +10,8 @@ timestamp: 2026-07-04T00:00:00Z
 
 # Observability (distributed tracing)
 
-How the automation-agent is traced, stated language-neutrally. The **Go** port (`go/internal/obs`)
-is the reference implementation; the Python, TypeScript, and Kotlin ports mirror this contract
-with their native SDKs (parity is at the **data** level — same span names/attributes — not the
-registration code). This document is the design record: the rationale and decisions live here.
+How the automation-agent is traced. The implementation is `go/internal/obs`; this document
+is the design record, where the rationale and decisions live.
 
 > **Scope: traces only.** Metrics and a log-bridge signal are not part of this design. This document covers the
 > trace pipeline: provider registration, exporters, propagation, the flush constraint, config, and
@@ -23,8 +21,8 @@ registration code). This document is the design record: the rationale and decisi
 
 ## The core idea: the framework already traces; we only turn it on
 
-Every port's agent framework (`adk-go`, `adk-python`, `adk-js`, `adk-kotlin`) **already emits** a
-native span tree for every run, under the OpenTelemetry **GenAI semantic conventions**:
+The agent framework (`adk-go`) **already emits** a native span tree for every run, under the
+OpenTelemetry **GenAI semantic conventions**:
 
 ```text
 invoke_agent  ──▶  call_llm (gen_ai.request.model, token usage, finish reason)  ──▶  execute_tool (gen_ai.tool.name)
@@ -40,9 +38,8 @@ is proven.
 
 The `obs` package builds and globally registers **one** tracer provider per process; the framework
 attaches its auto-spans to that global. We **do not** call the framework's own telemetry-setup
-helper in any port — registering ours first is the one conflict-free integration that works
-uniformly (one port's helper refuses to override an already-registered global; the others read the
-global). Single exporter-config owner ⇒ trivial parity.
+helper — registering ours first keeps a single owner of the exporter configuration, and the
+framework reads whatever global is already installed.
 
 Registration (`obs.Init` / equivalent) runs **once**, right after config load in the entrypoint,
 and:
@@ -94,7 +91,7 @@ workflow trace continues from the ingress span. Propagation mirrors how each tra
 already moves the envelope:
 
 - **Cloud Tasks backend** → inject the trace context as a **W3C `traceparent` HTTP header** on the
-  task (not inside the envelope JSON — the envelope is a versioned cross-port wire contract). The
+  task (not inside the envelope JSON — the envelope is a versioned wire contract). The
   server-side HTTP instrumentation on `/internal/dispatch` extracts it, so the dispatch span is a
   child of the ingress span automatically.
 - **In-process backend** → there is no HTTP hop, so the worker **inherits the context directly**
@@ -106,8 +103,8 @@ is a no-op — no `traceparent` leaks onto a task.
 
 ## Config
 
-Identical env var names, defaults, and validation across all four ports (parity rule #3). Owned by
-each port's `config` layer — the **only** place that reads `OTEL_*`; `obs` takes a typed struct.
+Owned by the `config` layer — the **only** place that reads `OTEL_*`; `obs` takes a typed
+struct, which is what keeps the env surface in one file.
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -128,13 +125,13 @@ cost-aware traces. The flag is surfaced in config; the framework reads it native
 The existing injected logger is wrapped so records emitted while a span is active also carry
 `trace_id` / `span_id`, letting a backend pivot from a log line to its trace (and on the `gcp` path,
 the cloud console auto-links them). It reads the active span from the log call's context, so it is
-zero-cost when no span is active or tracing is off. Where a port's logger is structured, the ids are
+zero-cost when no span is active or tracing is off. The service's logger is structured, so the ids are
 attached as fields; where it is a plain sink, they are appended to the record — same data, whichever
-shape the port's logger takes.
+shape the underlying handler takes.
 
 ## Testing contract (deterministic — no live network, no LLM)
 
-Assert on span **names / attributes / structure**, never on LLM output text. Each port mirrors:
+Assert on span **names / attributes / structure**, never on LLM output text. The suite covers:
 
 - `none` installs a no-op provider + no-op `Shutdown` (behavior-preserving).
 - A recording/in-memory exporter + a fake run emitting one agent-shaped span tree → assert the tree
@@ -142,8 +139,8 @@ Assert on span **names / attributes / structure**, never on LLM output text. Eac
 - Propagation round-trip (Cloud Tasks header) **and** passthrough (in-process context) yield the
   same logical trace; the dispatch root continues the ingress trace.
 - **Flush on return:** spans are exported **before** the response returns (guards scale-to-zero).
-- Config: each exporter value parses/validates; `otlp` without an endpoint is rejected; defaults
-  identical across ports.
+- Config: each exporter value parses/validates; `otlp` without an endpoint is rejected; the
+  documented defaults hold.
 - Middleware: one server span per request; the health endpoint is excluded.
 - Log correlation: an active span → the logger's records carry `trace_id` / `span_id`.
 - Arch: `obs` imports no agent package; only `config` reads `OTEL_*`.

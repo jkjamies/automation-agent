@@ -1,27 +1,23 @@
 ---
 type: Tooling
-title: CI gates — the local quality bar per port
-description: Every port ships a full local CI gate (lint, typecheck/vet, architecture tests, tests, coverage ≥80%) that must pass before a change is proposed.
+title: CI gates — the quality bar every change clears
+description: The local gate (tidy, vet, lint, architecture tests, tests, coverage ≥80%) and the hosted CI that runs it, both of which a change must pass.
 tags: [ci, testing, quality-gate]
 sensitivity: internal
 bundle: automation-agent
 timestamp: 2026-07-04T00:00:00Z
 ---
 
-Each port owns a self-contained local gate, run from that port's directory:
+One self-contained local gate, run from `go/`:
 
-| Port | Command | What it runs |
-|---|---|---|
-| Go (`go/`) | `make ci` | `tidy` → `vet` → `lint` (golangci-lint) → architecture tests (`ARCH/`) → `test` → `cover` (≥80%) |
-| Python (`python/`) | `make ci` | `ruff` lint → `mypy` typecheck → architecture tests (`arch/`) → `pytest` → coverage (≥80%) |
-| TypeScript (`javascript/`) | `make ci` | lint → typecheck → architecture tests (`arch/`) → tests → coverage (≥80%) |
-| Kotlin (`kotlin/`) | `./gradlew build` | compile + detekt/ktlint + tests (architecture assertions live in the test suite) |
+| Command | What it runs |
+|---|---|
+| `make ci` | `tidy` → `vet` → `lint` (golangci-lint) → architecture tests (`ARCH/`) → `test` → `cover` (≥80%) |
 
-Shared properties, enforced by the [testing standard](/standards/testing.md) and the
-architecture tests:
+Properties, enforced by the [testing standard](/standards/testing.md) and the architecture
+tests:
 
-- **Coverage ≥ 80 %** over the port's library code (composition-only entrypoints
-  excluded). Emulator-only backends (e.g. the Firestore session/park stores) are
+- **Coverage ≥ 80 %** over `internal/` (the composition-only entrypoint is excluded). Emulator-only backends (e.g. the Firestore session/park stores) are
   exercised by separate emulator-gated targets (`make cover-firestore`), not the default
   unit run.
 - **Never assert on LLM output content** — tests assert deterministic state transitions,

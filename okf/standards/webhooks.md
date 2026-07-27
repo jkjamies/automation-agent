@@ -1,7 +1,7 @@
 ---
 type: Standard
 title: Webhooks & CI check names
-description: The canonical registry of the agent's webhook routes and GitHub check_run names, which every port must match as an external contract.
+description: The canonical registry of the agent's webhook routes and GitHub check_run names — an external contract other systems observe.
 tags: [webhooks, check-runs, contracts]
 sensitivity: internal
 bundle: automation-agent
@@ -86,7 +86,7 @@ merge.
 
 `agent-review` is set as the `checkName` constant in
 `go/internal/agent/reviewer/publish.go`. Like the verify-check names it is an **external
-contract** — globally unique and identical across all four ports.
+contract** — globally unique, and observed by GitHub and by the CI workflows in target repos.
 
 ## The rules (the contract)
 
@@ -113,11 +113,10 @@ the reference:
 - Coverage — `go/internal/agent/covfixer/coverage.go` (`CheckName: "agent-coverage-verify"`, branch `automation-agent/test-coverage`)
 - Reviewer — `go/internal/agent/reviewer/publish.go` (`checkName: "agent-review"`); a native-event kickoff on `pull_request` (no kickoff route, no branch, opens no PR)
 
-These strings are an **external contract** and must be **identical across all four ports**
-(`go/`, `python/`, `kotlin/`, `javascript/`) — see
-[Language parity](/standards/language-parity.md) §"External contracts". This doc is the
-registry; the code is the runtime source; they must agree. When you change one, change all
-of them and this table in the same change.
+These strings are an **external contract**: GitHub check runs and the CI workflows in every
+target repo are keyed on them, so changing one silently breaks every repo already wired up.
+This doc is the registry; the code is the runtime source; they must agree. When you change
+one, change both in the same change.
 
 ## Adding a new workflow
 
@@ -125,7 +124,7 @@ When you add a fixer (e.g. a `format` or `typecheck` fixer):
 
 1. Choose a **unique** kickoff route, ingest `Kind`, branch (`automation-agent/<slug>`), and
    verify check name (`agent-<name>-verify`). Reuse the shared `automation-agent` label.
-2. Register its engine and wire the kickoff route + resume dispatch — in **every** port.
+2. Register its engine and wire the kickoff route + resume dispatch.
 3. Add a row to **both** tables above.
 4. Add a CI-author example to [CI Integration](/standards/ci-integration.md).
 5. Confirm the new check name collides with no existing one (see the rules above).
@@ -143,4 +142,3 @@ transparent to the routing contract above; see
 - [CI Integration](/standards/ci-integration.md) — CI-author how-to: workflow YAML, kickoff signing, per-stack examples, the resume verify-check workflows.
 - [Automation Agent — Architecture & Build Plan](/standards/architecture-design.md) §8 — why a dedicated, branch-gated agent check exists and how the suspend/resume loop works.
 - [Observability (distributed tracing)](/standards/observability.md) — how the ingress span roots the trace and the flush-before-return constraint.
-- [Language parity](/standards/language-parity.md) — routes and check names as a cross-port external contract.
