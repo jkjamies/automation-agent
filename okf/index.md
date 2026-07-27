@@ -2,8 +2,7 @@
 
 The canonical knowledge for `automation-agent`: an event-driven automation service
 (daily summaries, autonomous lint/coverage fixers with a PR + CI loop, and a PR
-reviewer) built on the Agent Development Kit
-of one design. New here? Start with
+reviewer) built on the Agent Development Kit. New here? Start with
 [what this system is](orientation/what-this-system-is.md).
 
 # Orientation
