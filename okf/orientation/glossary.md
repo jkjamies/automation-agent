@@ -51,6 +51,6 @@ timestamp: 2026-07-04T00:00:00Z
 - **Concept** — one markdown file in the bundle: YAML frontmatter (`type`, fabric
   fields) plus a self-contained, factual body; a load-bearing choice carries its *Why*
   (constraint + rejected alternatives) in the concept that owns it.
-- **Conformance tests** — the per-port architecture-suite checks that gate the bundle's
+- **Conformance tests** — the architecture-suite checks that gate the bundle's
   structure (frontmatter `type`, per-directory `index.md`, resolving links and skill
   citations, the root `AGENTS.md` pointer).

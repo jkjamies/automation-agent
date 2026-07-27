@@ -1,6 +1,6 @@
 ---
 name: migrate
-description: Execute a library, API, or framework swap on a port — mechanical migration that preserves observable behavior, verified against the shipped API. Use when bumping a major SDK version (e.g. the ADK), swapping a library, or moving to a new provider API.
+description: Execute a library, API, or framework swap — mechanical migration that preserves observable behavior, verified against the shipped API. Use when bumping a major SDK version (e.g. the ADK), swapping a library, or moving to a new provider API.
 ---
 
 # Migrate
@@ -60,7 +60,7 @@ path rewrite as its own mechanical pass.
 Work through the punch list in dependency order (setup/ and platform packages first,
 agent dirs after). Adapters and provider-touching code stay confined to `agent/setup`
 (okf/standards/architecture.md) — a migration is not a license to spread SDK imports.
-Keep each intermediate state compiling; don't leave the port broken between passes.
+Keep each intermediate state compiling; don't leave the build broken between passes.
 
 ### 5. Existing tests are the contract
 
@@ -96,7 +96,7 @@ Then grep for the old import path / version string one final time — zero hits 
   and test outcomes; the swap is invisible from outside.
 - **Verify against shipped source, not memory or release notes** — every API you call,
   you have read.
-- **Never break the port mid-migration** — each pass compiles and tests green.
+- **Never break the build mid-migration** — each pass compiles and tests green.
 - **Confinement survives the swap** — new SDK imports obey the same setup-only boundary
   as the old ones; `make arch` proves it.
 - **Declare pair gaps** — a Go-only migration is fine only when the PR says so and why.

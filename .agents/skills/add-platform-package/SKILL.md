@@ -91,7 +91,7 @@ cd go && make docs-check    # okf bundle conformance
   platform package; reshape the design.
 - **Only `config` reads env** — a `os.Getenv` in the new package is a boundary violation
   even if convenient.
-- **Same public surface on both modern ports** — same names, inputs, outputs, and error
+- **A single, deliberate public surface** — names, inputs, outputs, and error
   conditions; idiom differs, behavior does not.
 - **Concept + index entry ship in the same change** — the platform index is how the next
   reader discovers the package exists.

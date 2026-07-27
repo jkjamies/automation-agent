@@ -46,9 +46,9 @@ and sets the W3C `TraceContext` propagator.
 - **`Inject` / `Extract`** — backend-aware propagation. The Cloud Tasks transport
   ([tasks](/modules/platform/tasks.md)) injects the trace context as a `traceparent`
   **header**; the in-process transport carries the span on the request context directly
-  (Go port: `context.WithoutCancel`), with no carrier.
+  (`context.WithoutCancel`), with no carrier.
 - **`Flush`** — force-export buffered spans now; used by the middleware and `Shutdown`.
-- **`NewLogHandler`** — wraps the structured-logging handler (Go port: a `slog.Handler`)
+- **`NewLogHandler`** — wraps the structured-logging handler (a `slog.Handler`)
   so records emitted under an active span carry `trace_id`/`span_id` (log↔trace
   correlation).
 

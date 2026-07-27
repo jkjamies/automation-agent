@@ -1,6 +1,6 @@
 ---
 name: update-okf
-description: Update the okf/ knowledge bundle after a change to the system — the touched concepts, their index entries, the affected diagrams, and the bundle log. Use at the end of any change that alters system shape (an agent, a Kind, a route, a check name, a package, an env var, a port convention), or standalone when the bundle has drifted from reality.
+description: Update the okf/ knowledge bundle after a change to the system — the touched concepts, their index entries, the affected diagrams, and the bundle log. Use at the end of any change that alters system shape (an agent, a Kind, a route, a check name, a package, an env var, a convention), or standalone when the bundle has drifted from reality.
 ---
 
 # Update OKF
@@ -52,7 +52,7 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
   it justifies.
 - If the concept's one-line `description` changed meaning, update it **and** the matching
   entry in its directory `index.md`.
-- New unit (agent/package/port)? Create the concept with the house frontmatter (`type`,
+- New unit (agent or package)? Create the concept with the house frontmatter (`type`,
   `title`, `description`, `tags`, `sensitivity: internal`, `bundle: automation-agent`,
   `timestamp`) and add its index entry. Removed unit? Delete concept + index entry, and
   sweep inbound links (`grep -rn "<name>.md" okf/`).

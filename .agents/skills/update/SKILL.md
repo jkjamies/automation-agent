@@ -32,7 +32,7 @@ resume. In particular, the spec must be explicit about whether any **external co
 - Route / Kind / check-name registry (the contract tables): okf/standards/webhooks.md
 - Import boundaries that must survive the change: okf/standards/architecture.md
 - Wiring/logic split (changes land in `<name>.go`, not the wiring): okf/standards/agent-build-pattern.md
-- Test rules and per-port gates: okf/standards/testing.md
+- Test rules and the local gate: okf/standards/testing.md
 - Event path, for changes that move where work flows: okf/orientation/event-flow.md
 
 ## Steps
@@ -61,7 +61,7 @@ only when the agent topology itself changes. Prompt changes are `prompts/*.md` e
 
 ### 3. Implement
 
-Make the change in the reference port. Keep boundaries intact (no env reads outside
+Make the change. Keep boundaries intact (no env reads outside
 `config`, no agent imports in tooling, provider SDKs setup-only). Update or add tests in
 the same package — mirror-worthy cases, deterministic, no LLM-content assertions.
 

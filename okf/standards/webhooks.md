@@ -124,7 +124,7 @@ When you add a fixer (e.g. a `format` or `typecheck` fixer):
 
 1. Choose a **unique** kickoff route, ingest `Kind`, branch (`automation-agent/<slug>`), and
    verify check name (`agent-<name>-verify`). Reuse the shared `automation-agent` label.
-2. Register its engine and wire the kickoff route + resume dispatch — in **every** port.
+2. Register its engine and wire the kickoff route + resume dispatch.
 3. Add a row to **both** tables above.
 4. Add a CI-author example to [CI Integration](/standards/ci-integration.md).
 5. Confirm the new check name collides with no existing one (see the rules above).

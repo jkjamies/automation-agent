@@ -68,9 +68,8 @@ Phased so each step is independently testable:
       `ingress=internal-and-cloud-load-balancing` + Internal ALB + serverless NEG; prove a curl
       with an OIDC token works and the public URL is dead. *(No app change.)*
 - [ ] **Phase 1 — app auth.** Add `INTERNAL_AUTH` (`bearer`|`oidc`|`both`) + an OIDC verifier
-      (signature + `aud` = service URL + allowed SA email) in Go; switch Cloud Scheduler to OIDC;
-      Retires `INTERNAL_TOKEN` and folds in the
-      existing OIDC TODO above.
+      (signature + `aud` = service URL + allowed SA email) in Go; switch Cloud Scheduler to OIDC.
+      This retires `INTERNAL_TOKEN` and subsumes the OIDC item listed above.
 - [ ] **Phase 2 — gateway.** Deploy the self-hosted API gateway on the operator network;
       implement the HMAC / GitHub IP-allowlist / replay-window / rate-limit / size-cap policies +
       OIDC mint + mTLS; route `/webhooks/*` (and optionally cron) through it.

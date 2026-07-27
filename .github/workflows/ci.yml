@@ -96,9 +96,15 @@ jobs:
         with:
           path: ~/firestore-emulator.jar
           key: firestore-emulator-v1.19.8
+      # The digest is verified on every run, cache hit or not: the next step executes this jar
+      # as code, and a poisoned cache entry is as dangerous as a poisoned download. The URL
+      # pins a version, but a version can be republished. Bump both together on upgrade.
       - name: Download Firestore emulator
         if: steps.emulator-cache.outputs.cache-hit != 'true'
         run: curl -fsSL -o ~/firestore-emulator.jar https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+
+      - name: Verify Firestore emulator
+        run: echo "9d43599ed6151199e8d604dc87fac51218e49e5f3a48519b1ae560bbe5e3382d  $HOME/firestore-emulator.jar" | sha256sum -c -
 
       - name: Start Firestore emulator
         run: |

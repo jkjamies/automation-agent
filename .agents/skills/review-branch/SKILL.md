@@ -1,6 +1,6 @@
 ---
 name: review-branch
-description: The house pre-PR flow — port gates green, CodeRabbit CLI review on the branch diff, evidence-based triage, then present everything and WAIT for human approval. Use when a branch is feature-complete, before any commit/push/PR.
+description: The house pre-PR flow — gates green, CodeRabbit CLI review on the branch diff, evidence-based triage, then present everything and WAIT for human approval. Use when a branch is feature-complete, before any commit/push/PR.
 ---
 
 # Review Branch
@@ -21,7 +21,7 @@ Run the full house review flow on the current branch. The output is a reviewed, 
 
 ### 1. Gates green first
 
-Run `/verify diff` (escalate to `/verify full` for cross-port changes). Do **not** start the CodeRabbit review while any gate is red — review noise on broken code wastes everyone's time.
+Run `/verify code` (escalate to `/verify full` when the change touches the durable backends). Do **not** start the CodeRabbit review while any gate is red — review noise on broken code wastes everyone's time.
 
 ### 2. CodeRabbit review
 
@@ -54,7 +54,7 @@ If step 3 changed code, re-run the gate. Optionally re-run CodeRabbit on the del
 Present to the human, then **stop**:
 
 - The diff summary (`git diff --stat <base>...HEAD` + what/why in prose)
-- Gate results per port (pass/fail, coverage numbers)
+- Gate results (pass/fail, coverage numbers)
 - Triage table: each finding → fixed (with commit-able change in the working tree) or declined (with the evidence)
 
 **Do not commit, push, or open a PR.** No auto-commit is house convention — changes stay in the working tree until the human explicitly approves. Only proceed to commit/push/PR when told to.

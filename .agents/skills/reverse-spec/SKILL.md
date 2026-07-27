@@ -9,7 +9,7 @@ Read existing code and produce a filled-in spec as if the unit were being design
 scratch. The output is explicitly marked **reverse-engineered and presumed** — it
 reflects what the code does today, not necessarily what was intended.
 
-**Parameters**: target (workflow agent, platform package, or specific component; optional port)
+**Parameters**: target (workflow agent, platform package, or specific component)
 
 **Usage examples**:
 ```text

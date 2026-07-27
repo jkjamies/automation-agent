@@ -13,7 +13,7 @@ timestamp: 2026-07-04T00:00:00Z
 
 Single source of truth for runtime configuration. Loaded once from the environment
 (`config.Load`) and passed down; **no other package reads environment variables**
-(in the Go port, no other package calls `os.Getenv`).
+(no other package calls `os.Getenv`).
 
 ## Flow
 

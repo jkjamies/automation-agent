@@ -2,7 +2,7 @@
 
 The canonical knowledge for `automation-agent`: an event-driven automation service
 (daily summaries, autonomous lint/coverage fixers with a PR + CI loop, and a PR
-reviewer) built on the Agent Development Kit and maintained as parallel language ports
+reviewer) built on the Agent Development Kit
 of one design. New here? Start with
 [what this system is](orientation/what-this-system-is.md).
 
@@ -16,7 +16,7 @@ of one design. New here? Start with
 
 # Modules
 
-* [modules](modules/index.md) - The system's units: workflow agents, deterministic platform packages, and the four language ports.
+* [modules](modules/index.md) - The system's units: workflow agents and deterministic platform packages.
 
 # Tooling
 

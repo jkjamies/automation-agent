@@ -91,7 +91,7 @@ workflow trace continues from the ingress span. Propagation mirrors how each tra
 already moves the envelope:
 
 - **Cloud Tasks backend** → inject the trace context as a **W3C `traceparent` HTTP header** on the
-  task (not inside the envelope JSON — the envelope is a versioned cross-port wire contract). The
+  task (not inside the envelope JSON — the envelope is a versioned wire contract). The
   server-side HTTP instrumentation on `/internal/dispatch` extracts it, so the dispatch span is a
   child of the ingress span automatically.
 - **In-process backend** → there is no HTTP hop, so the worker **inherits the context directly**
@@ -125,13 +125,13 @@ cost-aware traces. The flag is surfaced in config; the framework reads it native
 The existing injected logger is wrapped so records emitted while a span is active also carry
 `trace_id` / `span_id`, letting a backend pivot from a log line to its trace (and on the `gcp` path,
 the cloud console auto-links them). It reads the active span from the log call's context, so it is
-zero-cost when no span is active or tracing is off. Where a port's logger is structured, the ids are
+zero-cost when no span is active or tracing is off. The service's logger is structured, so the ids are
 attached as fields; where it is a plain sink, they are appended to the record — same data, whichever
-shape the port's logger takes.
+shape the underlying handler takes.
 
 ## Testing contract (deterministic — no live network, no LLM)
 
-Assert on span **names / attributes / structure**, never on LLM output text. Each port mirrors:
+Assert on span **names / attributes / structure**, never on LLM output text. The suite covers:
 
 - `none` installs a no-op provider + no-op `Shutdown` (behavior-preserving).
 - A recording/in-memory exporter + a fake run emitting one agent-shaped span tree → assert the tree
@@ -139,8 +139,8 @@ Assert on span **names / attributes / structure**, never on LLM output text. Eac
 - Propagation round-trip (Cloud Tasks header) **and** passthrough (in-process context) yield the
   same logical trace; the dispatch root continues the ingress trace.
 - **Flush on return:** spans are exported **before** the response returns (guards scale-to-zero).
-- Config: each exporter value parses/validates; `otlp` without an endpoint is rejected; defaults
-  identical across ports.
+- Config: each exporter value parses/validates; `otlp` without an endpoint is rejected; the
+  documented defaults hold.
 - Middleware: one server span per request; the health endpoint is excluded.
 - Log correlation: an active span → the logger's records carry `trace_id` / `span_id`.
 - Arch: `obs` imports no agent package; only `config` reads `OTEL_*`.

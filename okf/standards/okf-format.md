@@ -25,7 +25,6 @@ One directory per layer, each with an `index.md` for progressive disclosure:
 | `standards/` | the rules every change obeys | `Standard`, `Architecture` |
 | `modules/agents/` | the workflow agents + the setup layer | `Agent`, `Workflow` |
 | `modules/platform/` | the deterministic platform packages | `Platform-Package` |
-| `modules/ports/` | the four language ports | `Port` |
 | `tooling/` | CI gates, specs/templates, skills, deploy topology | `Tooling` |
 
 **Reserved files** (no frontmatter required): `index.md` — a directory's map, one
@@ -51,11 +50,11 @@ Optional fields:
 
 | Field | Meaning |
 |---|---|
-| `resource` | repo-relative path of the unit this concept documents (reference-port path for module concepts); must exist |
+| `resource` | repo-relative path of the unit this concept documents; must exist |
 
 **Type taxonomy**: `Architecture`, `Standard`, `Agent`, `Workflow`,
-`Platform-Package`, `Port`, `Tooling`, `Reference`. Adding a new type is a deliberate
-act: define it here first.
+`Platform-Package`, `Tooling`, `Reference`. Adding a new type is a deliberate act:
+define it here first.
 
 ## Authoring rules
 
@@ -79,7 +78,7 @@ act: define it here first.
 
 ## The conformance floor
 
-Every port's architecture suite enforces the structural rules — frontmatter `type`
+The architecture suite enforces the structural rules — frontmatter `type`
 present, `index.md` per directory, bundle-absolute links resolve, skill knowledge
 citations resolve, root `AGENTS.md` points at the bundle index. Structure is the floor;
 semantic freshness (is the concept still *true*?) is on the author of every change.

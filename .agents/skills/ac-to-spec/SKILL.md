@@ -28,7 +28,7 @@ Translate product requirements — in any format — into a filled-in spec from
 | `migrate` | `.agents/templates/migrate.spec.md` | Swapping providers/libraries, restructuring, moving state |
 | `remove` | `.agents/templates/remove.spec.md` | Deprecating, killing, or cleaning up existing code |
 
-Scaffold with `make spec name=<slug> kind=<add|remove|change|migrate>` (run from a port
+Scaffold with `make spec name=<slug> kind=<add|remove|change|migrate>` (run from the module
 directory, e.g. `go/`), or write `specs/<YYYYMMDD>-<slug>.md` directly matching the
 template. `specs/` is **gitignored dev memory** — never reference a spec from code,
 standards, or the okf bundle; only other specs may reference specs.
@@ -52,10 +52,10 @@ Accepts any of these — no preprocessing required: **Gherkin** (`Given/When/The
 **bullet lists** from Slack/email/notes, **free text**. Extract structure from whatever
 is provided.
 
-## Subagent dispatch (multi-port / multi-agent grilling)
+## Subagent dispatch (multi-agent grilling)
 
 The grill step (step 7) runs inline. For specs spanning **more than one workflow agent
-or both modern ports' internals**, dispatch one `Explore` agent IN PARALLEL with the
+or several packages' internals**, dispatch one `Explore` agent IN PARALLEL with the
 grill so the dialog isn't blocked on serial codebase reads:
 
 ```text
@@ -91,7 +91,7 @@ Read `.agents/templates/<kind>.spec.md` for the exact section structure. Keep th
 header shape: `# <KIND>: <title>` and `> Kind: <kind> · Status: draft · Date: <date>`.
 
 ### 4. Read Existing Code (for `change`, `migrate`, `remove`)
-Ground the spec in current state, **Go first** (the reference port):
+Ground the spec in current state:
 
 - `change` — read the affected package/agent to describe Context accurately
 - `migrate` — read the current shape to fill Context and Target state honestly
@@ -169,7 +169,7 @@ At the bottom of the spec:
 ### 9. Present the Result
 Save as `specs/<YYYYMMDD>-<slug>.md` and tell the user: which kind was used (and why,
 if inferred); how many decisions were grilled and how many deferred (call deferred ones
-out); and that the spec is implementation-ready — including which ports it covers.
+out); and that the spec is implementation-ready.
 
 ## Key Rules
 

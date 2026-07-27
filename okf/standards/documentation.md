@@ -17,7 +17,7 @@ These are binding review criteria.
 ## Where knowledge lives
 
 - **This bundle (`okf/`) is the canonical home of system knowledge** — orientation,
-  standards, module concepts (agents / platform / ports), and tooling. Concepts are
+  standards, module concepts (agents / platform), and tooling. Concepts are
   self-contained: they carry the knowledge; they never defer to a source file for it.
   The format itself (frontmatter schema, type taxonomy, timestamp semantics, link
   convention) is specified in [OKF format](/standards/okf-format.md).
@@ -32,7 +32,7 @@ These are binding review criteria.
   frontmatter `type`, every directory has an `index.md`, bundle-absolute links resolve,
   the root `AGENTS.md` points at the bundle index) — **content freshness is on the
   author.**
-- The ops runbook (`DEPLOYMENT.md`) and per-port `README.md` files remain thin
+- The ops runbook (`DEPLOYMENT.md`) and the repo `README.md` remain thin
   operational surfaces; anything conceptual links into the bundle.
 - The bundle's `log.md` is the OKF-reserved chronological history file (a changelog of
   the bundle itself, defined by the format) — it is not a concept and the

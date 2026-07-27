@@ -141,7 +141,7 @@ These never assert on model *content* — they assert the call wiring round-trip
 - `make lint` → golangci-lint (config `go/.golangci.yml`, schema v2): errcheck, govet,
   ineffassign, staticcheck, unused, misspell, revive, **depguard**, plus gofmt/goimports as
   formatters. Note that v2's `staticcheck` subsumes the former gosimple and stylecheck, so
-  the S* and ST* diagnostics are part of the set. depguard enforces the same boundary the
+  the `S*` and `ST*` diagnostics are part of the set. depguard enforces the same boundary the
   ARCH tests do — tooling packages (`githubapi`, `gitrepo`, `webhook`, `notify`, `obs`,
   `tasks`) may not import `internal/agent/...`. Test files are exempt from `errcheck`.
 - `lint` is **part of `make ci`**, so a new finding fails the gate rather than accumulating.

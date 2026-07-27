@@ -1,6 +1,6 @@
 ---
 name: summarize
-description: Generate a structured briefing on the whole system, a workflow agent, a language port, or a standard, driven by the okf/ knowledge bundle. Use for onboarding, context-switching, or before reviewing unfamiliar code.
+description: Generate a structured briefing on the whole system, a workflow agent, a platform package, or a standard, driven by the okf/ knowledge bundle. Use for onboarding, context-switching, or before reviewing unfamiliar code.
 ---
 
 # Summarize

@@ -31,14 +31,29 @@ Not needed for changes that never touch persisted state — the default `make ci
 1. **Start the emulator** (needs a JRE), capturing the PID so teardown kills exactly what
    was started. The standalone jar needs no gcloud SDK and is what CI uses:
    ```bash
-   test -f /tmp/firestore-emulator.jar || curl -fsSL -o /tmp/firestore-emulator.jar \
+   JAR=/tmp/firestore-emulator.jar
+   SHA=9d43599ed6151199e8d604dc87fac51218e49e5f3a48519b1ae560bbe5e3382d  # v1.19.8
+   test -f $JAR || curl -fsSL -o $JAR \
      https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
-   java -jar /tmp/firestore-emulator.jar --host=127.0.0.1 --port=8791 &
+   echo "$SHA  $JAR" | sha256sum -c - || { echo "emulator jar failed verification"; rm -f $JAR; exit 1; }
+
+   java -jar $JAR --host=127.0.0.1 --port=8791 &
    EMULATOR_PID=$!
+
+   # Poll rather than eyeball the log: the emulator takes a few seconds to bind, and step 2
+   # fails confusingly if it starts first. Bounded, and it kills what it started on timeout.
+   for i in $(seq 1 30); do
+     curl -sf http://127.0.0.1:8791/ >/dev/null && break
+     if [ "$i" = 30 ]; then kill $EMULATOR_PID; echo "emulator did not come up"; exit 1; fi
+     sleep 1
+   done
    ```
-   Wait for the "Dev App Server is now running" line before proceeding. (`gcloud emulators
-   firestore start --host-port=127.0.0.1:8791` works too if you already have the SDK — then
-   kill the process group at teardown, since the wrapper spawns a Java child.)
+   The digest is checked because the next line runs the jar as code: the URL pins a version,
+   but a version can be republished, and an unverified artifact would execute either way. Bump
+   `SHA` alongside the URL when upgrading (`sha256sum` the downloaded file).
+
+   (`gcloud emulators firestore start --host-port=127.0.0.1:8791` works too if you already have
+   the SDK — then kill the process group at teardown, since the wrapper spawns a Java child.)
 
 2. **Run the suite** (from `go/`):
    ```bash

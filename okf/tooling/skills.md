@@ -40,7 +40,7 @@ stale/hand-written spec ──/grill-me──▶ implementation-ready spec
 /add-workflow-agent · /add-platform-package · /update · /migrate
         │
         ▼
-/verify (diff | full | okf) · /run-firestore-tests
+/verify (code | full | okf) · /run-firestore-tests
         │
         ▼
 /update-okf   (concepts + diagrams + indexes move with the change)

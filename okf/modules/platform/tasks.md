@@ -43,7 +43,7 @@ flowchart TD
 ```
 
 - **`InProcess`** (default, local dev) — reproduces the pre-transport behavior exactly:
-  a bounded background worker pool (Go port: goroutines behind a semaphore), with `Close`
+  a bounded background worker pool (goroutines behind a semaphore), with `Close`
   draining in-flight work. Not durable; a reclaim loses work — which is why prod uses
   Cloud Tasks.
 - **`CloudTasks`** (production) — enqueues each envelope as an HTTP-target task pointed at

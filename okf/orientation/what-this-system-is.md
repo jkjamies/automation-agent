@@ -1,7 +1,7 @@
 ---
 type: Architecture
 title: What this system is
-description: An event-driven automation service that summarizes repo activity, autonomously fixes lint/coverage failures via PR + CI loops, and reviews pull requests — implemented as parallel language ports of one design.
+description: An event-driven automation service that summarizes repo activity, autonomously fixes lint/coverage failures via PR + CI loops, and reviews pull requests.
 tags: [orientation, overview]
 sensitivity: internal
 bundle: automation-agent

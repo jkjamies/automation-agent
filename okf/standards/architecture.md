@@ -56,5 +56,5 @@ to recover in-flight state. See [Automation Agent — Architecture & Build Plan]
 and `DEPLOYMENT.md`.
 
 The ARCH boundary names the backend SDKs it confines explicitly (`glebarez/sqlite`, `gorm`,
-`cloud.google.com/go/firestore`); a new storage backend belongs in `agent/setup` behind the
+`cloud.google.com/go/firestore`); a new storage backend belongs in `internal/agent/setup` behind the
 same interfaces, and the test fails if its SDK is imported anywhere else.

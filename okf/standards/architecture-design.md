@@ -179,7 +179,7 @@ automation-agent/
 ├── .gitignore                     # ignores: /specs/* (keep .gitkeep), .env, *.db, build/test artifacts
 ├── .env.example
 │
-├── okf/                           # the knowledge bundle (Open Knowledge Format; port-agnostic)
+├── okf/                           # the knowledge bundle (Open Knowledge Format)
 │   ├── index.md                   # bundle entry point — start here, follow links
 │   ├── orientation/               # what the system is, event flow, suspend/resume, glossary
 │   ├── standards/                 # the rules + canonical design/reference docs
@@ -192,7 +192,7 @@ automation-agent/
 │   │   ├── testing.md             # 80% rule, no-LLM-assert rule
 │   │   ├── agent-build-pattern.md # the setup-vs-logic split
 │   │   └── documentation.md       # the docs-move-with-the-code rule
-│   ├── modules/                   # per-component concepts: agents/ platform/ ports/
+│   ├── modules/                   # per-component concepts: agents/ platform/
 │   └── tooling/                   # CI gates, specs & templates, deployment tooling
 │
 ├── .agents/                       # spec templates
@@ -644,7 +644,7 @@ reviewable/diffable and lets non-code edits skip recompilation of logic.
   (the component's bundle concept; the [event-flow](/orientation/event-flow.md) +
   [root dispatcher](/modules/agents/root-dispatcher.md) diagrams; the §2/§13 and
   [Deployment](/standards/deployment.md) topology diagrams; `.env.example` +
-  the §12 config table) in the same change, mirrored across all ports. Full checklist:
+  the §12 config table) in the same change. Full checklist:
   [Documentation & diagrams](/standards/documentation.md).
 - **specs/** — gitignored developer memory. `make spec name=add-jira-ingest kind=add`
   copies `.agents/templates/add.spec.md` → `specs/2026-…-add-jira-ingest.md`. Templates:
@@ -790,8 +790,8 @@ Balancer, with a **self-hosted API gateway** on the operator's own network as th
 door. The gateway is the IAM-authenticated caller — it enforces the webhook edge policies (HMAC,
 GitHub IP allowlist, replay window, rate-limit) and presents a Google OIDC token to `/internal/*`
 (`INTERNAL_AUTH=oidc`), so a private Cloud Run still receives webhook-originated traffic and the
-shared bearer goes away. The HTTP contract is identical across ports, so the gateway config is
-port-agnostic. Architecture detail in
+shared bearer goes away. The gateway sits in front of the HTTP contract, so its config is
+independent of the service internals. Architecture detail in
 [Deployment § Private ingress](/standards/deployment.md#private-ingress); rollout intent in
 `DEPLOYMENT.md`.
 
@@ -822,9 +822,9 @@ The system is composed of independently testable layers:
 - Cloud Scheduler ingress drives `/internal/cron/daily` + `/internal/sweep` (durable timeout
   catch-all), Bearer-authed via `INTERNAL_TOKEN`.
 
-Planned hardening outside this design: orphan-session GC (sessions that crash between
-create-and-park) and Terraform/IaC for Firestore + Cloud Run + Scheduler + Secret Manager —
-see `DEPLOYMENT.md`.
+Outside the scope of this design: reclaiming sessions that crash between create-and-park, and
+the infrastructure definition itself (Firestore, Cloud Run, Scheduler, Secret Manager). Both are
+operational concerns rather than architectural ones; `DEPLOYMENT.md` is where they are tracked.
 
 ---
 
