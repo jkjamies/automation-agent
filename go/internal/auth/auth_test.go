@@ -251,3 +251,64 @@ func TestNewAppProviderRejectsInvalidKey(t *testing.T) {
 		t.Fatal("expected an error for an invalid private key")
 	}
 }
+
+// PAT mode resolves the service's own login via GET /user, which is what lets the reviewer
+// recognize the comments it authored. An empty token is anonymous — there is no identity to
+// attribute, and asking GitHub would only earn a 401.
+func TestStaticProviderAuthoredLogin(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"login":"octocat"}`))
+	}))
+	defer srv.Close()
+
+	login, err := NewStaticProvider("pat-123", WithStaticBaseURL(srv.URL)).AuthoredLogin(context.Background())
+	if err != nil {
+		t.Fatalf("AuthoredLogin: %v", err)
+	}
+	if login != "octocat" {
+		t.Errorf("login = %q, want octocat", login)
+	}
+	if !strings.Contains(gotAuth, "pat-123") {
+		t.Errorf("identity lookup must authenticate as the PAT, got %q", gotAuth)
+	}
+}
+
+func TestStaticProviderAuthoredLoginAnonymous(t *testing.T) {
+	login, err := NewStaticProvider("").AuthoredLogin(context.Background())
+	if err != nil || login != "" {
+		t.Fatalf("AuthoredLogin = (%q, %v), want (\"\", nil) for an empty token", login, err)
+	}
+}
+
+// A failed lookup is an error, not a silently empty login: the caller warns and falls back to
+// author-type matching, and it can only make that choice if it is told.
+func TestStaticProviderAuthoredLoginError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	if _, err := NewStaticProvider("bad", WithStaticBaseURL(srv.URL)).AuthoredLogin(context.Background()); err == nil {
+		t.Fatal("a rejected identity lookup must surface as an error")
+	}
+}
+
+// The zero arguments are the ones a caller reaches for by accident. A nil base must not panic on
+// the first request, and a nil provider must degrade to anonymous rather than dereference nil —
+// the read-only flows in local dev depend on it.
+func TestNewRoundTripperNilArguments(t *testing.T) {
+	if rt := NewRoundTripper(nil, NewStaticProvider("")); rt == nil {
+		t.Fatal("a nil base must fall back to the default transport")
+	}
+	rec := &recordingRT{}
+	rt := NewRoundTripper(rec, nil)
+	req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+	if _, err := rt.RoundTrip(req); err != nil {
+		t.Fatalf("nil provider should be anonymous, got %v", err)
+	}
+	if rec.auth != "" {
+		t.Errorf("nil provider set an Authorization header %q, want none", rec.auth)
+	}
+}

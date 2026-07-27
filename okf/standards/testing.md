@@ -18,8 +18,11 @@ truth — read it and you can run the suite without asking anyone. All commands 
 
 ## Principles
 
-- **Coverage ≥ 80%**, enforced by `make cover` (and `make ci`). Put the hard logic in
-  injectable, LLM-free functions so it's reachable by unit tests.
+- **Coverage ≥ 80%**, enforced by `make cover` (and `make ci`) **per package as well as
+  overall**. The total alone is an average, and an average hides its laggards: a package can
+  sit well under the standard indefinitely while the total reads healthy because the
+  well-tested packages outnumber it. Put the hard logic in injectable, LLM-free functions so
+  it's reachable by unit tests.
 - **Never assert on LLM output content.** LLM responses are non-deterministic; tests that
   check for keywords/tone/persona are flaky by nature. Validate agent *wiring* (with a
   fake `model.LLM`) and *deterministic tooling* instead. Behavior quality is checked
@@ -46,7 +49,7 @@ directory.** All targets live in `go/Makefile`.
 ```bash
 cd go
 make test            # go test ./...                — the whole suite (memory + sqlite backends)
-make cover           # tests + 80% coverage gate over ./internal/...
+make cover           # tests + 80% coverage gate over ./internal/... (per package and overall)
 make ci              # tidy-check + vet + lint + arch + test + cover  (the full local gate)
 make arch            # architecture conformance only (import boundaries)
 make docs-check      # okf/ bundle conformance (frontmatter, indexes, links)

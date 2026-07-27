@@ -78,4 +78,8 @@ from git history. PR creation lives in [githubapi](/modules/platform/githubapi.m
 (an API op, not a git op).
 
 Deterministic tooling — no agent imports. Tested against a local seed repo, so it
-exercises real clone/branch/commit/push without network.
+exercises real clone/branch/commit/push without network. The ssh fallback chain is tested
+with a generated key and a redirected `HOME` (and `SSH_AUTH_SOCK` cleared, so the result does
+not depend on whether the developer happens to have an agent running); the token-failure paths
+are tested by rewriting a local clone's remote URL to `https` with a provider that refuses to
+mint — the case that matters when an installation token expires between clone and push.

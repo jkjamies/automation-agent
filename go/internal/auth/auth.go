@@ -46,11 +46,32 @@ type TokenProvider interface {
 
 // StaticProvider returns the same token for every repo. It backs PAT mode and the
 // empty/anonymous client (an empty token means unauthenticated).
-type StaticProvider struct{ token string }
+type StaticProvider struct {
+	token string
+	// baseURL overrides the GitHub API base for AuthoredLogin's GET /user; empty in production.
+	baseURL string
+}
+
+// StaticOption configures a StaticProvider.
+type StaticOption func(*StaticProvider)
+
+// WithStaticBaseURL overrides the GitHub API base used by AuthoredLogin's identity lookup.
+// Tests point it at an httptest stub; production leaves the default. It mirrors WithBaseURL on
+// AppProvider: the two identity lookups are the same operation in the two auth modes, and both
+// need to be reachable without talking to github.com.
+func WithStaticBaseURL(rawURL string) StaticOption {
+	return func(p *StaticProvider) { p.baseURL = rawURL }
+}
 
 // NewStaticProvider returns a provider that always yields token. An empty token
 // is valid and yields an unauthenticated (public-read) client downstream.
-func NewStaticProvider(token string) StaticProvider { return StaticProvider{token: token} }
+func NewStaticProvider(token string, opts ...StaticOption) StaticProvider {
+	p := StaticProvider{token: token}
+	for _, opt := range opts {
+		opt(&p)
+	}
+	return p
+}
 
 // Token returns the constant token; repo and ctx are ignored.
 func (p StaticProvider) Token(context.Context, string) (string, error) { return p.token, nil }
@@ -63,6 +84,13 @@ func (p StaticProvider) AuthoredLogin(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	gh := github.NewClient(nil).WithAuthToken(p.token)
+	if p.baseURL != "" {
+		u, err := url.Parse(p.baseURL + "/")
+		if err != nil {
+			return "", fmt.Errorf("auth: parse base url: %w", err)
+		}
+		gh.BaseURL = u
+	}
 	u, _, err := gh.Users.Get(ctx, "")
 	if err != nil {
 		return "", fmt.Errorf("auth: resolve user identity: %w", err)

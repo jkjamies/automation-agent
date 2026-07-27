@@ -2,6 +2,10 @@ package gitrepo
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +16,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gossh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestIsSSHURL(t *testing.T) {
@@ -33,6 +39,7 @@ func TestIsSSHURL(t *testing.T) {
 // was asked for so tests can assert the per-op token is scoped to the right repo.
 type fakeProvider struct {
 	tok      string
+	err      error // when set, the provider fails to mint (an expired App key, a revoked install)
 	lastRepo string
 	calls    int
 }
@@ -40,7 +47,7 @@ type fakeProvider struct {
 func (f *fakeProvider) Token(_ context.Context, repo string) (string, error) {
 	f.calls++
 	f.lastRepo = repo
-	return f.tok, nil
+	return f.tok, f.err
 }
 
 func TestAuthForHTTPS(t *testing.T) {
@@ -424,5 +431,196 @@ func TestCloneFetchesOnlyTheRequestedBranch(t *testing.T) {
 	// The requested branch is of course present.
 	if _, err := r.repo.Reference(plumbing.NewRemoteReferenceName("origin", "master"), true); err != nil {
 		t.Errorf("the requested branch must be present: %v", err)
+	}
+}
+
+// writeSSHKey writes a usable OpenSSH private key into dir/name and returns its path.
+func writeSSHKey(t *testing.T, dir, name string) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// noAgent removes the ssh-agent from the environment for one test, so the fallback chain is
+// exercised deterministically instead of depending on whether the developer (or CI runner)
+// happens to have an agent running.
+func noAgent(t *testing.T) {
+	t.Helper()
+	t.Setenv("SSH_AUTH_SOCK", "")
+}
+
+// An explicit GIT_SSH_KEY wins outright — no agent lookup, no default-identity scan.
+func TestSSHAuthExplicitKey(t *testing.T) {
+	key := writeSSHKey(t, t.TempDir(), "deploy_key")
+	m, err := authFor(context.Background(), "git@github.com:acme/api.git", Auth{SSHKey: key})
+	if err != nil {
+		t.Fatalf("authFor with explicit key: %v", err)
+	}
+	if _, ok := m.(*gossh.PublicKeys); !ok {
+		t.Errorf("auth = %T, want *ssh.PublicKeys", m)
+	}
+}
+
+// With no explicit key and no agent, the first default identity present is used — the same
+// order the ssh binary tries, so a developer's working `git@` remote keeps working here.
+func TestSSHAuthFallsBackToDefaultIdentity(t *testing.T) {
+	noAgent(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSSHKey(t, filepath.Join(home, ".ssh"), "id_ed25519")
+
+	m, err := authFor(context.Background(), "ssh://git@github.com/acme/api.git", Auth{})
+	if err != nil {
+		t.Fatalf("authFor with a default identity: %v", err)
+	}
+	if _, ok := m.(*gossh.PublicKeys); !ok {
+		t.Errorf("auth = %T, want *ssh.PublicKeys", m)
+	}
+}
+
+// No key, no agent, no identity file: the error has to say what to do about it, because this is
+// the shape a misconfigured GIT_TRANSPORT=ssh deployment fails in.
+func TestSSHAuthNoCredentialsAtAll(t *testing.T) {
+	noAgent(t)
+	t.Setenv("HOME", t.TempDir())
+
+	_, err := authFor(context.Background(), "git@github.com:acme/api.git", Auth{})
+	if err == nil {
+		t.Fatal("expected an error when no ssh credential is available")
+	}
+	for _, want := range []string{"GIT_SSH_KEY", "ssh-agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should point at the fix, missing %q: %v", want, err)
+		}
+	}
+}
+
+// A default identity that exists but does not parse is an error naming the file, not a silent
+// fall-through to the next candidate: a corrupt id_ed25519 is a problem to report, and quietly
+// authenticating as a different key would be worse.
+func TestSSHAuthMalformedDefaultIdentity(t *testing.T) {
+	noAgent(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := authFor(context.Background(), "git@github.com:acme/api.git", Auth{})
+	if err == nil {
+		t.Fatal("expected an error for an unparseable default identity")
+	}
+	if !strings.Contains(err.Error(), "id_ed25519") {
+		t.Errorf("error should name the offending key file: %v", err)
+	}
+}
+
+// A provider that cannot mint a token fails the operation rather than falling back to
+// anonymous: an unauthenticated clone of a private repo would fail confusingly later, and an
+// unauthenticated push would fail after the work was done.
+func TestAuthForProviderError(t *testing.T) {
+	p := &fakeProvider{err: errors.New("mint failed")}
+	_, err := authFor(context.Background(), "https://github.com/acme/api.git", Auth{Provider: p, Repo: "acme/api"})
+	if err == nil {
+		t.Fatal("expected the provider error to propagate")
+	}
+	if !strings.Contains(err.Error(), "acme/api") {
+		t.Errorf("error should name the repo the token was for: %v", err)
+	}
+}
+
+// An empty token is anonymous, not a failure — that is the documented local-dev/public-read
+// mode, and sending an empty Basic Auth password would be rejected by GitHub.
+func TestAuthForEmptyTokenIsAnonymous(t *testing.T) {
+	m, err := authFor(context.Background(), "https://github.com/acme/api.git", Auth{Provider: &fakeProvider{}, Repo: "acme/api"})
+	if err != nil {
+		t.Fatalf("authFor with an empty token: %v", err)
+	}
+	if m != nil {
+		t.Errorf("auth = %#v, want nil (anonymous)", m)
+	}
+}
+
+// httpsRepo is a real working tree (cloned from a local seed) whose remote URL and auth are
+// rewritten to an https remote with a failing provider. The clone is just a cheap way to get a
+// valid repo; the URL is what selects the auth path, so this reaches the per-op token resolution
+// that Push and fetchBranch perform — the path that matters when an App installation token
+// expires between clone and push.
+func httpsRepoWithFailingProvider(t *testing.T) *Repo {
+	t.Helper()
+	r, err := Clone(context.Background(), seedRemote(t), filepath.Join(t.TempDir(), "work"), "", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	r.url = "https://github.com/acme/api.git"
+	r.auth = Auth{Provider: &fakeProvider{err: errors.New("mint failed")}, Repo: "acme/api"}
+	return r
+}
+
+func TestPushSurfacesTokenFailure(t *testing.T) {
+	if err := httpsRepoWithFailingProvider(t).Push(context.Background()); err == nil {
+		t.Fatal("a push whose token could not be minted must fail, not push anonymously")
+	}
+}
+
+func TestCheckoutOrCreateSurfacesFetchFailure(t *testing.T) {
+	_, err := httpsRepoWithFailingProvider(t).CheckoutOrCreate(context.Background(), "agent/fix")
+	if err == nil {
+		t.Fatal("a fetch whose token could not be minted must fail")
+	}
+}
+
+// A transport failure must not be read as "the remote has no such branch". The two look alike
+// at the call site and mean opposite things: absent means create the branch from the base,
+// while a failure means we do not know — and creating it would branch a retry off the wrong
+// commit and then fail to push as a non-fast-forward.
+func TestCheckoutOrCreateDistinguishesFailureFromAbsentBranch(t *testing.T) {
+	remote := seedRemote(t)
+	r, err := Clone(context.Background(), remote, filepath.Join(t.TempDir(), "work"), "", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	// The remote is gone: fetching can no longer answer the question either way.
+	if err := os.RemoveAll(remote); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CheckoutOrCreate(context.Background(), "agent/fix"); err == nil {
+		t.Fatal("an unreachable remote must be an error, not a silent 'branch absent'")
+	}
+}
+
+// Head on a repository with no commits fails rather than returning an empty SHA. The apply step
+// falls back to Head when the tree is clean, and an empty SHA there would be reported to GitHub
+// as the head of the fix.
+func TestHeadWithoutCommits(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	r := &Repo{repo: repo, wt: wt, dir: dir, now: time.Now}
+	if sha, err := r.Head(); err == nil {
+		t.Fatalf("Head on an empty repo = %q, want an error", sha)
 	}
 }

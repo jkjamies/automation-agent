@@ -30,12 +30,25 @@ playground: ## Launch the local web UI playground (dev only) at :8080
 test: ## Run all tests
 	go test ./...
 
-cover: ## Run tests with coverage gate (>= $(COVER_MIN)%) over internal/ (cmd is composition-only)
+cover: ## Run tests with coverage gate (>= $(COVER_MIN)%, per package and overall) over internal/
 	go test -coverprofile=coverage.out -covermode=atomic ./internal/...
 	@# Emulator-only backends (*_firestore.go) are validated by the FIRESTORE_EMULATOR_HOST-
 	@# gated integration suite (make cover-firestore), not the default unit run, so exclude
 	@# them from the gate denominator rather than require every dev to run the emulator.
 	@grep -vE '_firestore\.go:' coverage.out > coverage.gate.out
+	@# Per-package floor. The overall total below is an average, and an average hides its
+	@# laggards: a package can sit 15 points under the standard indefinitely while the total
+	@# reads healthy because the well-tested packages outnumber it. The floor makes the
+	@# documented ">= $(COVER_MIN)%" true of every package rather than only of their mean.
+	@# Statement-weighted per package, mirroring how `go tool cover` computes the total.
+	@awk -v min=$(COVER_MIN) ' \
+	  NR>1 { pkg=$$1; sub(/\.go:.*$$/,"",pkg); sub(/\/[^\/]*$$/,"",pkg); \
+	         stmts[pkg]+=$$2; if ($$3>0) covered[pkg]+=$$2 } \
+	  END { for (p in stmts) { pct=100*covered[p]/stmts[p]; \
+	          if (pct < min) printf "FAIL: %s %.1f%% < %d%%\n", p, pct, min } }' \
+	  coverage.gate.out | sort | tee coverage.pkg.fail; \
+	test ! -s coverage.pkg.fail || { rm -f coverage.pkg.fail; exit 1; }; \
+	rm -f coverage.pkg.fail
 	@total=$$(go tool cover -func=coverage.gate.out | awk '/total:/ {gsub("%","",$$3); print $$3}'); \
 	echo "total coverage: $$total% (excludes emulator-only *_firestore.go)"; \
 	awk "BEGIN{exit !($$total >= $(COVER_MIN))}" || { echo "FAIL: coverage $$total% < $(COVER_MIN)%"; exit 1; }

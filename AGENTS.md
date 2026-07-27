@@ -45,8 +45,8 @@ gate or the PR:
 - **Import boundaries**: tooling packages never import agents; provider SDKs
   (Ollama/Gemini/genai) only inside the `agent/setup` layer; nothing imports
   `cmd`; the config layer is the only place that reads environment variables.
-- **Testing**: coverage ≥ 80 %; never assert on LLM output content; tests stay
-  deterministic.
+- **Testing**: coverage ≥ 80 %, enforced per package as well as overall; never
+  assert on LLM output content; tests stay deterministic.
 - **Prompts are markdown** under each agent's `prompts/` directory, loaded from embedded
   resources — never inline prompt strings in code.
 - **Docs are factual, never status trackers** — no "done/pending/Phase X" outside
