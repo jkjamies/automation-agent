@@ -48,7 +48,7 @@ flowchart TD
 - `lint.go` — `NewEngine(fixflow.Deps)`: the lint `Spec` (branch/label/check + titles) that configures the shared fixflow engine.
 - `triage.go` — LLM report normalization (format-agnostic).
 - `analyze.go` — parallel per-file fix agents.
-- `prompts/{triage,analyze,summarize_result}.md`.
+- `prompts/{triage,analyze}.md`. The terminal chat summary is assembled deterministically in Go (`fixflow.buildSummaryText`), not by a prompt.
 
 The kickoff/suspend/resume mechanics (apply_fix → await_ci, the `ParkStore` record, attempt counting, the CI timeout + sweep, and the status-aware terminal summary) live in the shared [fixflow engine](/modules/agents/fixflow.md).
 

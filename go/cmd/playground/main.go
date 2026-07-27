@@ -60,8 +60,11 @@ func run() error {
 
 	// Default the playground to the console exporter so a developer sees the span tree on
 	// stdout with no backend to stand up — but respect an explicit OTEL_TRACES_EXPORTER.
+	// "Was it set?" comes from the loaded Config, not from the environment directly: config is
+	// the single reader of OTEL_*, and a second one here would fork configuration away from the
+	// typed source of truth (and out of its masked-secret String view).
 	exporter := cfg.OTELTracesExporter
-	if _, set := os.LookupEnv("OTEL_TRACES_EXPORTER"); !set {
+	if !cfg.OTELTracesExporterSet {
 		exporter = config.OTELExporterConsole
 	}
 	shutdownTracing, err := obs.Init(ctx, obs.Config{

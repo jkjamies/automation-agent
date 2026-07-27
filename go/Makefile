@@ -13,7 +13,7 @@ GO_TOOLCHAIN     := go$(shell awk '/^go /{print $$2; exit}' go.mod)
 GOBIN            := $(shell go env GOPATH)/bin
 GOLANGCI         := $(GOBIN)/golangci-lint
 
-.PHONY: help build run test cover cover-firestore lint lint-install fmt vet arch tidy spec docs-check ollama-check ci
+.PHONY: help build run test cover cover-firestore lint lint-install fmt vet arch tidy tidy-check spec docs-check ollama-check ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -66,6 +66,9 @@ docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, 
 tidy: ## Tidy go.mod
 	go mod tidy
 
+tidy-check: ## Verify go.mod/go.sum are already tidy, without modifying them
+	@go mod tidy -diff || { echo "FAIL: go.mod/go.sum are not tidy — run 'make tidy'"; exit 1; }
+
 ollama-check: ## Verify the local Ollama server is reachable
 	@curl -sf $(OLLAMA_HOST)/api/tags >/dev/null && echo "ollama up at $(OLLAMA_HOST)" || { echo "ollama not reachable at $(OLLAMA_HOST)"; exit 1; }
 
@@ -80,4 +83,8 @@ spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove
 docker: ## Build the production container image (cmd/agent only)
 	docker build -t automation-agent .
 
-ci: tidy vet lint arch test cover ## Full local CI gate
+# A gate must not change what it is measuring. `tidy` rewrites go.mod/go.sum in place, so a
+# `make ci` that ran it would quietly fix an untidy module and report success — locally, and in
+# CI right up until the separate `git diff --exit-code` step notices. `tidy-check` reports the
+# same problem without touching the tree, so the failure names its own cause.
+ci: tidy-check vet lint arch test cover ## Full local CI gate (read-only: never modifies the tree)

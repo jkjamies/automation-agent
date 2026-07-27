@@ -1,6 +1,7 @@
 package reviewer
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -444,25 +445,66 @@ func (e *Engine) gateCitations(findings []Finding, std *standards) []Finding {
 	return out
 }
 
+// standardsCacheMax is how many distilled rule sets are kept. Entries are not small — each holds
+// the full text of every discovered standards doc, up to REVIEW_STANDARDS_MAX_BYTES (512 KiB on a
+// hosted model) — and the key includes the docs' blob SHAs, so every edit to a repo's conventions
+// mints a fresh one and abandons the old. Unbounded, that is a slow leak proportional to how long
+// an instance stays warm and how often the org edits its standards, not to how many repos exist.
+//
+// The bound is small on purpose: the cache exists to skip re-distilling across the events of one
+// PR and the PRs open at the same time, not to remember an org's whole history. A miss costs one
+// base-tier model call, so evicting too eagerly is cheap and evicting too late is not.
+const standardsCacheMax = 32
+
 // standardsCache memoizes distilled rule sets per repo + docs revision (in-memory; a cold start
 // re-distills, which is fine). A cached nil means "discovered docs, distilled nothing" and is
 // retained so a generic repo isn't re-distilled until its docs change.
+//
+// Eviction is least-recently-used: the reviewed repos churn (a burst of PRs on one repo, then a
+// burst on another) rather than arriving uniformly, so recency predicts the next hit far better
+// than insertion order would.
 type standardsCache struct {
 	mu sync.Mutex
-	m  map[string]*standards
+	m  map[string]*list.Element
+	// lru is ordered most-recently-used first; each element's value is a *standardsEntry.
+	lru *list.List
+	max int
 }
 
-func newStandardsCache() *standardsCache { return &standardsCache{m: map[string]*standards{}} }
+// standardsEntry is one cache entry. The key is stored alongside the value so evicting the LRU
+// element can delete its map entry without a reverse lookup.
+type standardsEntry struct {
+	key string
+	val *standards
+}
+
+func newStandardsCache() *standardsCache {
+	return &standardsCache{m: map[string]*list.Element{}, lru: list.New(), max: standardsCacheMax}
+}
 
 func (c *standardsCache) get(key string) (*standards, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s, ok := c.m[key]
-	return s, ok
+	el, ok := c.m[key]
+	if !ok {
+		return nil, false
+	}
+	c.lru.MoveToFront(el)
+	return el.Value.(*standardsEntry).val, true
 }
 
 func (c *standardsCache) put(key string, s *standards) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[key] = s
+	if el, ok := c.m[key]; ok {
+		el.Value.(*standardsEntry).val = s
+		c.lru.MoveToFront(el)
+		return
+	}
+	c.m[key] = c.lru.PushFront(&standardsEntry{key: key, val: s})
+	for c.lru.Len() > c.max {
+		oldest := c.lru.Back()
+		c.lru.Remove(oldest)
+		delete(c.m, oldest.Value.(*standardsEntry).key)
+	}
 }

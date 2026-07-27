@@ -50,7 +50,7 @@ cd go
 make run                          # the service: webhooks + /internal cron hooks (cmd/agent), SESSION_BACKEND=memory
 SESSION_BACKEND=sqlite make run   # durable local: parked runs survive a restart (a local .db file)
 make playground                   # local ADK web UI + CLI at http://localhost:8080 (cmd/playground, dev only)
-make ci                           # the full local gate (tidy + vet + lint + arch + test + cover)
+make ci                           # the full local gate (tidy-check + vet + lint + arch + test + cover)
 ```
 
 - **`make run`** → `go run ./cmd/agent`. Loads `.env`, builds the LLM + session service +

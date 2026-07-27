@@ -40,7 +40,8 @@ These are enforced by architecture tests and review; violating any of them fails
 gate or the PR:
 
 - **Run the local gate before proposing changes**: `make ci` from `go/`. It runs
-  tidy + vet + lint + arch + test + coverage, and is what CI runs too.
+  tidy-check + vet + lint + arch + test + coverage, and is what CI runs too. It is
+  read-only — an untidy `go.mod` is reported, not silently fixed (`make tidy` fixes it).
 - **Import boundaries**: tooling packages never import agents; provider SDKs
   (Ollama/Gemini/genai) only inside the `agent/setup` layer; nothing imports
   `cmd`; the config layer is the only place that reads environment variables.

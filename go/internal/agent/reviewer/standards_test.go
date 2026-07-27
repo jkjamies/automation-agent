@@ -272,3 +272,65 @@ func TestDiscoverStandards(t *testing.T) {
 		}
 	})
 }
+
+// The cache must not grow without bound. Every entry holds the full text of a repo's standards
+// docs (up to REVIEW_STANDARDS_MAX_BYTES), and the key includes their blob SHAs, so each edit to a
+// repo's conventions mints a new entry and abandons the old one. On a warm instance that is a
+// leak that tracks how often the org edits its standards, not how many repos it has.
+func TestStandardsCacheEvictsBeyondItsBound(t *testing.T) {
+	c := newStandardsCache()
+	c.max = 3
+	keys := []string{"a", "b", "c", "d"}
+	for _, k := range keys {
+		c.put(k, &standards{sources: []string{k}})
+	}
+	if got := len(c.m); got != 3 {
+		t.Errorf("cache holds %d entries, want at most 3", got)
+	}
+	if _, ok := c.get("a"); ok {
+		t.Error("the least-recently-used entry should have been evicted")
+	}
+	for _, k := range []string{"b", "c", "d"} {
+		if _, ok := c.get(k); !ok {
+			t.Errorf("%q should still be cached", k)
+		}
+	}
+}
+
+// Eviction is by recency, not insertion order: reviewed repos arrive in bursts (many PRs on one
+// repo, then many on another), so the entry used most recently is the one most likely wanted next.
+func TestStandardsCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	c := newStandardsCache()
+	c.max = 2
+	c.put("a", &standards{sources: []string{"a"}})
+	c.put("b", &standards{sources: []string{"b"}})
+	if _, ok := c.get("a"); !ok { // "a" is now the most recently used
+		t.Fatal("a should be cached")
+	}
+	c.put("c", &standards{sources: []string{"c"}})
+
+	if _, ok := c.get("b"); ok {
+		t.Error("b was the least recently used and should have been evicted")
+	}
+	if _, ok := c.get("a"); !ok {
+		t.Error("a was used most recently and should have survived")
+	}
+}
+
+// A cached nil is a real value — "discovered docs, distilled no rules" — and must read back as a
+// hit, so a rule-less repo is not re-distilled on every event until its docs change.
+func TestStandardsCacheRetainsNilAndOverwrites(t *testing.T) {
+	c := newStandardsCache()
+	c.put("k", nil)
+	got, ok := c.get("k")
+	if !ok || got != nil {
+		t.Errorf("get = %v, %v; want a hit holding nil", got, ok)
+	}
+	c.put("k", &standards{sources: []string{"s"}})
+	if got, ok := c.get("k"); !ok || got == nil || got.sources[0] != "s" {
+		t.Errorf("overwrite: get = %v, %v", got, ok)
+	}
+	if len(c.m) != 1 || c.lru.Len() != 1 {
+		t.Errorf("overwriting a key must not add an entry: map=%d lru=%d", len(c.m), c.lru.Len())
+	}
+}

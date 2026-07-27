@@ -161,8 +161,8 @@ func finalResponse(text string, toolCalls []api.ToolCall, modelVersion string) *
 	if strings.TrimSpace(text) != "" {
 		parts = append(parts, genai.NewPartFromText(text))
 	}
-	for _, tc := range toolCalls {
-		parts = append(parts, &genai.Part{FunctionCall: toGenaiFunctionCall(tc)})
+	for i, tc := range toolCalls {
+		parts = append(parts, &genai.Part{FunctionCall: toGenaiFunctionCall(tc, i)})
 	}
 	return &model.LLMResponse{
 		Content:      &genai.Content{Role: genai.RoleModel, Parts: parts},
@@ -172,16 +172,19 @@ func finalResponse(text string, toolCalls []api.ToolCall, modelVersion string) *
 	}
 }
 
-func toGenaiFunctionCall(tc api.ToolCall) *genai.FunctionCall {
+// toGenaiFunctionCall converts one Ollama tool call, preserving its id: the flow keys
+// long-running tool tracking and function-response correlation on it. Many local models emit
+// no id at all, so idx (the call's position in the response) synthesizes one — position is the
+// only thing that distinguishes two parallel calls to the *same* tool, which a name-only
+// fallback would collapse into one indistinguishable id.
+func toGenaiFunctionCall(tc api.ToolCall, idx int) *genai.FunctionCall {
 	args := map[string]any{}
 	if b, err := json.Marshal(tc.Function.Arguments); err == nil {
 		_ = json.Unmarshal(b, &args)
 	}
-	// The ID must be preserved: the flow keys long-running tool tracking and
-	// function-response correlation on it.
 	id := tc.ID
 	if id == "" {
-		id = tc.Function.Name
+		id = fmt.Sprintf("%s-%d", tc.Function.Name, idx)
 	}
 	return &genai.FunctionCall{ID: id, Name: tc.Function.Name, Args: args}
 }
@@ -279,10 +282,14 @@ func toOllamaMessages(req *model.LLMRequest) []api.Message {
 			}
 			switch {
 			case p.FunctionResponse != nil:
+				// ToolCallID is what ties this result back to the assistant tool call that asked
+				// for it. Without it a turn with two parallel calls to the same tool sends back two
+				// results distinguishable only by order, and the model has to guess the pairing.
 				msgs = append(msgs, api.Message{
-					Role:     "tool",
-					ToolName: p.FunctionResponse.Name,
-					Content:  jsonString(p.FunctionResponse.Response),
+					Role:       "tool",
+					ToolName:   p.FunctionResponse.Name,
+					ToolCallID: p.FunctionResponse.ID,
+					Content:    jsonString(p.FunctionResponse.Response),
 				})
 			case p.FunctionCall != nil:
 				toolCalls = append(toolCalls, toOllamaToolCall(p.FunctionCall))
@@ -301,12 +308,15 @@ func toOllamaMessages(req *model.LLMRequest) []api.Message {
 	return msgs
 }
 
+// toOllamaToolCall converts a genai function call back to Ollama's wire shape. The id survives
+// the round trip: it is the only thing pairing an assistant tool call with the tool result that
+// follows it, and dropping it here undid the care taken to preserve it on the way in.
 func toOllamaToolCall(fc *genai.FunctionCall) api.ToolCall {
 	args := api.NewToolCallFunctionArguments()
 	for k, v := range fc.Args {
 		args.Set(k, v)
 	}
-	return api.ToolCall{Function: api.ToolCallFunction{Name: fc.Name, Arguments: args}}
+	return api.ToolCall{ID: fc.ID, Function: api.ToolCallFunction{Name: fc.Name, Arguments: args}}
 }
 
 func jsonString(v map[string]any) string {

@@ -143,10 +143,15 @@ func TestProviderSDKsOnlyInSetup(t *testing.T) {
 // never os.Getenv("OTEL_..."). A stray read elsewhere would fork configuration away from the
 // single source of truth (and out of the masked-secret String view). Enforced by source
 // scan: the literal "OTEL_" outside internal/config flags a direct env reference.
+//
+// The scan covers the whole module, not just internal/. cmd/ is where a direct env read is most
+// likely to appear — an entrypoint already touching os for args and signals, wanting one setting
+// config doesn't expose yet — and scanning only internal/ let exactly that through unnoticed.
 func TestOnlyConfigReadsOTELEnv(t *testing.T) {
 	root := repoRoot(t)
 	configDir := filepath.Join(root, "internal", "config")
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(p string, d os.DirEntry, err error) error {
+	archDir := filepath.Join(root, "ARCH")
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -160,8 +165,10 @@ func TestOnlyConfigReadsOTELEnv(t *testing.T) {
 			return nil
 		}
 		dir := filepath.Dir(p)
-		if dir == configDir || strings.HasPrefix(dir, configDir+string(filepath.Separator)) {
-			return nil // config owns the OTEL_* env vars
+		// config owns the OTEL_* env vars; ARCH is the rule's own source, where the literal is
+		// the thing being searched for rather than a violation.
+		if dir == configDir || strings.HasPrefix(dir, configDir+string(filepath.Separator)) || dir == archDir {
+			return nil
 		}
 		b, rerr := os.ReadFile(p)
 		if rerr != nil {
@@ -173,7 +180,7 @@ func TestOnlyConfigReadsOTELEnv(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk internal: %v", err)
+		t.Fatalf("walk module: %v", err)
 	}
 }
 
