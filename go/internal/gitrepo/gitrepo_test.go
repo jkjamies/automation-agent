@@ -369,7 +369,7 @@ func TestCheckoutOrCreateContinuesExistingRemoteBranch(t *testing.T) {
 		t.Fatalf("Clone: %v", err)
 	}
 
-	existed, err := r.CheckoutOrCreate("agent/fix")
+	existed, err := r.CheckoutOrCreate(context.Background(), "agent/fix")
 	if err != nil {
 		t.Fatalf("CheckoutOrCreate: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestCheckoutOrCreateCreatesMissingBranch(t *testing.T) {
 		t.Fatalf("Clone: %v", err)
 	}
 
-	existed, err := r.CheckoutOrCreate("agent/brand-new")
+	existed, err := r.CheckoutOrCreate(context.Background(), "agent/brand-new")
 	if err != nil {
 		t.Fatalf("CheckoutOrCreate: %v", err)
 	}
@@ -404,5 +404,25 @@ func TestCheckoutOrCreateCreatesMissingBranch(t *testing.T) {
 	}
 	if got := head.Name().Short(); got != "agent/brand-new" {
 		t.Errorf("HEAD = %q, want the newly created branch", got)
+	}
+}
+
+// The clone fetches only the branch it was asked for. On a repo with many branches that is
+// the whole saving; the agent's own working branch is fetched on demand by CheckoutOrCreate
+// when a retry needs it.
+func TestCloneFetchesOnlyTheRequestedBranch(t *testing.T) {
+	remote := seedRemoteWithBranch(t, "feature-x")
+	work := filepath.Join(t.TempDir(), "w")
+
+	r, err := Clone(context.Background(), remote, work, "master", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, err := r.repo.Reference(plumbing.NewRemoteReferenceName("origin", "feature-x"), true); err == nil {
+		t.Error("a single-branch clone should not carry unrelated remote branches")
+	}
+	// The requested branch is of course present.
+	if _, err := r.repo.Reference(plumbing.NewRemoteReferenceName("origin", "master"), true); err != nil {
+		t.Errorf("the requested branch must be present: %v", err)
 	}
 }

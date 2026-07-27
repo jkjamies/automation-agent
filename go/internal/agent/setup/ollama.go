@@ -17,26 +17,29 @@ import (
 	"google.golang.org/genai"
 )
 
-// defaultNumCtx is the context window requested from Ollama. gemma4 is served with a
-// 32k window; setting it (with Truncate=false) avoids the server default (~4k) that
-// would silently chop large file prompts.
-const defaultNumCtx = 32768
-
 // OllamaModel adapts a local Ollama server to the adk model.LLM interface so agents
 // can run against Gemma locally. It honors GenerateContentConfig (temperature,
 // num_ctx, JSON format) and tool declarations, so tool-using agents work locally.
 type OllamaModel struct {
 	client *api.Client
 	name   string
+	// numCtx is the context window requested per call (OLLAMA_NUM_CTX). It is set
+	// explicitly, with Truncate=false, because the server default (~4k) would silently chop
+	// a large file prompt. It is also what the reviewer's size gate derives from, so the two
+	// cannot drift: a diff the gate admits is a diff this window can hold.
+	numCtx int
 }
 
 var _ model.LLM = (*OllamaModel)(nil)
 
-// NewOllamaModel builds an adapter pointing at host (e.g. http://localhost:11434)
-// for the given model tag (e.g. gemma4:12b).
-func NewOllamaModel(host, modelTag string) (*OllamaModel, error) {
+// NewOllamaModel builds an adapter pointing at host (e.g. http://localhost:11434) for the
+// given model tag, requesting a numCtx-token context window per call.
+func NewOllamaModel(host, modelTag string, numCtx int) (*OllamaModel, error) {
 	if modelTag == "" {
 		return nil, errors.New("ollama model tag must not be empty")
+	}
+	if numCtx <= 0 {
+		return nil, fmt.Errorf("ollama num_ctx must be positive, got %d", numCtx)
 	}
 	base, err := url.Parse(host)
 	if err != nil {
@@ -56,7 +59,7 @@ func NewOllamaModel(host, modelTag string) (*OllamaModel, error) {
 			ResponseHeaderTimeout: 300 * time.Second,
 		},
 	}
-	return &OllamaModel{client: api.NewClient(base, httpClient), name: modelTag}, nil
+	return &OllamaModel{client: api.NewClient(base, httpClient), name: modelTag, numCtx: numCtx}, nil
 }
 
 // Name reports the configured model tag.
@@ -74,7 +77,7 @@ func (m *OllamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			Model:    m.modelName(req),
 			Messages: toOllamaMessages(req),
 			Stream:   &streamFlag,
-			Options:  generationOptions(req),
+			Options:  generationOptions(req, m.numCtx),
 			Tools:    toOllamaTools(req),
 			Truncate: &noTruncate,
 		}
@@ -123,8 +126,8 @@ func (m *OllamaModel) modelName(req *model.LLMRequest) string {
 // generationOptions maps GenerateContentConfig onto Ollama options. Temperature
 // defaults to 0 for deterministic code/JSON; num_ctx is set so large files aren't
 // truncated.
-func generationOptions(req *model.LLMRequest) map[string]any {
-	opts := map[string]any{"num_ctx": defaultNumCtx, "temperature": 0.0}
+func generationOptions(req *model.LLMRequest, numCtx int) map[string]any {
+	opts := map[string]any{"num_ctx": numCtx, "temperature": 0.0}
 	if req == nil || req.Config == nil {
 		return opts
 	}

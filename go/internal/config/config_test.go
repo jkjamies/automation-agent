@@ -152,8 +152,8 @@ func TestReviewIntakeDefaults(t *testing.T) {
 	if c.ReviewMaxFiles != defaultReviewMaxFiles {
 		t.Errorf("ReviewMaxFiles = %d, want default %d", c.ReviewMaxFiles, defaultReviewMaxFiles)
 	}
-	if c.ReviewMaxDiffBytes != defaultReviewMaxDiffBytes {
-		t.Errorf("ReviewMaxDiffBytes = %d, want default %d", c.ReviewMaxDiffBytes, defaultReviewMaxDiffBytes)
+	if want := defaultReviewBytes(c); c.ReviewMaxDiffBytes != want {
+		t.Errorf("ReviewMaxDiffBytes = %d, want the provider-derived default %d", c.ReviewMaxDiffBytes, want)
 	}
 	if c.ReviewMinConfidence != defaultReviewMinConfidence {
 		t.Errorf("ReviewMinConfidence = %v, want default %v", c.ReviewMinConfidence, defaultReviewMinConfidence)
@@ -497,5 +497,78 @@ func TestReviewStandardsConfig(t *testing.T) {
 		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_STANDARDS_MAX_BYTES": v})); err == nil {
 			t.Errorf("REVIEW_STANDARDS_MAX_BYTES=%q must be a startup error", v)
 		}
+	}
+}
+
+// The reviewer's byte caps are derived from the provider, not fixed. On the local path a
+// cap larger than the served context window is not a degraded review but a hard failure:
+// the Ollama adapter sends Truncate=false, so an oversized prompt errors outright.
+func TestReviewByteCapsFollowTheProvider(t *testing.T) {
+	ollama := mapLookup(map[string]string{"LLM_PROVIDER": "ollama"})
+	c, err := loadFrom(ollama)
+	if err != nil {
+		t.Fatalf("load ollama: %v", err)
+	}
+	windowBytes := c.OllamaNumCtx * approxBytesPerToken
+	if c.ReviewMaxDiffBytes >= windowBytes {
+		t.Errorf("diff cap %d must leave room in the %d-byte window for the prompt and the model's own output",
+			c.ReviewMaxDiffBytes, windowBytes)
+	}
+	if c.ReviewStandardsMaxBytes >= windowBytes {
+		t.Errorf("standards cap %d must fit the same window (%d bytes)", c.ReviewStandardsMaxBytes, windowBytes)
+	}
+
+	// A bigger served window buys a bigger review, with no second knob to remember.
+	wide, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "131072"}))
+	if err != nil {
+		t.Fatalf("load wide: %v", err)
+	}
+	if wide.ReviewMaxDiffBytes <= c.ReviewMaxDiffBytes {
+		t.Errorf("raising OLLAMA_NUM_CTX should raise the diff cap: %d vs %d",
+			wide.ReviewMaxDiffBytes, c.ReviewMaxDiffBytes)
+	}
+
+	// The hosted path is bounded by review usefulness and cost, not by a window, so it is
+	// both fixed and much larger.
+	hosted, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "gemini", "GEMINI_MODEL": "m"}))
+	if err != nil {
+		t.Fatalf("load gemini: %v", err)
+	}
+	if hosted.ReviewMaxDiffBytes != hostedReviewMaxDiffBytes {
+		t.Errorf("hosted diff cap = %d, want %d", hosted.ReviewMaxDiffBytes, hostedReviewMaxDiffBytes)
+	}
+	if hosted.ReviewMaxDiffBytes <= c.ReviewMaxDiffBytes {
+		t.Errorf("the hosted cap (%d) should exceed the local one (%d)", hosted.ReviewMaxDiffBytes, c.ReviewMaxDiffBytes)
+	}
+
+	// An explicit value always wins over either default.
+	pinned, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama", "REVIEW_MAX_DIFF_BYTES": "4096"}))
+	if err != nil {
+		t.Fatalf("load pinned: %v", err)
+	}
+	if pinned.ReviewMaxDiffBytes != 4096 {
+		t.Errorf("explicit REVIEW_MAX_DIFF_BYTES = %d, want 4096", pinned.ReviewMaxDiffBytes)
+	}
+}
+
+// Model concurrency defaults to what the backend can use: a single local GPU serializes
+// anyway, while a hosted endpoint wants real parallelism.
+func TestLLMMaxConcurrentFollowsTheProvider(t *testing.T) {
+	local, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama"}))
+	if err != nil {
+		t.Fatalf("load ollama: %v", err)
+	}
+	hosted, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "gemini", "GEMINI_MODEL": "m"}))
+	if err != nil {
+		t.Fatalf("load gemini: %v", err)
+	}
+	if local.LLMMaxConcurrent >= hosted.LLMMaxConcurrent {
+		t.Errorf("local concurrency (%d) should be below hosted (%d)", local.LLMMaxConcurrent, hosted.LLMMaxConcurrent)
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"LLM_MAX_CONCURRENT": "0"})); err == nil {
+		t.Error("LLM_MAX_CONCURRENT=0 should be rejected: it would stall every model call")
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"OLLAMA_NUM_CTX": "0"})); err == nil {
+		t.Error("OLLAMA_NUM_CTX=0 should be rejected")
 	}
 }

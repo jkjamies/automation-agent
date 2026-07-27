@@ -14,11 +14,23 @@ timestamp: 2026-07-04T00:00:00Z
 Working-tree git operations via an embedded git library (
 `go-git/v5` — pure Go, no git binary):
 
+## Clone shape: single-branch, never shallow
+
+A clone fetches **only the base branch** it is given; the agent's own working branch is
+fetched on demand by `CheckoutOrCreate` when a retry needs it. On a repo with many branches
+that is the saving worth having.
+
+It is **not** shallow, and cannot be: `go-git` fails to push from a shallow repository —
+any `Depth` produces `object not found` at push time, not just depth 1 — and pushing is the
+whole point of this package. So history size is not bounded here. On a very large repo the
+clone is a real memory cost (the working tree lands in `/tmp`, which is RAM-backed on Cloud
+Run), and the answer is instance sizing rather than a clone flag.
+
 ## Flow
 
 ```mermaid
 flowchart TD
-    LF[lint-fixer] --> CL["Clone(ctx, url, dir, Auth{Provider, Repo, SSHKey})"]
+    LF[lint-fixer] --> CL["Clone(ctx, url, dir, branch, Auth{Provider, Repo, SSHKey}) — single-branch"]
     CL --> AF["authFor(ctx, url, Auth) — by URL scheme, token fetched per op"]
     AF -->|"https + Provider.Token(ctx, repo)"| BA["BasicAuth{x-access-token, token}"]
     AF -->|"https + nil provider / empty token"| NIL[nil auth - anonymous]

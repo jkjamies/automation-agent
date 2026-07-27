@@ -80,6 +80,16 @@ type Config struct {
 	// (lint rewrite, coverage test generation). Falls back to the default model.
 	OllamaCodeModel string
 	GeminiCodeModel string
+	// OllamaNumCtx is the context window requested per Ollama call (OLLAMA_NUM_CTX). It is
+	// also the budget the reviewer's size gate is derived from, so raising the served
+	// window and raising what the reviewer will accept are one change, not two.
+	OllamaNumCtx int
+	// LLMMaxConcurrent bounds how many model calls run at once across the whole process
+	// (LLM_MAX_CONCURRENT), applied by wrapping the model itself so no call site can bypass
+	// it. The right value is a property of the backend, not the workload: one local GPU
+	// serializes anyway and extra parallelism only thrashes VRAM, while a hosted endpoint
+	// wants real concurrency up to its quota.
+	LLMMaxConcurrent int
 
 	// Sessions
 	SessionBackend SessionBackend
@@ -133,6 +143,12 @@ type Config struct {
 	// AgentPRLabel is the single human-facing label applied to every agent PR on creation
 	// (AGENT_PR_LABEL). Write-only: PR lookup is by branch, so the label never gates behavior.
 	AgentPRLabel string
+	// FixMaxFiles caps how many files one fix attempt may edit (FIX_MAX_FILES). A report
+	// from a large codebase can name hundreds; a PR that touches all of them is neither
+	// reviewable nor mergeable, and the fan-out would be the bulk of the run's cost. Files
+	// beyond the cap are dropped in the order triage ranked them, and the count of dropped
+	// files is reported rather than silently swallowed. Non-positive disables the cap.
+	FixMaxFiles int
 
 	// Reviewer (PR code-review agent). ReviewEnabled (REVIEW_ENABLED) is the kill switch:
 	// false (the default) means pull_request events are accepted and acknowledged but no
@@ -361,6 +377,21 @@ func loadFrom(get lookup) (Config, error) {
 	}
 
 	var err error
+	if c.OllamaNumCtx, err = getInt(get, "OLLAMA_NUM_CTX", defaultOllamaNumCtx); err != nil {
+		return Config{}, err
+	}
+	if c.OllamaNumCtx <= 0 {
+		return Config{}, fmt.Errorf("OLLAMA_NUM_CTX: must be positive, got %d", c.OllamaNumCtx)
+	}
+	if c.LLMMaxConcurrent, err = getInt(get, "LLM_MAX_CONCURRENT", defaultLLMMaxConcurrent(c.LLMProvider)); err != nil {
+		return Config{}, err
+	}
+	if c.LLMMaxConcurrent < 1 {
+		return Config{}, fmt.Errorf("LLM_MAX_CONCURRENT: must be at least 1, got %d", c.LLMMaxConcurrent)
+	}
+	if c.FixMaxFiles, err = getInt(get, "FIX_MAX_FILES", defaultFixMaxFiles); err != nil {
+		return Config{}, err
+	}
 	if c.ReviewEnabled, err = getBool(get, "REVIEW_ENABLED", false); err != nil {
 		return Config{}, err
 	}
@@ -370,13 +401,13 @@ func loadFrom(get lookup) (Config, error) {
 	if c.ReviewMaxFiles, err = getInt(get, "REVIEW_MAX_FILES", defaultReviewMaxFiles); err != nil {
 		return Config{}, err
 	}
-	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewMaxDiffBytes); err != nil {
+	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewBytes(c)); err != nil {
 		return Config{}, err
 	}
 	if c.ReviewStandards, err = getBool(get, "REVIEW_STANDARDS", true); err != nil {
 		return Config{}, err
 	}
-	if c.ReviewStandardsMaxBytes, err = getInt(get, "REVIEW_STANDARDS_MAX_BYTES", defaultReviewStandardsMaxBytes); err != nil {
+	if c.ReviewStandardsMaxBytes, err = getInt(get, "REVIEW_STANDARDS_MAX_BYTES", defaultStandardsBytes(c)); err != nil {
 		return Config{}, err
 	}
 	if c.ReviewStandardsMaxBytes <= 0 {
@@ -691,13 +722,72 @@ func getFloat(get lookup, key string, def float64) (float64, error) {
 	return f, nil
 }
 
+// defaultOllamaNumCtx is the context window requested from a local Ollama server.
+const defaultOllamaNumCtx = 32768
+
+// approxBytesPerToken converts a token budget to a byte budget for sizing decisions. Code
+// and diffs tokenize denser than prose; 4 is the conventional rough figure and is only used
+// to pick a default, which an explicit env var overrides.
+const approxBytesPerToken = 4
+
+// promptBudgetNumerator/Denominator is the share of the context window a single injected
+// document (the diff, or the standards docs) may occupy. The rest has to hold the lens
+// prompt, the standards menu, and the model's own generated findings — all of which share
+// the same window, which is why the whole window is not available to the input.
+const (
+	promptBudgetNumerator   = 1
+	promptBudgetDenominator = 2
+)
+
+// Hosted-model caps. A Gemini/Vertex context window is orders of magnitude larger than a
+// local one, so the binding constraint there is review usefulness and cost rather than the
+// window: past this much diff a single review stops being worth reading.
+const (
+	hostedReviewMaxDiffBytes      = 1024 * 1024 // 1 MiB
+	hostedStandardsMaxBytes       = 512 * 1024  // 512 KiB
+	defaultLLMMaxConcurrentOllama = 2           // one GPU serializes; more only thrashes VRAM
+	defaultLLMMaxConcurrentHosted = 8           // real parallelism, well inside a normal quota
+)
+
+// defaultReviewBytes is the diff the size gate admits by default. On the local path it is
+// derived from the served context window rather than fixed, because a cap larger than the
+// window is not a degraded review — it is a hard failure: the Ollama adapter sends
+// Truncate=false so an oversized prompt errors rather than being silently chopped.
+func defaultReviewBytes(c Config) int {
+	if c.LLMProvider == ProviderOllama {
+		return c.OllamaNumCtx * approxBytesPerToken * promptBudgetNumerator / promptBudgetDenominator
+	}
+	return hostedReviewMaxDiffBytes
+}
+
+// defaultStandardsBytes is the standards-doc budget, derived the same way: the distiller
+// receives every discovered doc in one prompt, so it is bounded by the same window.
+func defaultStandardsBytes(c Config) int {
+	if c.LLMProvider == ProviderOllama {
+		return c.OllamaNumCtx * approxBytesPerToken * promptBudgetNumerator / promptBudgetDenominator
+	}
+	return hostedStandardsMaxBytes
+}
+
+// defaultLLMMaxConcurrent picks the parallelism the backend can actually use.
+func defaultLLMMaxConcurrent(p Provider) int {
+	if p == ProviderOllama {
+		return defaultLLMMaxConcurrentOllama
+	}
+	return defaultLLMMaxConcurrentHosted
+}
+
+// defaultFixMaxFiles caps the files one fix attempt edits. Chosen for reviewability: a PR
+// past roughly this size stops getting read carefully, and a report naming more files than
+// this usually means a systemic problem a human should look at instead.
+const defaultFixMaxFiles = 50
+
 // Reviewer intake defaults (pilot-tunable).
 const (
-	// defaultReviewMaxFiles / defaultReviewMaxDiffBytes are the size-gate caps a PR must stay
-	// under to be reviewed (measured on the filtered diff). Beyond either, the PR is denied
-	// rather than degraded (spec Decision 4).
-	defaultReviewMaxFiles     = 50
-	defaultReviewMaxDiffBytes = 256 * 1024 // 256 KiB
+	// defaultReviewMaxFiles is the file-count half of the size gate a PR must stay under to
+	// be reviewed (measured on the filtered diff). Beyond it, the PR is denied rather than
+	// degraded (spec Decision 4). The byte half is provider-derived — see defaultReviewBytes.
+	defaultReviewMaxFiles = 50
 
 	// defaultReviewMinConfidence is the phase-1 verify gate: findings below this confidence
 	// are dropped before scoring (spec Decision 13). A local model is biased toward
@@ -722,9 +812,6 @@ const (
 		".cursor/rules/**,.cursorrules,.claude/**,.github/copilot-instructions.md," +
 		".windsurfrules,.windsurf/rules/**,.agents/standards/**,okf/standards/**,CONTRIBUTING.md," +
 		".editorconfig,.golangci.yml,.golangci.yaml"
-
-	// defaultReviewStandardsMaxBytes caps the total standards-doc bytes fed to the distiller.
-	defaultReviewStandardsMaxBytes = 256 * 1024 // 256 KiB
 )
 
 func splitList(s string) []string {

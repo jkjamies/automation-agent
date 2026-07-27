@@ -9,9 +9,10 @@ import (
 
 func TestBuildLLMOllama(t *testing.T) {
 	cfg := config.Config{
-		LLMProvider: config.ProviderOllama,
-		OllamaHost:  "http://localhost:11434",
-		OllamaModel: "gemma4:12b",
+		LLMProvider:  config.ProviderOllama,
+		OllamaHost:   "http://localhost:11434",
+		OllamaNumCtx: 32768,
+		OllamaModel:  "gemma4:12b",
 	}
 	m, err := BuildLLM(context.Background(), cfg)
 	if err != nil {

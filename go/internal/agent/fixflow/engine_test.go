@@ -471,3 +471,61 @@ func TestKickoffFailsWhenDefaultBranchUnresolvable(t *testing.T) {
 		t.Error("no PR should be opened when the base is unknown")
 	}
 }
+
+// A report from a large codebase can name hundreds of files. Editing all of them produces a
+// PR nobody can review and spends the bulk of the run's cost on the fan-out, so an attempt
+// is capped — and says what it left out, because a silent cap reads as "this is everything".
+func TestAttemptCapsFilesAndReportsWhatItDropped(t *testing.T) {
+	remote := seedRemote(t)
+	gh := &fakeGH{}
+	spec := testSpec()
+	var analyzed int
+	spec.Triage = func(_ context.Context, _ model.LLM, _ string) ([]FileWork, error) {
+		work := make([]FileWork, 0, 12)
+		for i := 0; i < 12; i++ {
+			work = append(work, FileWork{Path: fmt.Sprintf("f%02d.go", i), Items: []string{"x"}})
+		}
+		return work, nil
+	}
+	spec.Analyze = func(_ context.Context, in AnalyzeInput) ([]FileEdit, error) {
+		analyzed = len(in.Work)
+		edits := make([]FileEdit, 0, len(in.Work))
+		for _, w := range in.Work {
+			edits = append(edits, FileEdit{Path: w.Path, Content: "package a\n"})
+		}
+		return edits, nil
+	}
+	e := NewEngine(spec, Deps{
+		GH: gh, Notify: &fakeNotifier{}, MaxIter: 3, CITimeout: time.Hour, MaxFiles: 5,
+		CloneURL: func(_, _ string) string { return remote },
+	})
+
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if analyzed != 5 {
+		t.Errorf("analyze received %d files, want the cap of 5", analyzed)
+	}
+	if gh.created == nil {
+		t.Fatal("expected a PR")
+	}
+	// The PR has to name the shortfall; otherwise the reader assumes the report is fully addressed.
+	if !strings.Contains(gh.created.Body, "7 further file(s)") {
+		t.Errorf("PR body must report the 7 dropped files, got:\n%s", gh.created.Body)
+	}
+}
+
+// Under the cap, nothing is dropped and the PR says nothing about a shortfall.
+func TestAttemptUnderCapReportsNoShortfall(t *testing.T) {
+	gh := &fakeGH{}
+	e := NewEngine(testSpec(), Deps{
+		GH: gh, Notify: &fakeNotifier{}, MaxIter: 3, CITimeout: time.Hour, MaxFiles: 5,
+		CloneURL: func(_, _ string) string { return seedRemote(t) },
+	})
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+	if gh.created == nil || strings.Contains(gh.created.Body, "further file(s)") {
+		t.Errorf("an uncapped attempt must not mention a shortfall, got:\n%+v", gh.created)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -146,8 +147,14 @@ func sshAuth(keyPath string) (transport.AuthMethod, error) {
 // base — a PR whose diff carries every commit between the two. Empty keeps the remote's
 // default (used by callers that genuinely just want HEAD).
 //
-// All remote refs are fetched (no single-branch): a retry checks out the agent's existing
-// remote branch via CheckoutRemote, which needs its ref present in this clone.
+// Only branch is fetched. Everything else the agent needs — its own working branch on a
+// retry — is fetched on demand by CheckoutOrCreate, so a repo with hundreds of branches
+// does not pay for all of them on every attempt.
+//
+// The clone is deliberately NOT shallow. go-git cannot push from a shallow repository (any
+// Depth makes the push fail with "object not found", not only depth 1), and pushing is the
+// entire point of this package, so bounding history is not available here — only bounding
+// the number of refs.
 func Clone(ctx context.Context, url, dir, branch string, auth Auth) (*Repo, error) {
 	am, err := authFor(ctx, url, auth)
 	if err != nil {
@@ -156,6 +163,7 @@ func Clone(ctx context.Context, url, dir, branch string, auth Auth) (*Repo, erro
 	opts := &git.CloneOptions{URL: url, Auth: am}
 	if branch != "" {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+		opts.SingleBranch = true
 	}
 	repo, err := git.PlainCloneContext(ctx, dir, false, opts)
 	if err != nil {
@@ -212,17 +220,37 @@ func (r *Repo) CheckoutRemote(branch string) error {
 // kickoff (the execution transport retries any 5xx) begins a brand-new run against a branch
 // a previous attempt already pushed — recreating that branch from the base and pushing it
 // would be a non-fast-forward rejection, and every retry would fail the same way.
-func (r *Repo) CheckoutOrCreate(branch string) (existed bool, err error) {
-	_, err = r.repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), true)
-	switch {
-	case err == nil:
+//
+// The clone is single-branch, so the ref is fetched here rather than assumed present.
+func (r *Repo) CheckoutOrCreate(ctx context.Context, branch string) (existed bool, err error) {
+	found, err := r.fetchBranch(ctx, branch)
+	if err != nil {
+		return false, err
+	}
+	if found {
 		return true, r.CheckoutRemote(branch)
-	case errors.Is(err, plumbing.ErrReferenceNotFound):
-		return false, r.Checkout(branch, true)
+	}
+	return false, r.Checkout(branch, true)
+}
+
+// fetchBranch fetches one remote branch into refs/remotes/origin/<branch>, reporting
+// whether the remote has it. A remote without that branch is the ordinary "first attempt"
+// case, not an error, so it is distinguished from a real transport failure — reading a
+// failure as "absent" would branch the fix off the wrong commit.
+func (r *Repo) fetchBranch(ctx context.Context, branch string) (bool, error) {
+	am, err := authFor(ctx, r.url, r.auth)
+	if err != nil {
+		return false, fmt.Errorf("auth for fetch: %w", err)
+	}
+	spec := gitconfig.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch))
+	err = r.repo.FetchContext(ctx, &git.FetchOptions{RefSpecs: []gitconfig.RefSpec{spec}, Auth: am})
+	switch {
+	case err == nil, errors.Is(err, git.NoErrAlreadyUpToDate):
+		return true, nil
+	case errors.Is(err, git.NoMatchingRefSpecError{}):
+		return false, nil // the remote has no such branch yet
 	default:
-		// Anything else (a corrupt ref, an unreadable store) must not be read as "absent" —
-		// that would branch from the wrong commit and push a fix onto an unintended base.
-		return false, fmt.Errorf("resolve origin/%s: %w", branch, err)
+		return false, fmt.Errorf("fetch origin/%s: %w", branch, err)
 	}
 }
 

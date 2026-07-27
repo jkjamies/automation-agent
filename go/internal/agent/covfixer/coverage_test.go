@@ -128,11 +128,11 @@ func TestLiveCoverage(t *testing.T) {
 	if codeTag == "" {
 		codeTag = tag
 	}
-	llm, err := setup.NewOllamaModel("http://localhost:11434", tag)
+	llm, err := setup.NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {
 		t.Fatal(err)
 	}
-	codeLLM, err := setup.NewOllamaModel("http://localhost:11434", codeTag)
+	codeLLM, err := setup.NewOllamaModel("http://localhost:11434", codeTag, 32768)
 	if err != nil {
 		t.Fatal(err)
 	}

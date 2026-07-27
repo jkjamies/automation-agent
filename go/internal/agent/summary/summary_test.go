@@ -177,7 +177,7 @@ func TestLiveSummaryWorkflow(t *testing.T) {
 	if tag == "" {
 		tag = "gemma4:e4b"
 	}
-	llm, err := setup.NewOllamaModel("http://localhost:11434", tag)
+	llm, err := setup.NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {
 		t.Fatal(err)
 	}
