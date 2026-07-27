@@ -135,18 +135,43 @@ type findingWire struct {
 	Confidence float64 `json:"confidence"`
 }
 
-// parseFindings extracts findings from a category agent's raw output. Local models wrap JSON
-// in prose or ``` fences and occasionally emit nothing, and the agents deliberately do not
-// set OutputSchema (schema validation errors the run on a malformed body, while the spec
-// wants malformed → no findings) — so this is best-effort by design: it pulls the first JSON
-// array out of the text and tolerates a malformed body by returning no findings (empty =
-// success, spec Decisions 2/13). It never errors, so a garbled response degrades to "no
-// findings for this lens" rather than failing the whole review.
+// parseFindings extracts findings from a category agent's raw output. Local models wrap JSON in
+// prose or ``` fences and occasionally emit nothing, and the agents deliberately do not set
+// OutputSchema (schema validation errors the run on a malformed body, while the spec wants
+// malformed → no findings) — so this is best-effort by design and never errors: a garbled
+// response degrades to "no findings for this lens" (empty = success, spec Decisions 2/13).
+//
+// It scans for the first array that yields a *usable* finding, not merely the first that
+// decodes. The distinction matters because JSON is permissive about extra fields: an unrelated
+// array of objects — a lens that prefaces its findings with, say, `[{"path":"a.go"}]` — decodes
+// perfectly well into findingWire records with every field zero. Committing to that array would
+// leave every element message-less, so the lens would report nothing wrong and the review would
+// call the code clean. Requiring a usable element makes such an array simply not a match, and
+// the scan continues to the real one. (parseRules already worked this way.)
+//
+// Scanning for a decodable array — rather than slicing the first '[' to the last ']' — tolerates
+// fences, prose, and stray brackets without over-grabbing: a bracketed phrase like "[see below]"
+// fails to decode and the scan moves on. json.Decoder reads only the first value, so trailing
+// prose is ignored.
 func parseFindings(raw string) []Finding {
-	wires := decodeFirstFindingArray(raw)
-	if len(wires) == 0 {
-		return nil
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '[' {
+			continue
+		}
+		var wires []findingWire
+		if err := json.NewDecoder(strings.NewReader(raw[i:])).Decode(&wires); err != nil {
+			continue
+		}
+		if out := toFindings(wires); len(out) > 0 {
+			return out
+		}
 	}
+	return nil
+}
+
+// toFindings converts decoded wire records, dropping the unusable ones. A finding with no
+// message says nothing a reviewer could act on, so it is not a finding.
+func toFindings(wires []findingWire) []Finding {
 	out := make([]Finding, 0, len(wires))
 	for _, w := range wires {
 		msg := strings.TrimSpace(w.Message)
@@ -166,29 +191,6 @@ func parseFindings(raw string) []Finding {
 		})
 	}
 	return out
-}
-
-// decodeFirstFindingArray scans raw for the first '[' that begins a JSON array decoding cleanly
-// into the findings shape, returning its elements. Scanning for a *decodable* array (rather than
-// slicing the first '[' to the last ']') tolerates ``` fences, prose, and stray brackets without
-// over-grabbing: a bracketed phrase like "[see below]" fails to decode and the scan moves on. A
-// valid but empty array is skipped in case a populated one follows; if none decodes, it returns
-// nil (best-effort: empty = success). json.Decoder reads just the first value, so trailing prose
-// after the array is ignored.
-func decodeFirstFindingArray(raw string) []findingWire {
-	for i := 0; i < len(raw); i++ {
-		if raw[i] != '[' {
-			continue
-		}
-		var wires []findingWire
-		if err := json.NewDecoder(strings.NewReader(raw[i:])).Decode(&wires); err != nil {
-			continue
-		}
-		if len(wires) > 0 {
-			return wires
-		}
-	}
-	return nil
 }
 
 // clampThreshold normalizes a confidence *threshold* into [0,1]. Unlike clampConfidence (which
