@@ -84,6 +84,27 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	// Confirm the configured Ollama tags actually exist before accepting any work. Building a
+	// model only builds a client, so a tag that was never pulled — or a family renamed between
+	// releases — would first fail on the initial generation, after a webhook was accepted, a
+	// task dispatched, and a repository cloned.
+	//
+	// The two failure modes get opposite treatment. A server that is up but lacks the model is
+	// a configuration error: every run will fail the same way, so stop now with a message
+	// naming the tag. A server that is simply not up yet is ordinary in local development
+	// (Ollama started after the service, or not at all for a read-only flow), so warn and
+	// continue rather than making startup order matter.
+	if cfg.LLMProvider == config.ProviderOllama {
+		err := setup.VerifyOllamaModels(sigCtx, cfg.OllamaHost, cfg.OllamaModel, cfg.OllamaCodeModel)
+		switch {
+		case errors.Is(err, setup.ErrOllamaUnreachable):
+			logger.Warn("could not reach Ollama to verify the configured models; continuing, but any model call will fail until it is up",
+				"host", cfg.OllamaHost, "err", err)
+		case err != nil:
+			return err
+		}
+	}
+
 	llm, err := setup.BuildLLM(sigCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("build llm: %w", err)

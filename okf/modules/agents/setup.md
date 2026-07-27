@@ -24,8 +24,19 @@ service. A proxy or compatibility shim between the app and the model was rejecte
 adds a hop and a deployment, and translates tool calls lossily, while the `BuildLLM`
 seam already makes switching providers a config change rather than a code change.
 Model sizing splits by task: code reasoning and code changes use the larger code model
-(`OLLAMA_CODE_MODEL`, 26 B class); summarization and lighter reasoning use the base
-model (`OLLAMA_MODEL`, 12 B class).
+(`OLLAMA_CODE_MODEL`); summarization and lighter reasoning use the base model
+(`OLLAMA_MODEL`). The default tags live in one place — `config.DefaultOllamaModel` /
+`DefaultOllamaCodeModel` — because a tag is a moving target (a family gets a new generation, a
+size is renamed, a tag is withdrawn) and it previously appeared in the loader, three packages'
+live tests, `.env.example`, and the docs.
+
+`VerifyOllamaModels` closes the gap that made a stale tag expensive: `NewOllamaModel` only
+builds a client, so a tag that was never pulled constructs fine and first fails on the initial
+generation — after a webhook was accepted, a task dispatched, and a repository cloned. The
+service lists the server's models at startup instead. A reachable server missing a tag fails the
+boot, naming the tag, the `ollama pull` that fixes it, and what the server does have; a server
+that is not up yet only warns, since starting Ollama after the service is ordinary and startup
+order should not matter. Skipped entirely under `LLM_PROVIDER=gemini`.
 
 ## Flow
 
@@ -46,6 +57,7 @@ flowchart TD
 ## Implementation layout
 
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
+- `ollama_preflight.go` — `VerifyOllamaModels(ctx, host, tags...)`: the startup check that the configured tags are pulled. `ErrOllamaUnreachable` separates "server is down" (warn) from "server lacks the model" (fail), which is the whole point — the two want opposite responses.
 - `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama client. Converts genai content ⇄ Ollama chat messages and aggregates streaming chunks. The ADK ships no built-in Ollama model, so this adapter provides one.
 - `gemini.go` — the Gemini-backed `model.LLM` for the cloud deployment.
 - `prompt.go` — `Prompts`, a markdown loader over an embedded filesystem (each agent embeds its own `prompts/` dir).

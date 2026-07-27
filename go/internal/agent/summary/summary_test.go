@@ -12,6 +12,7 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/config"
 	"automation-agent/internal/githubapi"
 	"automation-agent/internal/notify"
 )
@@ -175,7 +176,7 @@ func TestLiveSummaryWorkflow(t *testing.T) {
 	}
 	tag := os.Getenv("OLLAMA_MODEL")
 	if tag == "" {
-		tag = "gemma4:e4b"
+		tag = config.DefaultOllamaModel
 	}
 	llm, err := setup.NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {

@@ -28,11 +28,17 @@ agent locally without asking anyone.
 
 - **Go 1.26**.
 - **[Ollama](https://ollama.com)** running locally with a Gemma model (the default local
-  LLM). Pull a model and check it's reachable:
+  LLM). Pull a model and check what the server actually has:
   ```bash
   ollama pull gemma4:12b        # the default OLLAMA_MODEL (gemma4:26b for code changes)
-  cd go && make ollama-check    # curls $OLLAMA_HOST/api/tags
+  cd go && make ollama-check    # reachability + the list of models pulled
   ```
+  **Model tags are a moving target.** A family gets a new generation, a size is renamed, a tag
+  is withdrawn — so treat the defaults above as a starting point and let `make ollama-check`
+  tell you what your server has. If the configured tag is not among them, `make run` refuses to
+  start and names both the tag and the `ollama pull` that fixes it (see
+  [LLM selection](#llm-selection--llm_provider)); it does not wait to discover this on the first
+  webhook.
   (Or skip Ollama and point at Vertex/AI-Studio Gemini — see [LLM selection](#llm-selection--llm_provider).)
 - A **`.env`** file — copy the starting point and edit:
   ```bash
@@ -84,8 +90,17 @@ attempts, params`) live:
 | `ollama` (default) | Local models. `OLLAMA_HOST` (default `http://localhost:11434`), `OLLAMA_MODEL` (`gemma4:12b`, used for triage/explore/summary), `OLLAMA_CODE_MODEL` (`gemma4:26b`, for code changes; falls back to `OLLAMA_MODEL`). |
 | `gemini` | Vertex or AI Studio. Set `GEMINI_MODEL` (+ `GEMINI_CODE_MODEL`), and the SDK-owned vars: Vertex → `GOOGLE_GENAI_USE_VERTEXAI=TRUE` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` + ADC; AI Studio → `GOOGLE_GENAI_USE_VERTEXAI=FALSE` + `GOOGLE_API_KEY`. |
 
-> The 12b/26b split is deliberate: summarization/triage uses the smaller base model;
-> code reasoning and edits use the larger code model.
+> The two-tier split is deliberate: summarization/triage uses the smaller base model; code
+> reasoning and edits use the larger code model. The sizes in the defaults are a starting
+> point, not a contract — pick whatever your hardware runs well.
+
+**Startup verification (ollama only).** On boot the service lists the server's models and
+confirms both configured tags are present. A reachable server that lacks one is a configuration
+error and startup **fails**, naming the tag, the `ollama pull` that fixes it, and the models the
+server does have — because every run would otherwise fail the same way, and only after a webhook
+had been accepted, a task dispatched, and a repository cloned. A server that is simply *not up
+yet* only **warns**: starting Ollama after the service is ordinary, and startup order should not
+matter. Nothing is checked under `LLM_PROVIDER=gemini`.
 
 ### Environment variables (full reference)
 
@@ -100,8 +115,8 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | `OLLAMA_NUM_CTX` | `32768` | context window per Ollama call; also the budget the reviewer's size gate derives from. Bounded (1 … 2^24) because the derived byte cap would otherwise overflow, and a non-positive cap turns the size gate off rather than failing |
 | `LLM_MAX_CONCURRENT` | `2` (ollama) / `8` (gemini) | max model calls in flight process-wide |
 | `FIX_MAX_FILES` | `50` | max files one fix attempt edits; the rest are reported, not silently dropped |
-| `OLLAMA_MODEL` | `gemma4:12b` | triage / explore / summary |
-| `OLLAMA_CODE_MODEL` | `gemma4:26b` | code changes; blank → `OLLAMA_MODEL` |
+| `OLLAMA_MODEL` | `gemma4:12b` | triage / explore / summary; verified at startup |
+| `OLLAMA_CODE_MODEL` | `gemma4:26b` | code changes; blank → `OLLAMA_MODEL`; verified at startup |
 | `GEMINI_MODEL` / `GEMINI_CODE_MODEL` | — | used when `LLM_PROVIDER=gemini`; code blank → base |
 | `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_API_KEY` | — | **SDK-owned** (not in `Config`). Vertex: `=TRUE`+project+location+ADC. AI Studio: `=FALSE`+`GOOGLE_API_KEY`. |
 | **Sessions (durable suspend/resume)** | | |

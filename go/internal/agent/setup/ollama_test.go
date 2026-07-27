@@ -16,6 +16,8 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
+
+	"automation-agent/internal/config"
 )
 
 // fakeOllama serves the given chunks as newline-delimited JSON from /api/chat,
@@ -176,7 +178,7 @@ func TestLiveOllama(t *testing.T) {
 	}
 	tag := os.Getenv("OLLAMA_MODEL")
 	if tag == "" {
-		tag = "gemma4:e4b"
+		tag = config.DefaultOllamaModel
 	}
 
 	m, err := NewOllamaModel(host, tag, 32768)
@@ -217,7 +219,7 @@ func TestLiveOllamaTools(t *testing.T) {
 	}
 	tag := os.Getenv("OLLAMA_MODEL")
 	if tag == "" {
-		tag = "gemma4:12b"
+		tag = config.DefaultOllamaModel
 	}
 	llm, err := NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {
