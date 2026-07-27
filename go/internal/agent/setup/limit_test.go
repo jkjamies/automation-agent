@@ -16,7 +16,17 @@ import (
 type concurrencyProbe struct {
 	inFlight atomic.Int64
 	peak     atomic.Int64
-	hold     time.Duration
+	// hold and release are alternative ways to keep a generation in flight. hold sleeps for a
+	// fixed duration; release blocks until the test closes it. Prefer release wherever the test
+	// needs the generation to still be running at a known point — a sleep only makes that
+	// likely, and "likely" is what makes a test flaky on a loaded CI runner.
+	hold    time.Duration
+	release chan struct{}
+	// entered, when non-nil, receives once per generation at the moment it starts — which is
+	// *after* the limiter admitted it. That makes "the slot is taken" an observed fact. A
+	// signal sent from the calling goroutine instead would only prove the goroutine was
+	// scheduled, which is not the same thing and is exactly what used to flake here.
+	entered chan struct{}
 }
 
 func (p *concurrencyProbe) Name() string { return "probe" }
@@ -30,7 +40,14 @@ func (p *concurrencyProbe) GenerateContent(context.Context, *model.LLMRequest, b
 				break
 			}
 		}
-		time.Sleep(p.hold) // overlap window: without a limit these all pile up here
+		if p.entered != nil {
+			p.entered <- struct{}{}
+		}
+		if p.release != nil {
+			<-p.release // stay in flight until the test says otherwise
+		} else {
+			time.Sleep(p.hold) // overlap window: without a limit these all pile up here
+		}
 		p.inFlight.Add(-1)
 		yield(FinalTextResponse("ok"), nil)
 	}
@@ -60,10 +77,31 @@ func TestLLMLimiterBoundsConcurrency(t *testing.T) {
 	if peak := probe.peak.Load(); peak > limit {
 		t.Errorf("peak concurrency = %d, want at most %d", peak, limit)
 	}
-	// And it must not have serialized everything — a limiter that admits one at a time would
-	// pass the check above while destroying throughput.
-	if peak := probe.peak.Load(); peak < 2 {
-		t.Errorf("peak concurrency = %d; the limiter should still allow real parallelism", peak)
+	// Deliberately no lower-bound assertion here: whether these 20 callers actually overlap is
+	// the scheduler's business, so asserting it would be a coin flip on a loaded runner. That
+	// the limiter still permits real parallelism is proven deterministically below.
+}
+
+// A limiter that admitted one caller at a time would satisfy the upper bound above while
+// destroying throughput, so prove the parallelism directly: exactly `limit` generations must be
+// able to sit in flight simultaneously. The release channel makes this a fact rather than a race
+// the scheduler usually — but not always — wins.
+func TestLLMLimiterAdmitsUpToTheLimitAtOnce(t *testing.T) {
+	const limit = 3
+	release := make(chan struct{})
+	defer close(release)
+	probe := &concurrencyProbe{entered: make(chan struct{}, limit), release: release}
+	limited := NewLLMLimiter(limit).Wrap(probe)
+
+	for i := 0; i < limit; i++ {
+		go drain(limited.GenerateContent(context.Background(), &model.LLMRequest{}, false))
+	}
+	for i := 0; i < limit; i++ {
+		select {
+		case <-probe.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d generations were admitted concurrently", i, limit)
+		}
 	}
 }
 
@@ -92,16 +130,19 @@ func TestLLMLimiterHoldsSlotForWholeGeneration(t *testing.T) {
 // A caller whose context expires while queued gets its error rather than blocking. Under a
 // burst the queue can be long, and a dispatch deadline or a shutdown must still cut through.
 func TestLLMLimiterRespectsContextWhileQueued(t *testing.T) {
-	probe := &concurrencyProbe{hold: 50 * time.Millisecond}
+	// Occupy the only slot, and hold it open until this test is done rather than for a fixed
+	// duration the queued caller might outlive.
+	release := make(chan struct{})
+	defer close(release)
+	probe := &concurrencyProbe{entered: make(chan struct{}, 1), release: release}
 	limited := NewLLMLimiter(1).Wrap(probe)
 
-	// Occupy the only slot.
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		drain(limited.GenerateContent(context.Background(), &model.LLMRequest{}, false))
-	}()
-	<-started
+	go drain(limited.GenerateContent(context.Background(), &model.LLMRequest{}, false))
+	// Wait for the probe to report it is running. The limiter admits before the probe starts,
+	// so this proves the slot is held; signalling before calling GenerateContent (as this test
+	// used to) proved only that the goroutine had been scheduled, and when the caller below won
+	// that race it found the slot free and never queued at all.
+	<-probe.entered
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
