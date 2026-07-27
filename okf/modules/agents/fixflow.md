@@ -52,7 +52,7 @@ flowchart TD
     C -->|"failure & attempts < MaxIter"| RT["resume run -> apply_fix again -> re-park (attempts+1)"]
     RT --> SUS
     TO["CITimeout timer fires"] -.-> TON["onTimeout: claim + summary + clear"]
-    SW["/internal/sweep -> SweepTimeouts (durable catch-all)"] -.-> TON
+    SW["/internal/sweep -> SweepTimeouts (notifies) + SweepOrphans (silent)"] -.-> TON
 ```
 
 ## Implementation layout

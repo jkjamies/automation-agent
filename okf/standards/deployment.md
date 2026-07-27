@@ -49,9 +49,12 @@ the repo-root `DEPLOYMENT.md` is a thin checklist pointer back here.
 The fix loop opens a PR, **suspends** waiting for CI, and **resumes** when GitHub posts
 the `check_run` result. With a durable backend (`sqlite` locally, **`firestore`** in prod)
 a restart no longer strands in-flight runs — which is what lets Cloud Run scale toward
-zero. Eager terminal cleanup deletes both the park record and the session on completion,
-so a durable backend doesn't leak. GitHub holds the durable PR artifacts; the agent
-doesn't scan them for recovery.
+zero. Eager terminal cleanup deletes the session and then the park record on completion, so
+a durable backend doesn't leak — except when the session delete fails, where the record is
+deliberately kept: it is the only thing that leads back to the session, so dropping it would
+strand a session no sweep could find. That record is then reaped by the orphan pass on
+`/internal/sweep`. GitHub holds the durable PR artifacts; the agent doesn't scan them for
+recovery.
 
 ### HTTP hooks (endpoints)
 

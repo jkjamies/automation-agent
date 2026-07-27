@@ -56,7 +56,7 @@ footprint for a workload that idles most of the day.
   guarded by a dedicated test). `sqlite` is durable-local; `memory` is the
   zero-dependency default (a restart strands parked runs).
 - The **ParkStore** — the park record: `owner/repo#pr → session id`, the parked interrupt
-  id, the attempt count, `parked_at`, and the run's serialized params (never
+  id, the attempt count, `updated_at`, and the run's serialized params (never
   model-controlled, so nothing in a run's history can redirect which repo or branch is
   edited). Its **atomic single-winner claim** (resolve-by-PR-key / sweep) is the only
   guard against stale or duplicate CI webhooks — a run resolves at most once.
@@ -64,7 +64,12 @@ footprint for a workload that idles most of the day.
 Time while parked is also infrastructure's job. Two layers free a run whose CI never
 reports: a soft per-run `CI_TIMEOUT` timer (in-process, lost on restart) and the durable
 catch-all sweep (`POST /internal/sweep`, driven by Cloud Scheduler), which claims stale
-records atomically and notifies for human review.
+*parked* records atomically and notifies for human review.
+
+That endpoint runs a second, different pass as well — `SweepOrphans`, which reaps records
+nothing can resolve and notifies **no one**. The distinction is the point: a parked run
+timing out means a human is waiting on a PR, while an orphan is a run that is already dead.
+It is described under [Terminal hygiene](#terminal-hygiene) below.
 
 ## Terminal hygiene
 

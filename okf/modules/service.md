@@ -73,7 +73,7 @@ flowchart TD
     CLAIM -->|"late / duplicate / already-claimed / unknown"| NOOP2["no-op (resolved at most once)"]
 
     subgraph Store["Durable park/session store — SESSION_BACKEND: memory | sqlite | firestore"]
-        PRK["PRKey index: owner/repo#pr → session id"] --> REC["ParkRecord{SessionID, PRKey, CallID, Attempts, Params, ParkedAt}"]
+        PRK["PRKey index: owner/repo#pr → session id"] --> REC["ParkRecord{SessionID, Workflow, PRKey, CallID, Attempts, Params, UpdatedAt}"]
         REC --> SESS["ADK session (suspended run history)"]
     end
     CLAIM -->|"PRKey → session id"| PRK
@@ -86,7 +86,7 @@ flowchart TD
     SUS -.->|"next check_run for this PR"| CR
 
     TO["per-run CI_TIMEOUT (soft in-process timer, lost on restart)"] -.->|"CI never reports"| FREE["onTimeout: claim + summary + clear"]
-    SW["/internal/sweep → SweepTimeouts (durable catch-all)"] -.-> FREE
+    SW["/internal/sweep → SweepTimeouts (notifies) + SweepOrphans (silent)"] -.-> FREE
 
     OK --> Chat[("Slack / Teams")]
     REV --> Chat
