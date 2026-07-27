@@ -98,6 +98,10 @@ type Deps struct {
 	Provider  gitrepo.TokenProvider
 	MaxIter   int
 	CITimeout time.Duration
+	// OrphanTTL bounds how long a run that can never be resolved (created but never parked,
+	// or displaced by a redelivered kickoff) lingers before the sweep reaps it. Defaults to
+	// defaultOrphanTTL.
+	OrphanTTL time.Duration
 	// PRLabel is the single human-facing label applied to every agent PR on creation
 	// (AGENT_PR_LABEL). Write-only — PR lookup is by branch, so it never gates behavior.
 	PRLabel string
@@ -145,6 +149,9 @@ func NewEngine(spec Spec, d Deps) *Engine {
 	if d.CITimeout <= 0 {
 		d.CITimeout = 90 * time.Minute
 	}
+	if d.OrphanTTL <= 0 {
+		d.OrphanTTL = defaultOrphanTTL
+	}
 	if d.Author.Name == "" {
 		d.Author = gitrepo.Author{Name: "automation-agent", Email: "automation-agent@users.noreply.github.com"}
 	}
@@ -166,9 +173,19 @@ func (e *Engine) CheckName() string { return e.spec.CheckName }
 // Name is the engine's workflow name ("lint" | "coverage"), used for logging.
 func (e *Engine) Name() string { return e.spec.Name }
 
+// defaultOrphanTTL is the fallback for Deps.OrphanTTL. Generous on purpose: an orphan costs
+// storage, never correctness, so waiting a day to reap one is free, while reaping too eagerly
+// would delete a run that is merely mid-apply.
+const defaultOrphanTTL = 24 * time.Hour
+
 // SweepTimeouts resolves this engine's parked runs whose CI never reported — the durable
 // timeout catch-all driven by Cloud Scheduler via /internal/sweep.
 func (e *Engine) SweepTimeouts(ctx context.Context) error { return e.driver.SweepTimeouts(ctx) }
+
+// SweepOrphans deletes this engine's runs that nothing can ever resolve, freeing the park
+// record (which holds the whole kickoff report) and the ADK session. Driven by Cloud
+// Scheduler via /internal/sweep alongside SweepTimeouts.
+func (e *Engine) SweepOrphans(ctx context.Context) error { return e.driver.SweepOrphans(ctx) }
 
 // Kickoff handles a kickoff envelope: it starts a suspended fix run (apply → await CI).
 func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {

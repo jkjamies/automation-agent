@@ -69,9 +69,19 @@ records atomically and notifies for human review.
 ## Terminal hygiene
 
 Every terminal path — success, retries exhausted, timeout, apply failure, clean/no-work —
-sends a status-aware summary to Slack/Teams and then **clears the run**: the park record
-is deleted and the ADK session is deleted, so durable backends never accumulate finished
-runs.
+sends a status-aware summary to Slack/Teams and then **clears the run**: the ADK session is
+deleted and then the park record, so durable backends never accumulate finished runs. That
+order is deliberate. The record is the only thing that leads back to the session, so
+deleting it first and then failing would strand a session nothing references; keeping the
+record when the session delete fails leaves a marker the orphan sweep retries.
+
+Not every run reaches a terminal path, and the ones that don't are invisible to all of the
+above: a run whose instance was reclaimed mid-apply never parked, and a run displaced by a
+redelivered kickoff had its PR key taken by the newer run. No webhook can resolve either,
+and the timeout sweep only looks at *parked* records. So the same `/internal/sweep` also
+reaps records that are unparked and older than `ORPHAN_TTL`. It notifies no one — an orphan
+is a run that is already dead, not a human waiting on a PR — and it is worth doing because a
+park record carries the whole kickoff report, so leaking them is not free.
 
 ## Why this line is permanent
 

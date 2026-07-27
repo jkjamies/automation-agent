@@ -23,7 +23,12 @@ type parkRow struct {
 	CallID    string
 	Attempts  int
 	Params    string
-	ParkedAt  time.Time
+	// autoUpdateTime:false is load-bearing, not decoration. `UpdatedAt` is a magic field
+	// name to gorm, which otherwise overwrites it with the current time on every save —
+	// silently discarding the caller's value, so a record could never be written as already
+	// stale and this backend would diverge from memory/firestore. The conformance suite
+	// catches it if the tag is ever dropped.
+	UpdatedAt time.Time `gorm:"autoUpdateTime:false"`
 }
 
 func (parkRow) TableName() string { return "parked_runs" }
@@ -119,7 +124,7 @@ func (s *sqliteParkStore) ResolveByPRKey(ctx context.Context, workflow, prKey st
 func (s *sqliteParkStore) Sweep(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
 	db := s.db.WithContext(ctx)
 	var rows []parkRow
-	if err := db.Where("workflow = ? AND pr_key <> '' AND parked_at < ?", workflow, cutoff).Find(&rows).Error; err != nil {
+	if err := db.Where("workflow = ? AND pr_key <> '' AND updated_at < ?", workflow, cutoff).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ParkRecord, 0, len(rows))
@@ -156,7 +161,7 @@ func (s *sqliteParkStore) claim(db *gorm.DB, row parkRow) (ParkRecord, bool, err
 // cleared with a false timeout.
 func (s *sqliteParkStore) claimStale(db *gorm.DB, row parkRow, cutoff time.Time) (ParkRecord, bool, error) {
 	return execClaim(db.Model(&parkRow{}).
-		Where("session_id = ? AND pr_key = ? AND parked_at < ?", row.SessionID, row.PRKey, cutoff), row)
+		Where("session_id = ? AND pr_key = ? AND updated_at < ?", row.SessionID, row.PRKey, cutoff), row)
 }
 
 func execClaim(q *gorm.DB, row parkRow) (ParkRecord, bool, error) {
@@ -173,6 +178,20 @@ func execClaim(q *gorm.DB, row parkRow) (ParkRecord, bool, error) {
 
 func (s *sqliteParkStore) Delete(ctx context.Context, sessionID string) error {
 	return s.db.WithContext(ctx).Delete(&parkRow{}, "session_id = ?", sessionID).Error
+}
+
+func (s *sqliteParkStore) SweepOrphans(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
+	var rows []parkRow
+	if err := s.db.WithContext(ctx).
+		Where("workflow = ? AND pr_key = '' AND updated_at < ?", workflow, cutoff).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ParkRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.toRecord())
+	}
+	return out, nil
 }
 
 func (s *sqliteParkStore) ParkedCount(ctx context.Context, workflow string) (int, error) {

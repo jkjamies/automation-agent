@@ -22,7 +22,7 @@ type firestoreParkDoc struct {
 	CallID    string    `firestore:"call_id"`
 	Attempts  int       `firestore:"attempts"`
 	Params    string    `firestore:"params"`
-	ParkedAt  time.Time `firestore:"parked_at"`
+	UpdatedAt time.Time `firestore:"updated_at"`
 }
 
 // firestoreParkDoc mirrors ParkRecord field for field (only the firestore tags differ), so
@@ -167,7 +167,7 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, workflow string, cutoff 
 		if d.Workflow != workflow {
 			continue // another engine's run: not ours to sweep
 		}
-		if !d.ParkedAt.IsZero() && d.ParkedAt.Before(cutoff) {
+		if !d.UpdatedAt.IsZero() && d.UpdatedAt.Before(cutoff) {
 			candidates = append(candidates, stale{d.SessionID, d.PRKey})
 		}
 	}
@@ -211,7 +211,7 @@ func (s *firestoreParkStore) claimStaleBySession(ctx context.Context, workflow, 
 		if err := snap.DataTo(&d); err != nil {
 			return err
 		}
-		if d.Workflow != workflow || d.PRKey != prKey || d.ParkedAt.IsZero() || !d.ParkedAt.Before(cutoff) {
+		if d.Workflow != workflow || d.PRKey != prKey || d.UpdatedAt.IsZero() || !d.UpdatedAt.Before(cutoff) {
 			return nil // another workflow's, or resolved and/or re-parked since the scan
 		}
 		if err := tx.Update(snap.Ref, []firestore.Update{{Path: "pr_key", Value: ""}}); err != nil {
@@ -248,6 +248,31 @@ func claimDoc(tx *firestore.Transaction, snap *firestore.DocumentSnapshot) (Park
 func (s *firestoreParkStore) Delete(ctx context.Context, sessionID string) error {
 	_, err := s.col().Doc(sessionID).Delete(ctx)
 	return err
+}
+
+// SweepOrphans queries the single indexed field (pr_key == "") and narrows by workflow and
+// age in Go, so no composite index is needed — the same approach the other queries here take.
+func (s *firestoreParkStore) SweepOrphans(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
+	it := s.col().Where("pr_key", "==", "").Documents(ctx)
+	defer it.Stop()
+	var out []ParkRecord
+	for {
+		snap, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var d firestoreParkDoc
+		if err := snap.DataTo(&d); err != nil {
+			return nil, err
+		}
+		if d.Workflow == workflow && !d.UpdatedAt.IsZero() && d.UpdatedAt.Before(cutoff) {
+			out = append(out, d.toRecord())
+		}
+	}
+	return out, nil
 }
 
 func (s *firestoreParkStore) ParkedCount(ctx context.Context, workflow string) (int, error) {

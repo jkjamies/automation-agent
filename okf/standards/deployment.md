@@ -28,7 +28,7 @@ the repo-root `DEPLOYMENT.md` is a thin checklist pointer back here.
 ```
  GitHub repo ──webhook(HMAC)──► POST /webhooks/{lint,coverage,github}
  Cloud Scheduler ─bearer─►       POST /internal/cron/daily            (daily digest)
- Cloud Scheduler ─bearer─►       POST /internal/sweep                 (timeout catch-all)
+ Cloud Scheduler ─bearer─►       POST /internal/sweep                 (timeout catch-all + orphan GC)
                                          │
                               managed API gateway   (single ingress: authn, rate-limit, routing)
                                          │
@@ -62,7 +62,7 @@ doesn't scan them for recovery.
 | `POST /webhooks/coverage` | HMAC | kick off a coverage fix |
 | `POST /webhooks/github` | HMAC | `check_run` event → resume the parked fix |
 | `POST /internal/cron/daily` | Bearer (`INTERNAL_TOKEN`) | fire the daily commit digest |
-| `POST /internal/sweep` | Bearer | resolve runs whose CI never reported within `CI_TIMEOUT` |
+| `POST /internal/sweep` | Bearer | resolve runs whose CI never reported within `CI_TIMEOUT`, and reap runs nothing can resolve (`ORPHAN_TTL`) |
 | `POST /internal/dispatch` | Bearer | Cloud Tasks worker — run one queued workflow **in-request** (see [Execution transport](#execution-transport-webhook--dispatcher)) |
 
 `/internal/*` are **disabled (404)** unless `INTERNAL_TOKEN` is set. HMAC verification is
@@ -140,6 +140,7 @@ The vars that matter specifically for a **cloud** deploy:
 | `DISPATCH_URL` | full URL of `/internal/dispatch` the queue POSTs to (e.g. `https://<service>/internal/dispatch`); validated to end in `/internal/dispatch` |
 | `TASKS_DISPATCH_DEADLINE` | `30m` (default & max) — explicit Cloud Tasks per-task dispatch deadline; range `15s`..`30m` (unset queue default is only 10m) |
 | `CI_TIMEOUT` | `90m` (default) — per-run CI wait before the timer/sweep frees a parked run |
+| `ORPHAN_TTL` | `24h` (default) — how long a run nothing can resolve lingers before the sweep reaps it; must exceed `TASKS_DISPATCH_DEADLINE` |
 | `GITHUB_APP_ID` / `GITHUB_APP_INSTALLATION_ID` | **set** — the production auth path (GitHub App installation tokens). One pinned installation per deployment (single org) |
 | `GITHUB_APP_PRIVATE_KEY` | **set** — the App private-key PEM, from Secret Manager (a flattened `\n` is auto-restored) |
 | `GITHUB_TOKEN`, notifier URLs | notifier URLs **set** — from Secret Manager. `GITHUB_TOKEN` is the local-dev fallback only; in App mode it is unused |
@@ -223,7 +224,7 @@ startup error, never a silent PAT fallback.
    | Job | Target | Schedule (cron) |
    |---|---|---|
    | daily digest | `POST /internal/cron/daily` | `0 9 * * *` |
-   | timeout sweep | `POST /internal/sweep` | e.g. `*/15 * * * *` |
+   | timeout sweep + orphan GC | `POST /internal/sweep` | e.g. `*/15 * * * *` |
 
 Cloud Scheduler is the only trigger — the service runs no in-process cron, so there is no
 double-fire to guard against and `min-instances=0` (scale-to-zero) is safe.
@@ -288,12 +289,6 @@ deployment shapes:
 
 These pieces harden a deployment but are not required to stand one up:
 
-- **Orphan-session GC.** The `/internal/sweep` business timeout only sees runs in
-  `parked_runs`. A session created but **never parked** (a crash between session-create
-  and park) has no park record and leaks (firestore especially). A cleanup hook would
-  delete sessions whose `updated_at` is older than a stale threshold
-  (≈ `CI_TIMEOUT × MAX_ITERATIONS` + margin, ~6–24h), working for firestore + sqlite, riding
-  `/internal/sweep` or a Firestore native TTL policy on `_sessions`.
 - **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - **OIDC instead of a shared bearer** for `/internal/*` (app-validated ID token).
 

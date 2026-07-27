@@ -19,7 +19,7 @@ The CI wait is a real ADK **IsLongRunning** suspend/resume: the `Driver` runs a 
 
 A run whose CI never reports is freed two ways: a soft per-run `CITimeout` timer (in-process, lost on restart) and the durable `SweepTimeouts` catch-all (driven by `/internal/sweep`). `ResolveByPRKey`/`Sweep` claim a run atomically (single winner), so a late/duplicate webhook racing the timer/sweep resolves it at most once.
 
-Terminal resolution (`clear`) deletes both the park record and the ADK session (`LongRunDriver.DeleteSession`) so durable backends don't accumulate finished runs.
+Terminal resolution (`clear`) deletes the ADK session (`LongRunDriver.DeleteSession`) and then the park record, so durable backends don't accumulate finished runs. The session goes first: the record is what leads back to it, so a failed session delete keeps the record as a marker the orphan sweep retries rather than stranding a session nothing references. Runs that never reach a terminal path — reclaimed mid-apply, or displaced by a redelivered kickoff — are reaped by `SweepOrphans` on the same `/internal/sweep` schedule, silently.
 
 **Once a run is underway, every terminal path notifies.** Success, retries exhausted, timeout, clean/no-work, an attempt that failed outright, *and* a run whose drive itself failed (the session backend being unavailable, say) all reach a human. This is the reason the failure paths route through one helper rather than returning bare errors: by the time most failures happen the attempt has already pushed a commit and opened a PR, and the dispatcher only logs — so a run dropped without a notification leaves that PR with nobody watching it.
 

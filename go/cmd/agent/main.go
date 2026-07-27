@@ -154,7 +154,8 @@ func run(logger *slog.Logger) error {
 	// Fix engines (event-driven; work without a notifier — they just won't post results).
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Provider: provider,
-		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, Repos: cfg.Repos, Log: logger,
+		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, OrphanTTL: cfg.OrphanTTL,
+		Repos: cfg.Repos, Log: logger,
 		PRLabel:        cfg.AgentPRLabel,
 		SessionService: sessions, ParkStore: parkStore,
 		GitTransport: cfg.GitTransport, SSHKey: cfg.GitSSHKey,
@@ -221,11 +222,21 @@ func run(logger *slog.Logger) error {
 			// Sweep every engine even if one fails, so a single engine's error does not
 			// strand the others' timed-out runs for this pass (mirrors ciResumeHandler).
 			// The joined error still 500s the handler so Cloud Scheduler retries.
+			//
+			// Two sweeps per pass, on the same schedule because both are housekeeping:
+			// SweepTimeouts frees parked runs whose CI never reported (a human is waiting on
+			// that PR), SweepOrphans reaps runs nothing can ever resolve (nobody is waiting, so
+			// it notifies no one). An orphan sweep failing must not cost the timeouts, so each
+			// engine runs both and every error is collected.
 			var errs []error
 			for _, e := range engines {
 				if err := e.SweepTimeouts(ctx); err != nil {
 					errs = append(errs, err)
 					logger.Error("engine sweep failed", "workflow", e.Name(), "err", err)
+				}
+				if err := e.SweepOrphans(ctx); err != nil {
+					errs = append(errs, err)
+					logger.Error("engine orphan sweep failed", "workflow", e.Name(), "err", err)
 				}
 			}
 			return errors.Join(errs...)

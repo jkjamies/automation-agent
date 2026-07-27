@@ -25,11 +25,19 @@ type ParkRecord struct {
 	// stale run — reporting it under the wrong workflow's title and check name, and
 	// deleting the ADK session under the wrong app name (so it leaks instead).
 	Workflow string
-	PRKey    string    // empty until the run parks; the resume index
-	CallID   string    // the parked long-running call id
-	Attempts int       // attempts made so far (counted by the caller, not GitHub)
-	Params   string    // opaque, caller-serialized run inputs
-	ParkedAt time.Time // zero until parked; the sweep cutoff field
+	PRKey    string // empty until the run parks; the resume index
+	CallID   string // the parked long-running call id
+	Attempts int    // attempts made so far (counted by the caller, not GitHub)
+	Params   string // opaque, caller-serialized run inputs
+	// UpdatedAt is when the caller last wrote this record. The caller stamps it on every
+	// write (see the Driver's putRecord), not the store, so tests can seed an aged record.
+	//
+	// One field serves both sweeps because nothing writes through Put while a run is
+	// parked — the claim clears PRKey with a direct field update, not a full write. So for
+	// a parked record UpdatedAt *is* the park time (what the timeout sweep needs), while a
+	// record that was claimed and never re-parked keeps ageing from its last real activity
+	// (what the orphan sweep needs).
+	UpdatedAt time.Time
 }
 
 // ParkStore persists suspended fix runs so a resume — or, with a durable backend, a
@@ -61,7 +69,7 @@ type ParkStore interface {
 	// cleanup; no-op if absent.
 	Delete(ctx context.Context, sessionID string) error
 	// Sweep atomically claims and returns every one of workflow's parked records whose
-	// ParkedAt is before cutoff (CI never reported). Like ResolveByPRKey, each record is
+	// UpdatedAt is before cutoff (CI never reported). Like ResolveByPRKey, each record is
 	// claimed once, and the returned records keep their PRKey so the caller knows which PR
 	// timed out. Records belonging to another workflow are never touched.
 	//
@@ -72,6 +80,19 @@ type ParkStore interface {
 	// the caller MUST process them (notify/clear) before propagating the error, or those
 	// claimed runs strand with their PRKey cleared.
 	Sweep(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error)
+	// SweepOrphans returns workflow's records that are NOT parked and were last written
+	// before cutoff — runs nothing can ever resolve. A record reaches this state two ways:
+	// it was created and the run died before parking (an instance reclaimed mid-apply), or
+	// it was parked and then displaced when another session took its PR key (a redelivered
+	// kickoff). Either way no webhook can find it, the timeout sweep skips it (that only
+	// looks at parked records), and it would otherwise sit in a durable backend forever
+	// holding the whole kickoff report.
+	//
+	// Unlike Sweep this performs NO atomic claim, deliberately: the caller only deletes,
+	// which is idempotent, and orphan cleanup never notifies — so two sweepers racing on
+	// the same record is harmless, where two resolving the same parked run would double-
+	// notify. Callers must therefore not attach side effects to the returned records.
+	SweepOrphans(ctx context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error)
 	// ParkedCount reports how many of workflow's records are currently parked (PRKey-indexed).
 	ParkedCount(ctx context.Context, workflow string) (int, error)
 }
@@ -167,7 +188,7 @@ func (m *memoryParkStore) Sweep(_ context.Context, workflow string, cutoff time.
 		if k.workflow != workflow {
 			continue // another engine's run: not ours to claim
 		}
-		if r := m.bySession[sid]; !r.ParkedAt.IsZero() && r.ParkedAt.Before(cutoff) {
+		if r := m.bySession[sid]; !r.UpdatedAt.IsZero() && r.UpdatedAt.Before(cutoff) {
 			claimed := m.claimLocked(k, sid)
 			claimed.PRKey = k.prKey // the timeout sweep needs to know which PR this was
 			out = append(out, claimed)
@@ -198,6 +219,18 @@ func (m *memoryParkStore) Delete(_ context.Context, sessionID string) error {
 	}
 	delete(m.bySession, sessionID)
 	return nil
+}
+
+func (m *memoryParkStore) SweepOrphans(_ context.Context, workflow string, cutoff time.Time) ([]ParkRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []ParkRecord
+	for _, r := range m.bySession {
+		if r.Workflow == workflow && r.PRKey == "" && !r.UpdatedAt.IsZero() && r.UpdatedAt.Before(cutoff) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 func (m *memoryParkStore) ParkedCount(_ context.Context, workflow string) (int, error) {
