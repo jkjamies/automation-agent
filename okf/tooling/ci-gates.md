@@ -39,9 +39,14 @@ architecture tests:
 request, in two jobs.
 
 **`go`** shells out to the same `make ci`, so the hosted gate cannot drift from the local
-one, plus a `git diff --exit-code` afterwards — `make ci` starts with `go mod tidy` and
-formats via the lint step, both of which rewrite files in place, so the check turns silent
-drift into a failure.
+one, plus a `git diff --exit-code` afterwards — `make ci` starts with `go mod tidy`, which
+rewrites `go.mod`/`go.sum` in place, so the check turns silent drift into a failure.
+
+Formatting is deliberately **not** part of that diff check. `golangci-lint run` *reports*
+gofmt/goimports violations as findings rather than applying them (only `--fix` writes), so
+unformatted code fails the lint step outright instead of being silently rewritten and caught
+one step later. `make fmt` stays a manual convenience, not a gate step — a gate that edits
+the tree it is measuring can report success on input it just changed.
 
 **`firestore`** starts the standalone Firestore emulator (the Firebase jar, so no gcloud
 SDK — just the JRE the runner already has) and runs `make cover-firestore`. Without it the

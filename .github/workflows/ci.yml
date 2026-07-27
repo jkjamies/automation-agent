@@ -30,7 +30,13 @@ jobs:
       run:
         working-directory: go
     steps:
+      # No step here runs an authenticated git command — `make ci` and `make cover-firestore`
+      # only read the tree and run tests, and the `git diff` below is purely local. So do not
+      # leave the workflow token behind in .git/config, where any later step (or a dependency
+      # invoked by one) could read it.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -50,9 +56,11 @@ jobs:
       # tidy + vet + lint + arch + test + coverage gate.
       - run: make ci
 
-      # `make ci` starts with `go mod tidy`, and gofmt runs via the lint step — both of which
-      # rewrite files in place. Fail if either changed anything, so drift is caught here
-      # instead of landing silently.
+      # `make ci` starts with `go mod tidy`, which rewrites go.mod/go.sum in place. Fail if it
+      # changed anything, so drift is caught here instead of landing silently. Formatting is
+      # not part of this check: golangci-lint *reports* gofmt/goimports violations rather than
+      # applying them (only `--fix` writes), so unformatted code fails the lint step above and
+      # never reaches here.
       - name: Check for uncommitted changes
         run: git diff --exit-code
 
@@ -67,7 +75,13 @@ jobs:
       run:
         working-directory: go
     steps:
+      # No step here runs an authenticated git command — `make ci` and `make cover-firestore`
+      # only read the tree and run tests, and the `git diff` below is purely local. So do not
+      # leave the workflow token behind in .git/config, where any later step (or a dependency
+      # invoked by one) could read it.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:

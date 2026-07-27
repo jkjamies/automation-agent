@@ -23,7 +23,16 @@ You only need to send a small, trusted envelope.
 ```json
 {
   "repo": "owner/name",
-  "base": "main",
+  "report": <whatever your linter emitted>
+}
+```
+
+Send `base` only to target something other than the repository's default branch:
+
+```json
+{
+  "repo": "owner/name",
+  "base": "release/2.1",
   "report": <whatever your linter emitted>
 }
 ```
