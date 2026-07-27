@@ -45,8 +45,9 @@ private Cloud Run behind a self-hosted gateway presenting OIDC) is described in
 
 ## Input hardening
 
-- Webhook bodies are **capped at 5 MiB** (reject, not truncate — a truncated body would
-  only fail HMAC later); oversized → 413.
+- Webhook bodies are **size-capped per route class** (reject, not truncate — a truncated
+  body would only fail HMAC later); oversized → 413, not 500, so a caller cannot retry a
+  body that can never fit. See [webhook](/modules/platform/webhook.md).
 - Every inbound event is reduced to the typed [ingest](/modules/platform/ingest.md)
   `Envelope`; unknown kinds and malformed payloads are rejected at the boundary. On the
   Cloud Tasks path, a **poison envelope** (permanently undecodable) is acked and

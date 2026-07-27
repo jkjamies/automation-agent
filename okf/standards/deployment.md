@@ -368,7 +368,7 @@ no public exposure, no shared secret.
 
 The gateway is where the operator-owned edge policy lives: TLS termination, **HMAC
 verification**, a **GitHub source-IP allowlist**, a **replay/timestamp window** (dedupe on
-`X-GitHub-Delivery`), **rate-limiting**, and a request-size cap mirroring the app's 5 MiB body
+`X-GitHub-Delivery`), **rate-limiting**, and a request-size cap mirroring the app's ingress body
 limit. It mints the OIDC ID token, opens **mTLS** to the backend, and audit-logs every decision.
 A self-hosted gateway on the operator network — rather than a managed public endpoint — is what
 makes these webhook-shaped policies enforceable at the edge while the agent stays private; the

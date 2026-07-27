@@ -36,7 +36,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // the caller-supplied target repo, so it is HMAC-authenticated with the same shared
 // secret as the GitHub webhook (verification is skipped only when no secret is set).
 func (s *Server) handleLint(w http.ResponseWriter, r *http.Request) {
-	body, ok := s.readBody(w, r)
+	body, ok := s.readBody(w, r, maxIngressBytes)
 	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
@@ -46,7 +46,7 @@ func (s *Server) handleLint(w http.ResponseWriter, r *http.Request) {
 // handleCoverage is the coverage-fixer kickoff: an agnostic coverage report. Like the
 // lint kickoff it is HMAC-authenticated when a secret is configured.
 func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
-	body, ok := s.readBody(w, r)
+	body, ok := s.readBody(w, r, maxIngressBytes)
 	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
@@ -63,7 +63,7 @@ func (s *Server) handleCoverage(w http.ResponseWriter, r *http.Request) {
 // acknowledged with 200 and not dispatched, so GitHub records a successful delivery. HMAC
 // verification applies to every delivery before routing.
 func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
-	body, ok := s.readBody(w, r)
+	body, ok := s.readBody(w, r, maxIngressBytes)
 	if !ok || !s.authenticated(w, r, body) {
 		return
 	}
@@ -126,7 +126,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
 		s.log.Warn("could not clear dispatch write deadline; a long workflow may lose its response", "err", err)
 	}
-	body, ok := s.readBody(w, r)
+	body, ok := s.readBody(w, r, maxDispatchBytes)
 	if !ok {
 		return
 	}
@@ -189,11 +189,13 @@ func (s *Server) dispatch(ctx context.Context, w http.ResponseWriter, e ingest.E
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// readBody reads up to maxBodyBytes. A body over the cap is rejected with 413 rather
+// readBody reads up to limit bytes. A body over the cap is rejected with 413 rather
 // than silently truncated — a truncated body would both fail HMAC verification and feed
-// malformed JSON downstream. Returns false (after writing the error response) on failure.
-func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+// malformed JSON downstream. 413 is also the honest status: the caller must send less, so
+// a retry of the same body can never succeed. Returns false (after writing the error
+// response) on failure.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

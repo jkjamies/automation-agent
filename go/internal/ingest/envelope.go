@@ -33,6 +33,30 @@ func (k Kind) Valid() bool {
 	}
 }
 
+// The two size limits every ingress and transport shares. They exist as a pair because the
+// raw body a source POSTs and the wire envelope that carries it are different sizes, and
+// capping the wrong one turns a permanent failure into an infinite retry: a body that
+// passes ingress but cannot be enqueued fails the same way forever, while the source keeps
+// retrying a 5xx it can never get past.
+const (
+	// MaxEncodedBytes is the largest wire-form envelope the execution transport will carry
+	// — the Cloud Tasks HTTP-target task limit. /internal/dispatch receives a body of this
+	// shape, so it reads up to this, not MaxPayloadBytes.
+	MaxEncodedBytes = 1 << 20 // 1 MiB
+
+	// MaxPayloadBytes is the largest raw source body guaranteed to still fit in
+	// MaxEncodedBytes once Encode base64s it and wraps it in the envelope JSON. Ingress
+	// routes cap on this and reject a larger body with 413 (permanent, the caller must
+	// send less) rather than accepting it and failing at enqueue with a retryable 5xx.
+	//
+	// Derivation: base64 costs 4 bytes per 3, and 750 KiB divides by 3 exactly, so the
+	// encoded payload is 768000/3*4 = 1,024,000 bytes. That leaves ~24 KiB for the
+	// envelope's other fields — kind, source, an RFC 3339 timestamp, and the JSON
+	// punctuation — which run to a few hundred bytes. TestMaxPayloadFitsInATask keeps the
+	// two constants honest.
+	MaxPayloadBytes = 750 << 10 // 750 KiB
+)
+
 // Envelope is the normalized unit of work. Payload carries the raw source body
 // (e.g. the lint JSON or check_run event) for the chosen workflow to parse.
 type Envelope struct {

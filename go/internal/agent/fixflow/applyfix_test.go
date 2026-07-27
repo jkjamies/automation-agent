@@ -171,7 +171,7 @@ func branchHasFile(t *testing.T, dir, branch, path string) bool {
 
 func applyCfg(remote string) ApplyConfig {
 	return ApplyConfig{
-		Owner: "acme", Repo: "api", CloneURL: remote, Base: "master", Branch: "agent/fix", NewBranch: true,
+		Owner: "acme", Repo: "api", CloneURL: remote, Base: "master", Branch: "agent/fix",
 		Label: "automation-agent", CommitMessage: "fix", PRTitle: "Fix", PRBody: "auto",
 		Author: gitrepo.Author{Name: "agent", Email: "a@x"},
 	}
@@ -207,7 +207,6 @@ func TestApplyFixRetryReusesBranch(t *testing.T) {
 		t.Fatalf("first apply: %v", err)
 	}
 	retry := applyCfg(remote)
-	retry.NewBranch = false
 	gh := &fakeGH{existing: []githubapi.PR{{Number: 9, Branch: "agent/fix"}}}
 	res, err := ApplyFix(context.Background(), gh, retry, []FileEdit{{Path: "b.go", Content: "package b\n"}})
 	if err != nil {
@@ -231,7 +230,6 @@ func TestApplyFixNoOpEditSucceeds(t *testing.T) {
 
 	// Re-apply identical content on the existing branch: CommitAll has nothing to commit.
 	retry := applyCfg(remote)
-	retry.NewBranch = false
 	gh := &fakeGH{existing: []githubapi.PR{{Number: 7, Branch: "agent/fix"}}}
 	res, err := ApplyFix(context.Background(), gh, retry, edits)
 	if err != nil {

@@ -230,7 +230,7 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 
 	cfg := ApplyConfig{
 		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Provider: e.d.Provider, SSHKey: e.d.SSHKey,
-		Base: rp.base, Branch: e.spec.Branch, NewBranch: rp.newBranch, Label: e.d.PRLabel,
+		Base: rp.base, Branch: e.spec.Branch, Label: e.d.PRLabel,
 		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work),
 		Author: e.d.Author,
 	}

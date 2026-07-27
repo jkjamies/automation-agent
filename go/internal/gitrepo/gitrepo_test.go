@@ -357,3 +357,52 @@ func TestCloneUnknownBranchErrors(t *testing.T) {
 		t.Errorf("error = %v, want it to name the missing branch", err)
 	}
 }
+
+// CheckoutOrCreate continues a branch the remote already has, so an apply that repeats
+// (a retry, or a redelivered kickoff) adds to the existing branch instead of trying to
+// recreate it from the base — which would be rejected at push as non-fast-forward.
+func TestCheckoutOrCreateContinuesExistingRemoteBranch(t *testing.T) {
+	remote := seedRemoteWithBranch(t, "agent/fix")
+	work := filepath.Join(t.TempDir(), "w")
+	r, err := Clone(context.Background(), remote, work, "master", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+
+	existed, err := r.CheckoutOrCreate("agent/fix")
+	if err != nil {
+		t.Fatalf("CheckoutOrCreate: %v", err)
+	}
+	if !existed {
+		t.Error("existed = false, want true for a branch the remote already has")
+	}
+	// Continuing means the branch's own content is in the tree, not the base's.
+	if _, err := os.Stat(r.Path("marker.txt")); err != nil {
+		t.Errorf("checkout is missing the existing branch's content: %v", err)
+	}
+}
+
+// An unknown branch is created from the current HEAD (the base the clone checked out).
+func TestCheckoutOrCreateCreatesMissingBranch(t *testing.T) {
+	remote := seedRemote(t)
+	work := filepath.Join(t.TempDir(), "w")
+	r, err := Clone(context.Background(), remote, work, "", Auth{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+
+	existed, err := r.CheckoutOrCreate("agent/brand-new")
+	if err != nil {
+		t.Fatalf("CheckoutOrCreate: %v", err)
+	}
+	if existed {
+		t.Error("existed = true, want false for a branch the remote does not have")
+	}
+	head, err := r.repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	if got := head.Name().Short(); got != "agent/brand-new" {
+		t.Errorf("HEAD = %q, want the newly created branch", got)
+	}
+}

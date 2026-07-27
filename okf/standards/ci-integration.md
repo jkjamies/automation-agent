@@ -45,6 +45,12 @@ Send `base` only to target something other than the repository's default branch:
   only to fix against something other than the default (e.g. a release branch).
 - `report` is **arbitrary** — JSON, SARIF, or plain text. The agent's triage LLM
   reads it; you do not need to normalize it.
+- **Size:** the whole request body is capped at 750 KiB, and a larger one is rejected with
+  `413`. The cap is the largest body that still fits in a queued task after encoding, so
+  everything accepted is guaranteed dispatchable. A `413` is permanent — retrying the same
+  body will never succeed. If your report can exceed it, truncate or filter it CI-side
+  (typically to the failing findings only); a report that large is also past what the model
+  can usefully reason over in one pass.
 
 The endpoint returns `202 Accepted` immediately and works asynchronously (the agent
 opens a PR, then waits for CI — see [the resume side](#the-resume-side-agent-lint-verify)).

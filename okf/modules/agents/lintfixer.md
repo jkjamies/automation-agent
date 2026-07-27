@@ -32,7 +32,7 @@ flowchart TD
     C -->|success| OK["notify status-aware summary + PR link"]
     C -->|failure| AT{"park-record attempts >= MaxIter (3)?"}
     AT -->|yes| HR["notify needs human review + PR link"]
-    AT -->|no| RT["attempt(retry): re-triage from check output, read branch files, analyze w/ feedback, ApplyFix(NewBranch=false)"]
+    AT -->|no| RT["attempt(retry): re-triage from check output, read branch files, analyze w/ feedback, ApplyFix (continues the existing branch)"]
     RT --> SUS
     OK --> Chat[("Slack / Teams")]
     HR --> Chat

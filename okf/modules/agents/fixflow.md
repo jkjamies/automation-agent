@@ -21,6 +21,8 @@ A run whose CI never reports is freed two ways: a soft per-run `CITimeout` timer
 
 Terminal resolution (`clear`) deletes both the park record and the ADK session (`LongRunDriver.DeleteSession`) so durable backends don't accumulate finished runs.
 
+**Every terminal path notifies.** Success, retries exhausted, timeout, clean/no-work, an attempt that failed outright, *and* a run whose drive itself failed (the session backend being unavailable, say) all reach a human. This is the reason the failure paths route through one helper rather than returning bare errors: by the time most failures happen the attempt has already pushed a commit and opened a PR, and the dispatcher only logs — so a run dropped without a notification leaves that PR with nobody watching it.
+
 ## Workflow graph
 
 The outer loop is a deterministic workflow graph (`Start → apply_fix → await_ci`, with a conditional `failure` cycle back to `apply_fix` and a shared `conclude` terminal), so retry/stop/timeout policy is all in the `Driver`, not the graph. The substantive LLM work (triage, exploration, code edits) happens inside the `apply_fix` node → `attemptOnce`.
@@ -56,7 +58,11 @@ flowchart TD
 - `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
 - `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record **and** the ADK session.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean / max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
-- `applyfix.go` — clone → branch (new/existing) → commit → push → ensure labeled PR.
+- `applyfix.go` — clone → branch → commit → push → ensure labeled PR. Whether the branch is
+  created or continued is decided by whether the remote already has it, never by a flag the
+  caller passes: a redelivered kickoff starts a *fresh* run against a branch a previous
+  attempt already pushed, and recreating it from the base would be a non-fast-forward
+  rejection every retry repeats identically.
 - `analyze.go` — `ParallelAnalyze`: one ADK parallel agent per `FileWork`, distinct state keys so they never collide.
 - `envelope.go` — the trusted `{repo, base, report}` kickoff envelope.
 - `util.go` — `Engine.Label()`, `ExtractJSONArray/Object`, `StripFences`.
