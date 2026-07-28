@@ -380,8 +380,10 @@ func loadFrom(get lookup) (Config, error) {
 	if c.OllamaNumCtx, err = getInt(get, "OLLAMA_NUM_CTX", defaultOllamaNumCtx); err != nil {
 		return Config{}, err
 	}
-	if c.OllamaNumCtx <= 0 {
-		return Config{}, fmt.Errorf("OLLAMA_NUM_CTX: must be positive, got %d", c.OllamaNumCtx)
+	// Bound before the review caps are derived from it below: the derivation multiplies by
+	// approxBytesPerToken, so an unbounded window overflows the int byte cap.
+	if c.OllamaNumCtx <= 0 || c.OllamaNumCtx > maxOllamaNumCtx {
+		return Config{}, fmt.Errorf("OLLAMA_NUM_CTX: must be between 1 and %d, got %d", maxOllamaNumCtx, c.OllamaNumCtx)
 	}
 	if c.LLMMaxConcurrent, err = getInt(get, "LLM_MAX_CONCURRENT", defaultLLMMaxConcurrent(c.LLMProvider)); err != nil {
 		return Config{}, err
@@ -403,6 +405,12 @@ func loadFrom(get lookup) (Config, error) {
 	}
 	if c.ReviewMaxDiffBytes, err = getInt(get, "REVIEW_MAX_DIFF_BYTES", defaultReviewBytes(c)); err != nil {
 		return Config{}, err
+	}
+	// Validated like the standards cap below, and for the same reason: sizegate reads a
+	// non-positive cap as "no limit", so a bad value silently disables the gate rather than
+	// rejecting everything.
+	if c.ReviewMaxDiffBytes <= 0 {
+		return Config{}, fmt.Errorf("REVIEW_MAX_DIFF_BYTES: must be positive, got %d", c.ReviewMaxDiffBytes)
 	}
 	if c.ReviewStandards, err = getBool(get, "REVIEW_STANDARDS", true); err != nil {
 		return Config{}, err
@@ -724,6 +732,16 @@ func getFloat(get lookup, key string, def float64) (float64, error) {
 
 // defaultOllamaNumCtx is the context window requested from a local Ollama server.
 const defaultOllamaNumCtx = 32768
+
+// maxOllamaNumCtx bounds the served context window a caller may declare. It is far above any
+// window a local Ollama host actually serves (the largest published windows are single-digit
+// millions of tokens), so it rejects nonsense rather than constraining a real deployment.
+//
+// The bound is load-bearing, not decoration: defaultReviewBytes and defaultStandardsBytes
+// multiply this value by approxBytesPerToken before assigning it to an int byte cap, and an
+// overflowed cap does not fail loudly — sizegate treats a non-positive maxDiffBytes as "no
+// limit", so the size gate this window exists to compute would be switched off entirely.
+const maxOllamaNumCtx = 1 << 24 // 16,777,216 tokens ≈ 64 MiB of prompt
 
 // approxBytesPerToken converts a token budget to a byte budget for sizing decisions. Code
 // and diffs tokenize denser than prose; 4 is the conventional rough figure and is only used

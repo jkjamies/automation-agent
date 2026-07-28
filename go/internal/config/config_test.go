@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -548,6 +549,44 @@ func TestReviewByteCapsFollowTheProvider(t *testing.T) {
 	}
 	if pinned.ReviewMaxDiffBytes != 4096 {
 		t.Errorf("explicit REVIEW_MAX_DIFF_BYTES = %d, want 4096", pinned.ReviewMaxDiffBytes)
+	}
+}
+
+// A cap that is not positive does not reject every PR — sizegate reads it as "no limit" and
+// switches the gate off, admitting the oversized diffs the gate exists to stop. Both caps are
+// therefore validated, and the window they derive from is bounded so the derivation itself
+// cannot produce one.
+func TestReviewByteCapsCannotBeSilentlyDisabled(t *testing.T) {
+	// OLLAMA_NUM_CTX * approxBytesPerToken must not wrap. At 2^62 the product is exactly 2^64,
+	// which lands on 0 rather than a negative — an overflow that reads as "unset".
+	overflowing := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "4611686018427387904"}
+	if _, err := loadFrom(mapLookup(overflowing)); err == nil {
+		t.Error("an OLLAMA_NUM_CTX that overflows the derived byte cap should be rejected")
+	}
+	// The same window with the standards cap pinned: before the bound, this loaded cleanly with
+	// ReviewMaxDiffBytes == 0, because only the standards cap was validated.
+	withPinnedStandards := map[string]string{
+		"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "4611686018427387904",
+		"REVIEW_STANDARDS_MAX_BYTES": "1024",
+	}
+	if _, err := loadFrom(mapLookup(withPinnedStandards)); err == nil {
+		t.Error("pinning the standards cap should not let an overflowing window through")
+	}
+	// The bound is the only thing rejecting these, so it must sit at a value no real Ollama host
+	// exceeds — a window one token over it is refused, one token under it loads.
+	atMax := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": strconv.Itoa(maxOllamaNumCtx)}
+	if _, err := loadFrom(mapLookup(atMax)); err != nil {
+		t.Errorf("OLLAMA_NUM_CTX at the bound should load: %v", err)
+	}
+	overMax := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": strconv.Itoa(maxOllamaNumCtx + 1)}
+	if _, err := loadFrom(mapLookup(overMax)); err == nil {
+		t.Error("OLLAMA_NUM_CTX one token over the bound should be rejected")
+	}
+	// An explicit non-positive cap needs no overflow to reach the same place.
+	for _, v := range []string{"0", "-1"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MAX_DIFF_BYTES": v})); err == nil {
+			t.Errorf("REVIEW_MAX_DIFF_BYTES=%s should be rejected; it disables the size gate", v)
+		}
 	}
 }
 

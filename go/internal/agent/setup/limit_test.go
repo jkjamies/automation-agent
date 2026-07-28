@@ -142,7 +142,11 @@ func TestLLMLimiterRespectsContextWhileQueued(t *testing.T) {
 	// so this proves the slot is held; signalling before calling GenerateContent (as this test
 	// used to) proved only that the goroutine had been scheduled, and when the caller below won
 	// that race it found the slot free and never queued at all.
-	<-probe.entered
+	select {
+	case <-probe.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first generation was never admitted, so the slot this test needs held is free")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
