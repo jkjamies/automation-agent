@@ -63,7 +63,10 @@ func (e *Engine) publish(ctx context.Context, card scorecard, findings []Finding
 			comments = append(comments, githubapi.ReviewComment{Path: f.File, Line: f.Line, Side: "RIGHT", Body: inlineCommentBody(f)})
 		}
 		body := fmt.Sprintf("%s Agent review — see the summary comment for the full scorecard.", card.overall)
-		if err := e.gh.CreateReview(ctx, meta.owner, meta.repo, meta.number, githubapi.ReviewInput{Body: body, Comments: comments}); err != nil {
+		// Pin the review to the SHA the findings were computed against. meta.files (and so every
+		// line number in comments) came from this SHA's diff; without the pin GitHub would resolve
+		// the lines against whatever HEAD is current when this call lands.
+		if err := e.gh.CreateReview(ctx, meta.owner, meta.repo, meta.number, githubapi.ReviewInput{Body: body, Comments: comments, CommitID: meta.headSHA}); err != nil {
 			return fmt.Errorf("reviewer: post review: %w", err)
 		}
 	}

@@ -281,6 +281,7 @@ func TestCreateReview(t *testing.T) {
 	err := c.CreateReview(context.Background(), "o", "r", 7, ReviewInput{
 		Body:     "summary",
 		Comments: []ReviewComment{{Path: "a.go", Line: 3, Side: "RIGHT", Body: "issue"}},
+		CommitID: "sha1",
 	})
 	if err != nil {
 		t.Fatalf("CreateReview: %v", err)
@@ -289,10 +290,39 @@ func TestCreateReview(t *testing.T) {
 		t.Errorf("path = %s", gotPath)
 	}
 	s := string(body)
-	for _, want := range []string{`"event":"COMMENT"`, `"a.go"`, `"RIGHT"`, `"issue"`} {
+	// commit_id is the load-bearing one: it pins the review to the SHA the findings were computed
+	// against, so a push landing mid-review can't re-anchor the lines or 422 the whole publish.
+	for _, want := range []string{`"event":"COMMENT"`, `"commit_id":"sha1"`, `"a.go"`, `"RIGHT"`, `"issue"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("review body missing %q: %s", want, s)
 		}
+	}
+}
+
+// An unpinned inline comment is the exact failure CommitID exists to prevent, so the client
+// refuses it locally rather than letting GitHub resolve the line against a moving HEAD.
+func TestCreateReviewRequiresCommitIDForInlineComments(t *testing.T) {
+	var called bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /repos/o/r/pulls/7/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{"id":1}`))
+	})
+	c := testClient(t, mux)
+
+	err := c.CreateReview(context.Background(), "o", "r", 7, ReviewInput{
+		Body:     "summary",
+		Comments: []ReviewComment{{Path: "a.go", Line: 3, Side: "RIGHT", Body: "issue"}},
+	})
+	if err == nil {
+		t.Fatal("inline comments without a commit id must be rejected")
+	}
+	if called {
+		t.Error("the request must not reach GitHub")
+	}
+	// A body-only review has no lines to resolve, so it stays valid unpinned.
+	if err := c.CreateReview(context.Background(), "o", "r", 7, ReviewInput{Body: "summary"}); err != nil {
+		t.Fatalf("body-only review: %v", err)
 	}
 }
 
