@@ -93,15 +93,21 @@ func normalizeTag(tag string) string {
 
 // dedupeTags drops blanks and repeats, preserving order so the error message lists the models
 // in the order they were configured.
+//
+// Repeats are judged after normalization, not on the raw string: "gemma" and "gemma:latest"
+// name the same model, so keying on the spelling would emit both and the failure message would
+// tell you to run `ollama pull gemma && ollama pull gemma:latest` — the same pull twice. The
+// first spelling wins, because that is the one the caller actually configured.
 func dedupeTags(tags []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, t := range tags {
 		t = strings.TrimSpace(t)
-		if t == "" || seen[t] {
+		norm := normalizeTag(t)
+		if norm == "" || seen[norm] {
 			continue
 		}
-		seen[t] = true
+		seen[norm] = true
 		out = append(out, t)
 	}
 	return out

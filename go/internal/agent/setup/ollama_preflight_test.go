@@ -111,6 +111,23 @@ func TestVerifyOllamaModelsSkipsBlanksAndDuplicates(t *testing.T) {
 	}
 }
 
+// Two spellings of one model must not become two pulls. Ollama's implicit ":latest" means
+// "gemma4" and "gemma4:latest" are the same model, so a message telling someone to pull both
+// is telling them to run the same command twice.
+func TestVerifyOllamaModelsTreatsImplicitLatestAsADuplicate(t *testing.T) {
+	if got := dedupeTags([]string{"gemma4", "gemma4:latest"}); len(got) != 1 || got[0] != "gemma4" {
+		t.Errorf("dedupeTags = %v; equivalent tags should collapse to the first spelling configured", got)
+	}
+	// End to end: an empty server reports it missing exactly once, with one pull command.
+	err := VerifyOllamaModels(context.Background(), tagServer(t), "gemma4", "gemma4:latest")
+	if err == nil {
+		t.Fatal("an empty server should report the model missing")
+	}
+	if n := strings.Count(err.Error(), "ollama pull"); n != 1 {
+		t.Errorf("got %d pull commands in %q, want 1", n, err)
+	}
+}
+
 func TestVerifyOllamaModelsRejectsBadHost(t *testing.T) {
 	if err := VerifyOllamaModels(context.Background(), "://not a url", "gemma4:12b"); err == nil {
 		t.Fatal("an unparseable host must be an error")
