@@ -139,7 +139,7 @@ These never assert on model *content* — they assert the call wiring round-trip
 - It applies the floor **twice** against that same profile, and either failing fails the gate:
   - **Per package** — statement-weighted the way `go tool cover` computes a total, naming every
     package below the floor rather than only the first:
-    ```
+    ```text
     FAIL: automation-agent/internal/auth 76.3% < 80%
     FAIL: automation-agent/internal/gitrepo 70.0% < 80%
     ```
