@@ -33,8 +33,9 @@ const (
 // quickly; a returned error becomes a 500 to the caller.
 type IngestFunc func(ctx context.Context, e ingest.Envelope) error
 
-// SweepFunc resolves parked runs whose CI never reported (the durable timeout catch-all).
-// Driven by Cloud Scheduler via POST /internal/sweep.
+// SweepFunc runs the durable housekeeping passes: resolving parked runs whose CI never
+// reported (the timeout catch-all) and reaping runs nothing can ever resolve. Driven by
+// Cloud Scheduler via POST /internal/sweep.
 type SweepFunc func(ctx context.Context) error
 
 // DispatchFunc runs an envelope's workflow synchronously, in-request. It backs
@@ -71,7 +72,7 @@ func WithInternalToken(token string) Option {
 	return func(s *Server) { s.internalToken = token }
 }
 
-// WithSweep wires the timeout-sweep function invoked by POST /internal/sweep.
+// WithSweep wires the sweep function invoked by POST /internal/sweep.
 func WithSweep(fn SweepFunc) Option {
 	return func(s *Server) { s.sweep = fn }
 }

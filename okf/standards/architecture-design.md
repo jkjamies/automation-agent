@@ -252,7 +252,7 @@ automation-agent/
 │       │   │   └── prompts/
 │       │   └── fixflow/               # generic fix engine shared by lint + coverage
 │       │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
-│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts) over a ParkStore
+│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts/SweepOrphans) over a ParkStore
 │       │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
 │       │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
 │       │       ├── analyze.go         # analyze step
@@ -457,7 +457,8 @@ lint payload ──▶ root ──▶ fixflow Driver (workflow-graph fixer, hold
    └─ (CI never reports, restarted) POST /internal/sweep ─▶ ParkStore.Sweep: claim stale, notify, clear
                                                         └▶ ParkStore.SweepOrphans: reap unresolvable, silently
 
-   clear = ParkStore.Delete + LongRunDriver.DeleteSession (no leaked sessions on durable backends)
+   clear = LongRunDriver.DeleteSession, then ParkStore.Delete (no leaked sessions on durable
+           backends; on a failed session delete the record is kept for SweepOrphans to retry)
 ```
 
 ### CI signal — a dedicated, label-triggered agent check (GitHub)
@@ -560,9 +561,10 @@ three layers, all funnelling through the `ParkStore`'s atomic single-winner clai
   order matters: the record is the only thing that leads back to the session, so a failed
   session delete keeps the record as a marker `ParkStore.SweepOrphans` retries, rather than
   stranding a session nothing references. (A
-  finished PR is still merged/closed by the normal review workflow.) A *separate* orphan-session
-  GC for sessions that crash between create-and-park is a planned hardening — see
-  `DEPLOYMENT.md`.
+  finished PR is still merged/closed by the normal review workflow.) The runs that never reach
+  a terminal path at all — reclaimed mid-apply, displaced by a redelivered kickoff, or left by a
+  failed session delete — are reaped by `ParkStore.SweepOrphans` on the same `/internal/sweep`
+  schedule, after `ORPHAN_TTL` and without notifying anyone.
 
 ### ADK mechanics
 

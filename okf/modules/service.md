@@ -86,7 +86,8 @@ flowchart TD
     SUS -.->|"next check_run for this PR"| CR
 
     TO["per-run CI_TIMEOUT (soft in-process timer, lost on restart)"] -.->|"CI never reports"| FREE["onTimeout: claim + summary + clear"]
-    SW["/internal/sweep → SweepTimeouts (notifies) + SweepOrphans (silent)"] -.-> FREE
+    SW["/internal/sweep (Cloud Scheduler)"] -.->|"SweepTimeouts: stale parked runs"| FREE
+    SW -.->|"SweepOrphans: runs nothing can resolve"| ORPH["reap silently: clear only<br/>no claim, no summary"]
 
     OK --> Chat[("Slack / Teams")]
     REV --> Chat

@@ -52,13 +52,14 @@ flowchart TD
     C -->|"failure & attempts < MaxIter"| RT["resume run -> apply_fix again -> re-park (attempts+1)"]
     RT --> SUS
     TO["CITimeout timer fires"] -.-> TON["onTimeout: claim + summary + clear"]
-    SW["/internal/sweep -> SweepTimeouts (notifies) + SweepOrphans (silent)"] -.-> TON
+    SW["/internal/sweep (Cloud Scheduler)"] -.->|"SweepTimeouts: stale parked runs"| TON
+    SW -.->|"SweepOrphans: runs nothing can resolve"| ORPH["reap silently: clear only<br/>no claim, no summary"]
 ```
 
 ## Implementation layout
 
 - `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
-- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record **and** the ADK session.
+- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts`/`SweepOrphans` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the ADK session **and then** the park record.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean / max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
 - `applyfix.go` — clone → branch → commit → push → ensure labeled PR. Whether the branch is
   created or continued is decided by whether the remote already has it, never by a flag the
