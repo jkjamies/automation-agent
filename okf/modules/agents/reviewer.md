@@ -104,7 +104,7 @@ This replaced the publish stage's coarse whole-SHA skip **for inline comments on
 3. **Skip rules** — draft (unless `ready_for_review`, `REVIEW_SKIP_DRAFTS`), the agent's own `automation-agent/*` branches, the `skip-review` label, and dependency-bot authors (`dependabot[bot]` / `renovate[bot]`).
 4. **Fetch** the changed files + patches (`githubapi.ListPRFiles`, REST, paginated).
 5. **Filter** generated/vendored/lockfile/minified/binary paths (`REVIEW_EXCLUDE_GLOBS`); size is computed on the **filtered** set. An empty filtered diff skips.
-6. **Size gate** — two-dimensional (`REVIEW_MAX_FILES` **and** `REVIEW_MAX_DIFF_BYTES`): over either cap denies (review-or-deny, no degrade tier).
+6. **Size gate** — two-dimensional (`REVIEW_MAX_FILES` **and** `REVIEW_MAX_DIFF_BYTES`): over either cap denies (review-or-deny, no degrade tier). The byte cap **defaults from the provider**, because the two backends fail differently: locally it is derived from `OLLAMA_NUM_CTX` (half the window, leaving room for the lens prompt, the standards menu, and the model's own findings — all of which share that window), since the adapter sends `Truncate=false` and an oversized prompt is a hard error rather than a degraded review. On a hosted model the window is not the binding constraint, so the cap is a fixed, much larger figure chosen for review usefulness and cost. An explicit env value overrides either.
 
 When the decision is **review**, the model-calling stage runs (see below) and its result is published; when it is **deny**, the "too large" summary + a neutral check are published.
 

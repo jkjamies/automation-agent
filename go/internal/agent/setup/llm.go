@@ -29,7 +29,7 @@ func BuildCodeLLM(ctx context.Context, cfg config.Config) (model.LLM, error) {
 func buildLLM(ctx context.Context, cfg config.Config, ollamaModel, geminiModel string) (model.LLM, error) {
 	switch cfg.LLMProvider {
 	case config.ProviderOllama:
-		return NewOllamaModel(cfg.OllamaHost, ollamaModel)
+		return NewOllamaModel(cfg.OllamaHost, ollamaModel, cfg.OllamaNumCtx)
 	case config.ProviderGemini:
 		return newGeminiModel(ctx, geminiModel)
 	default:

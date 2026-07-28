@@ -97,6 +97,9 @@ Only `internal/config` reads the environment. `Validate()` enforces the enums an
 | **LLM** | | |
 | `LLM_PROVIDER` | `ollama` | `ollama` \| `gemini` |
 | `OLLAMA_HOST` | `http://localhost:11434` | local Ollama server |
+| `OLLAMA_NUM_CTX` | `32768` | context window per Ollama call; also the budget the reviewer's size gate derives from. Bounded (1 … 2^24) because the derived byte cap would otherwise overflow, and a non-positive cap turns the size gate off rather than failing |
+| `LLM_MAX_CONCURRENT` | `2` (ollama) / `8` (gemini) | max model calls in flight process-wide |
+| `FIX_MAX_FILES` | `50` | max files one fix attempt edits; the rest are reported, not silently dropped |
 | `OLLAMA_MODEL` | `gemma4:12b` | triage / explore / summary |
 | `OLLAMA_CODE_MODEL` | `gemma4:26b` | code changes; blank → `OLLAMA_MODEL` |
 | `GEMINI_MODEL` / `GEMINI_CODE_MODEL` | — | used when `LLM_PROVIDER=gemini`; code blank → base |

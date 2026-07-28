@@ -102,6 +102,10 @@ type Deps struct {
 	// or displaced by a redelivered kickoff) lingers before the sweep reaps it. Defaults to
 	// defaultOrphanTTL.
 	OrphanTTL time.Duration
+	// MaxFiles caps how many files one attempt edits (FIX_MAX_FILES). Non-positive disables
+	// the cap. Files past it are dropped in triage's own order — which is its ranking — and
+	// the number dropped is reported on the PR rather than silently swallowed.
+	MaxFiles int
 	// PRLabel is the single human-facing label applied to every agent PR on creation
 	// (AGENT_PR_LABEL). Write-only — PR lookup is by branch, so it never gates behavior.
 	PRLabel string
@@ -244,11 +248,16 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
+	work, dropped := e.capWork(work)
+	if dropped > 0 {
+		e.d.Log.Warn("capping the files this attempt will edit",
+			"workflow", e.spec.Name, "repo", rp.fullRepo, "editing", len(work), "dropped", dropped)
+	}
 
 	cfg := ApplyConfig{
 		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Provider: e.d.Provider, SSHKey: e.d.SSHKey,
 		Base: rp.base, Branch: e.spec.Branch, Label: e.d.PRLabel,
-		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work),
+		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work, dropped),
 		Author: e.d.Author,
 	}
 
@@ -291,11 +300,26 @@ func pullURL(fullRepo string, number int) string {
 	return fmt.Sprintf("https://github.com/%s/pull/%d", fullRepo, number)
 }
 
-func prBody(spec Spec, work []FileWork) string {
+// capWork trims the attempt to MaxFiles, returning the kept work and how many files were
+// dropped. Triage's ordering is its ranking, so the kept files are the ones it put first.
+func (e *Engine) capWork(work []FileWork) (kept []FileWork, dropped int) {
+	if e.d.MaxFiles <= 0 || len(work) <= e.d.MaxFiles {
+		return work, 0
+	}
+	return work[:e.d.MaxFiles], len(work) - e.d.MaxFiles
+}
+
+func prBody(spec Spec, work []FileWork, dropped int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Automated %s fix by automation-agent.\n\nFiles addressed:\n", spec.Name)
 	for _, f := range work {
 		fmt.Fprintf(&b, "- `%s` (%d item(s))\n", f.Path, len(f.Items))
+	}
+	// Say what was left out. A cap that silently drops work reads as "this is everything",
+	// and the reader has no way to tell the difference.
+	if dropped > 0 {
+		fmt.Fprintf(&b, "\n%d further file(s) were reported but not addressed in this PR "+
+			"(capped at %d per attempt). Re-run once these land to pick up the rest.\n", dropped, len(work))
 	}
 	return b.String()
 }

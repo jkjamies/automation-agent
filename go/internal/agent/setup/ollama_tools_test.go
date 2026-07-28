@@ -10,14 +10,14 @@ import (
 )
 
 func TestGenerationOptions(t *testing.T) {
-	opts := generationOptions(nil)
-	if opts["temperature"] != 0.0 || opts["num_ctx"] != defaultNumCtx {
+	opts := generationOptions(nil, 32768)
+	if opts["temperature"] != 0.0 || opts["num_ctx"] != 32768 {
 		t.Errorf("defaults = %+v", opts)
 	}
 	temp, top := float32(0.5), float32(0.9)
 	var seed int32 = 7
 	req := &model.LLMRequest{Config: &genai.GenerateContentConfig{Temperature: &temp, TopP: &top, Seed: &seed}}
-	opts = generationOptions(req)
+	opts = generationOptions(req, 32768)
 	if opts["temperature"] != 0.5 || opts["seed"] != 7 {
 		t.Errorf("honored config = %+v", opts)
 	}

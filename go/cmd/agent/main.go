@@ -92,6 +92,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build code llm: %w", err)
 	}
+	// Bound model concurrency once, here, by wrapping the models themselves — every fan-out
+	// downstream (per-file analyzers, per-category review lenses) inherits it and none can
+	// bypass it. One limiter for both models on purpose: they share a backend, so the base
+	// and code tiers draw on the same GPU or the same project quota.
+	limiter := setup.NewLLMLimiter(cfg.LLMMaxConcurrent)
+	llm, codeLLM = limiter.Wrap(llm), limiter.Wrap(codeLLM)
 	provider, err := buildTokenProvider(logger, cfg)
 	if err != nil {
 		return fmt.Errorf("build token provider: %w", err)
@@ -155,7 +161,8 @@ func run(logger *slog.Logger) error {
 	fixDeps := fixflow.Deps{
 		LLM: llm, CodeLLM: codeLLM, GH: gh, Notify: notifier, Provider: provider,
 		MaxIter: cfg.MaxIterations, CITimeout: cfg.CITimeout, OrphanTTL: cfg.OrphanTTL,
-		Repos: cfg.Repos, Log: logger,
+		MaxFiles: cfg.FixMaxFiles,
+		Repos:    cfg.Repos, Log: logger,
 		PRLabel:        cfg.AgentPRLabel,
 		SessionService: sessions, ParkStore: parkStore,
 		GitTransport: cfg.GitTransport, SSHKey: cfg.GitSSHKey,
@@ -258,6 +265,7 @@ func run(logger *slog.Logger) error {
 		logger.Info("automation-agent listening",
 			"port", cfg.Port,
 			"llm_provider", cfg.LLMProvider,
+			"llm_max_concurrent", cfg.LLMMaxConcurrent,
 			"repos", len(cfg.Repos),
 			"notify", cfg.NotifyProvider,
 			"summary_enabled", summaryDaily != nil,

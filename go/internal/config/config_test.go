@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -152,8 +153,8 @@ func TestReviewIntakeDefaults(t *testing.T) {
 	if c.ReviewMaxFiles != defaultReviewMaxFiles {
 		t.Errorf("ReviewMaxFiles = %d, want default %d", c.ReviewMaxFiles, defaultReviewMaxFiles)
 	}
-	if c.ReviewMaxDiffBytes != defaultReviewMaxDiffBytes {
-		t.Errorf("ReviewMaxDiffBytes = %d, want default %d", c.ReviewMaxDiffBytes, defaultReviewMaxDiffBytes)
+	if want := defaultReviewBytes(c); c.ReviewMaxDiffBytes != want {
+		t.Errorf("ReviewMaxDiffBytes = %d, want the provider-derived default %d", c.ReviewMaxDiffBytes, want)
 	}
 	if c.ReviewMinConfidence != defaultReviewMinConfidence {
 		t.Errorf("ReviewMinConfidence = %v, want default %v", c.ReviewMinConfidence, defaultReviewMinConfidence)
@@ -497,5 +498,116 @@ func TestReviewStandardsConfig(t *testing.T) {
 		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_STANDARDS_MAX_BYTES": v})); err == nil {
 			t.Errorf("REVIEW_STANDARDS_MAX_BYTES=%q must be a startup error", v)
 		}
+	}
+}
+
+// The reviewer's byte caps are derived from the provider, not fixed. On the local path a
+// cap larger than the served context window is not a degraded review but a hard failure:
+// the Ollama adapter sends Truncate=false, so an oversized prompt errors outright.
+func TestReviewByteCapsFollowTheProvider(t *testing.T) {
+	ollama := mapLookup(map[string]string{"LLM_PROVIDER": "ollama"})
+	c, err := loadFrom(ollama)
+	if err != nil {
+		t.Fatalf("load ollama: %v", err)
+	}
+	windowBytes := c.OllamaNumCtx * approxBytesPerToken
+	if c.ReviewMaxDiffBytes >= windowBytes {
+		t.Errorf("diff cap %d must leave room in the %d-byte window for the prompt and the model's own output",
+			c.ReviewMaxDiffBytes, windowBytes)
+	}
+	if c.ReviewStandardsMaxBytes >= windowBytes {
+		t.Errorf("standards cap %d must fit the same window (%d bytes)", c.ReviewStandardsMaxBytes, windowBytes)
+	}
+
+	// A bigger served window buys a bigger review, with no second knob to remember.
+	wide, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "131072"}))
+	if err != nil {
+		t.Fatalf("load wide: %v", err)
+	}
+	if wide.ReviewMaxDiffBytes <= c.ReviewMaxDiffBytes {
+		t.Errorf("raising OLLAMA_NUM_CTX should raise the diff cap: %d vs %d",
+			wide.ReviewMaxDiffBytes, c.ReviewMaxDiffBytes)
+	}
+
+	// The hosted path is bounded by review usefulness and cost, not by a window, so it is
+	// both fixed and much larger.
+	hosted, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "gemini", "GEMINI_MODEL": "m"}))
+	if err != nil {
+		t.Fatalf("load gemini: %v", err)
+	}
+	if hosted.ReviewMaxDiffBytes != hostedReviewMaxDiffBytes {
+		t.Errorf("hosted diff cap = %d, want %d", hosted.ReviewMaxDiffBytes, hostedReviewMaxDiffBytes)
+	}
+	if hosted.ReviewMaxDiffBytes <= c.ReviewMaxDiffBytes {
+		t.Errorf("the hosted cap (%d) should exceed the local one (%d)", hosted.ReviewMaxDiffBytes, c.ReviewMaxDiffBytes)
+	}
+
+	// An explicit value always wins over either default.
+	pinned, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama", "REVIEW_MAX_DIFF_BYTES": "4096"}))
+	if err != nil {
+		t.Fatalf("load pinned: %v", err)
+	}
+	if pinned.ReviewMaxDiffBytes != 4096 {
+		t.Errorf("explicit REVIEW_MAX_DIFF_BYTES = %d, want 4096", pinned.ReviewMaxDiffBytes)
+	}
+}
+
+// A cap that is not positive does not reject every PR — sizegate reads it as "no limit" and
+// switches the gate off, admitting the oversized diffs the gate exists to stop. Both caps are
+// therefore validated, and the window they derive from is bounded so the derivation itself
+// cannot produce one.
+func TestReviewByteCapsCannotBeSilentlyDisabled(t *testing.T) {
+	// OLLAMA_NUM_CTX * approxBytesPerToken must not wrap. At 2^62 the product is exactly 2^64,
+	// which lands on 0 rather than a negative — an overflow that reads as "unset".
+	overflowing := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "4611686018427387904"}
+	if _, err := loadFrom(mapLookup(overflowing)); err == nil {
+		t.Error("an OLLAMA_NUM_CTX that overflows the derived byte cap should be rejected")
+	}
+	// The same window with the standards cap pinned: before the bound, this loaded cleanly with
+	// ReviewMaxDiffBytes == 0, because only the standards cap was validated.
+	withPinnedStandards := map[string]string{
+		"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": "4611686018427387904",
+		"REVIEW_STANDARDS_MAX_BYTES": "1024",
+	}
+	if _, err := loadFrom(mapLookup(withPinnedStandards)); err == nil {
+		t.Error("pinning the standards cap should not let an overflowing window through")
+	}
+	// The bound is the only thing rejecting these, so it must sit at a value no real Ollama host
+	// exceeds — a window one token over it is refused, one token under it loads.
+	atMax := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": strconv.Itoa(maxOllamaNumCtx)}
+	if _, err := loadFrom(mapLookup(atMax)); err != nil {
+		t.Errorf("OLLAMA_NUM_CTX at the bound should load: %v", err)
+	}
+	overMax := map[string]string{"LLM_PROVIDER": "ollama", "OLLAMA_NUM_CTX": strconv.Itoa(maxOllamaNumCtx + 1)}
+	if _, err := loadFrom(mapLookup(overMax)); err == nil {
+		t.Error("OLLAMA_NUM_CTX one token over the bound should be rejected")
+	}
+	// An explicit non-positive cap needs no overflow to reach the same place.
+	for _, v := range []string{"0", "-1"} {
+		if _, err := loadFrom(mapLookup(map[string]string{"REVIEW_MAX_DIFF_BYTES": v})); err == nil {
+			t.Errorf("REVIEW_MAX_DIFF_BYTES=%s should be rejected; it disables the size gate", v)
+		}
+	}
+}
+
+// Model concurrency defaults to what the backend can use: a single local GPU serializes
+// anyway, while a hosted endpoint wants real parallelism.
+func TestLLMMaxConcurrentFollowsTheProvider(t *testing.T) {
+	local, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "ollama"}))
+	if err != nil {
+		t.Fatalf("load ollama: %v", err)
+	}
+	hosted, err := loadFrom(mapLookup(map[string]string{"LLM_PROVIDER": "gemini", "GEMINI_MODEL": "m"}))
+	if err != nil {
+		t.Fatalf("load gemini: %v", err)
+	}
+	if local.LLMMaxConcurrent >= hosted.LLMMaxConcurrent {
+		t.Errorf("local concurrency (%d) should be below hosted (%d)", local.LLMMaxConcurrent, hosted.LLMMaxConcurrent)
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"LLM_MAX_CONCURRENT": "0"})); err == nil {
+		t.Error("LLM_MAX_CONCURRENT=0 should be rejected: it would stall every model call")
+	}
+	if _, err := loadFrom(mapLookup(map[string]string{"OLLAMA_NUM_CTX": "0"})); err == nil {
+		t.Error("OLLAMA_NUM_CTX=0 should be rejected")
 	}
 }

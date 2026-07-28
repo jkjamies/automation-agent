@@ -58,7 +58,7 @@ func TestOllamaStreaming(t *testing.T) {
 	})
 	defer ts.Close()
 
-	m, err := NewOllamaModel(ts.URL, "gemma")
+	m, err := NewOllamaModel(ts.URL, "gemma", 32768)
 	if err != nil {
 		t.Fatalf("NewOllamaModel: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestOllamaNonStreaming(t *testing.T) {
 	})
 	defer ts.Close()
 
-	m, _ := NewOllamaModel(ts.URL, "gemma")
+	m, _ := NewOllamaModel(ts.URL, "gemma", 32768)
 	req := &model.LLMRequest{
 		Config:   &genai.GenerateContentConfig{SystemInstruction: UserText("be brief")},
 		Contents: []*genai.Content{UserText("hi")},
@@ -120,7 +120,7 @@ func TestOllamaServerError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	m, _ := NewOllamaModel(ts.URL, "gemma")
+	m, _ := NewOllamaModel(ts.URL, "gemma", 32768)
 	var gotErr error
 	for _, err := range m.GenerateContent(context.Background(), &model.LLMRequest{}, false) {
 		if err != nil {
@@ -133,7 +133,7 @@ func TestOllamaServerError(t *testing.T) {
 }
 
 func TestNewOllamaModelEmptyTag(t *testing.T) {
-	if _, err := NewOllamaModel("http://localhost:11434", ""); err == nil {
+	if _, err := NewOllamaModel("http://localhost:11434", "", 32768); err == nil {
 		t.Fatal("expected error for empty model tag")
 	}
 }
@@ -179,7 +179,7 @@ func TestLiveOllama(t *testing.T) {
 		tag = "gemma4:e4b"
 	}
 
-	m, err := NewOllamaModel(host, tag)
+	m, err := NewOllamaModel(host, tag, 32768)
 	if err != nil {
 		t.Fatalf("NewOllamaModel: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestLiveOllama(t *testing.T) {
 }
 
 func TestModelNameOverride(t *testing.T) {
-	m, _ := NewOllamaModel("http://localhost:11434", "default-model")
+	m, _ := NewOllamaModel("http://localhost:11434", "default-model", 32768)
 	if got := m.modelName(&model.LLMRequest{Model: "override"}); got != "override" {
 		t.Errorf("modelName = %q, want override", got)
 	}
@@ -219,7 +219,7 @@ func TestLiveOllamaTools(t *testing.T) {
 	if tag == "" {
 		tag = "gemma4:12b"
 	}
-	llm, err := NewOllamaModel("http://localhost:11434", tag)
+	llm, err := NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {
 		t.Fatal(err)
 	}

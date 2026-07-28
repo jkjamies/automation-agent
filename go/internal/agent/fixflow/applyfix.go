@@ -78,7 +78,7 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 		_ = os.RemoveAll(dir) // best-effort cleanup of the temp dir; the clone error is what matters
 		return nil, err
 	}
-	if _, err = repo.CheckoutOrCreate(cfg.Branch); err != nil {
+	if _, err = repo.CheckoutOrCreate(ctx, cfg.Branch); err != nil {
 		_ = os.RemoveAll(dir) // best-effort cleanup; the checkout error is what matters
 		return nil, err
 	}
