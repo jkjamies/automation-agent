@@ -60,6 +60,25 @@ What follows is only what a general Go style guide cannot know about this reposi
 architecture decisions that happen to be expressed in Go, not matters of style — which is why
 they live here rather than being deducible from the guide above.
 
+> ### ⚠️ Reconcile this section against Style Decisions and Best Practices
+>
+> The deltas below were written against the [Style Guide](https://google.github.io/styleguide/go/guide)
+> alone. **[Style Decisions](https://google.github.io/styleguide/go/decisions) and
+> [Best Practices](https://google.github.io/styleguide/go/best-practices) rule on far more, and a
+> delta they already cover does not belong here** — this section is not finished until it has been
+> checked against both. If you are an agent or a developer with network access to those pages:
+>
+> 1. **Read both, then delete rather than add.** Anything they rule on — naming, doc comments,
+>    import grouping, error strings, receiver names, test structure — is something this file
+>    should link to, not restate. A second copy is the failure mode this section exists to avoid.
+> 2. **Keep only what survives**, plus any genuinely project-specific delta the two documents
+>    reveal by their absence.
+> 3. **Then sweep the codebase against the surviving rules and encode the enforceable ones in
+>    `go/ARCH/`**, so they fail the gate rather than relying on review. See the note at the foot
+>    of `go/ARCH/arch_test.go` for the visibility check that is already scoped and prototyped.
+>
+> Deleting this callout is part of doing the work, not a separate cleanup.
+
 ### Visibility — export the seam, not the machinery
 
 **A type or function is exported only if it appears in the package's contract with the rest of
