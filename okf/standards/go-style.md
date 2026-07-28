@@ -26,11 +26,28 @@ over time:
 | [Style Decisions](https://google.github.io/styleguide/go/decisions) | Yes | No | Decisions on specific style points, with the reasoning behind them |
 | [Best Practices](https://google.github.io/styleguide/go/best-practices) | No | No | Patterns that solve common problems and survive maintenance |
 
+The Style Guide's five principles are given **in order of importance**, which is the part worth
+internalizing — the order is what resolves a conflict between two of them:
+
+1. **Clarity** — the code's purpose *and rationale* are clear to the reader, judged through the
+   reader's eyes rather than the author's.
+2. **Simplicity** — it reaches its goal the simplest way, and complexity that is genuinely
+   needed is added deliberately and explained.
+3. **Concision** — a high signal-to-noise ratio.
+4. **Maintainability** — it can be changed correctly by someone who did not write it.
+5. **Consistency** — it looks like the code around it. Real, but it loses to the four above.
+
 **Adopting it is not a mandate to churn existing code.** The guide says so itself: adherence
 "is not intended to be absolute", the documents "will never be exhaustive", and they explicitly
 do not intend to "justify large-scale changes to get rid of style differences" — write new code
 to the guide and fix nearby issues as you pass through. A diff whose only content is style
 alignment is not the goal.
+
+The guide draws the line precisely, and it is the line to apply here too: matching the
+surrounding code is a valid reason to deviate **until** a change "would worsen an existing style
+deviation, expose it in more API surfaces, expand the number of files in which the deviation is
+present, or introduce an actual bug". At that point local consistency stops being a defense and
+the deviation gets cleaned up as part of the change.
 
 `make lint` mechanically enforces the subset a linter can check — `revive` and `staticcheck`
 (which on the golangci-lint v2 schema subsumes the former `stylecheck` `ST*` diagnostics), plus
@@ -63,6 +80,13 @@ boundaries](/standards/architecture.md) that keep provider SDKs out of the agent
 hold because callers cannot reach past the seam to the implementation behind it. An exported
 implementation type is an invitation to do exactly that.
 
+That leaning on interfaces has a cost the Style Guide names: a maintainer "may need to
+understand the specifics of the underlying implementation in order to correctly use the
+interface, which must be explained within the interface documentation or at the call-site". So
+a seam here carries its contract in its doc comment — `ParkStore` documents that `Sweep` claims
+atomically while `SweepOrphans` deliberately does not, because no signature can convey that and
+a backend author would otherwise have to infer it.
+
 The pattern, using the [fixflow](/modules/agents/fixflow.md) engine as the worked example:
 
 - `Engine`, `Spec`, `Deps` are exported — they are what `cmd/agent` wires and holds.
@@ -88,9 +112,17 @@ Corollaries worth stating because they are easy to get wrong:
 
 ### Adding a dependency
 
+This is the local instantiation of the Style Guide's **least mechanism** principle — *"where
+there are several ways to express the same idea, prefer the one that uses the most standard
+tools"*, escalating from a core language construct, to the standard library, to a new dependency
+only when nothing below suffices. The guide's rationale is worth quoting because it is the whole
+argument: *"It is easy to add complexity to code as needed, whereas it is much harder to remove
+existing complexity after it has been found to be unnecessary."* Maintainability likewise calls
+for minimizing dependencies, implicit and explicit.
+
 The libraries in use, and why each was chosen, are catalogued in
-[Architecture & Build Plan §3](/standards/architecture-design.md#3-dependencies). Admitting a
-new one is a decision with a different weight from picking a name, so:
+[Architecture & Build Plan §3](/standards/architecture-design.md#3-dependencies). What that
+principle means concretely here:
 
 - **Prefer the standard library**, then a module already in the graph, then a new module. The
   service deliberately has no `gh` CLI dependency — `go-github` and `go-git` do that work
