@@ -10,6 +10,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 
+	"automation-agent/internal/agent/setup"
 	"automation-agent/internal/ingest"
 )
 
@@ -116,5 +117,43 @@ func TestBuildRootDispatcherWithoutSummary(t *testing.T) {
 	}
 	if d.Handles(ingest.KindCronDaily) {
 		t.Error("no summary agent -> the daily cron kind is unhandled")
+	}
+}
+
+// Each cron fire must start from a clean session. The runner owns the in-memory session service
+// behind it, so a runner built once at registration would retain every fire's session for the
+// life of the process — a daily digest of every configured repo, stranded once a day and never
+// reclaimed. Driving a constant session id makes that retention observable rather than silent:
+// under a retained runner the second fire inherits the first's state instead of starting fresh.
+func TestSummaryFiresDoNotShareSessionState(t *testing.T) {
+	const key = "fire-count"
+	var seen []string
+	a, err := agent.New(agent.Config{
+		Name: "counting_summary",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				prior := setup.StateString(ctx.Session().State(), key)
+				seen = append(seen, prior)
+				yield(setup.TextEvent("counting_summary", "ok", map[string]any{key: "ran"}), nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	d, err := BuildRootDispatcher(Deps{SummaryDaily: a})
+	if err != nil {
+		t.Fatalf("BuildRootDispatcher: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := d.Dispatch(context.Background(), env(ingest.KindCronDaily)); err != nil {
+			t.Fatalf("dispatch %d: %v", i, err)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("agent ran %d times, want 2", len(seen))
+	}
+	if seen[1] != "" {
+		t.Errorf("second fire saw prior state %q — the session (and its runner) outlived the first fire", seen[1])
 	}
 }

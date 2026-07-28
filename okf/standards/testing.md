@@ -47,15 +47,19 @@ directory.** All targets live in `go/Makefile`.
 cd go
 make test            # go test ./...                — the whole suite (memory + sqlite backends)
 make cover           # tests + 80% coverage gate over ./internal/...
-make ci              # tidy + vet + arch + test + cover  (the full local gate)
+make ci              # tidy-check + vet + lint + arch + test + cover  (the full local gate)
 make arch            # architecture conformance only (import boundaries)
 make docs-check      # okf/ bundle conformance (frontmatter, indexes, links)
 make vet             # go vet ./...
 make lint            # golangci-lint run
 ```
 
-`make ci` = `tidy vet arch test cover`, run in order; any failure stops the chain. Run it
-before every push — it's the same gate CI enforces.
+`make ci` = `tidy-check vet lint arch test cover`, run in order; any failure stops the chain. Run
+it before every push — it's the same gate CI enforces.
+
+The gate is **read-only**: it never modifies the tree. `tidy-check` (`go mod tidy -diff`) reports
+an untidy `go.mod` instead of tidying it, so the failure names its own cause rather than showing
+up as a mystery diff. Run `make tidy` to fix it.
 
 ### Test kinds present
 

@@ -41,7 +41,7 @@ flowchart TD
 
 - The `Dispatcher` routes an `ingest.Envelope` to a `Handler` by `Kind`. Unregistered kinds are logged and ignored, so a not-yet-wired ingress is a no-op rather than an error.
 - `BuildRootDispatcher(Deps)` registers the available workflows when their dependencies are present:
-  - `KindCronDaily` → the [summary workflow](/modules/agents/summary.md) runner.
+  - `KindCronDaily` → the [summary workflow](/modules/agents/summary.md). Its runner is built **per fire**, not once at registration: the runner owns the in-memory session service behind it, so a retained one would retain every fire's session for the life of the process — a daily digest of every configured repo, stranded once a day and never reclaimed. A runner is still built once at registration and discarded, purely so a misbuilt agent tree fails startup rather than first surfacing on a cron fire hours later. Because each fire brings its own session service, the session id is a constant: two concurrent fires cannot collide, and a regression back to a retained runner shows up as the second fire inheriting the first's state instead of leaking silently.
   - `KindCoverage` → the [coverage-fixer](/modules/agents/covfixer.md) kickoff.
   - `KindLint` / `KindCI` → the [lint-fixer](/modules/agents/lintfixer.md) kickoff / resume.
   - `KindReview` → the [PR code-review agent](/modules/agents/reviewer.md) kickoff (`ReviewKickoff`).

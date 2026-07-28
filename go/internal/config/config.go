@@ -218,6 +218,14 @@ type Config struct {
 	// OTLP-native backend or a Collector) | gcp (Cloud Trace via ADC). The app names no
 	// vendor — an OTLP backend is endpoint + headers, not code.
 	OTELTracesExporter string
+	// OTELTracesExporterSet reports whether OTEL_TRACES_EXPORTER was actually present in the
+	// environment, as opposed to OTELTracesExporter having fallen back to its "none" default.
+	// The playground needs the distinction: it defaults to the console exporter so a developer
+	// sees the span tree with no backend to stand up, but must not override an explicit choice.
+	// Config answers it because config owns the variable — the alternative is a second reader of
+	// the OTEL_* environment living outside the typed Config, which is exactly what the ARCH
+	// conformance test forbids.
+	OTELTracesExporterSet bool
 	// OTELServiceName is the resource service.name on every span (OTEL_SERVICE_NAME).
 	OTELServiceName string
 	// OTELExporterOTLPEndpoint / OTELExporterOTLPHeaders configure the otlp exporter
@@ -370,6 +378,7 @@ func loadFrom(get lookup) (Config, error) {
 		DispatchURL:          getOr(get, "DISPATCH_URL", ""),
 
 		OTELTracesExporter:       getOr(get, "OTEL_TRACES_EXPORTER", OTELExporterNone),
+		OTELTracesExporterSet:    isSet(get, "OTEL_TRACES_EXPORTER"),
 		OTELServiceName:          getOr(get, "OTEL_SERVICE_NAME", "automation-agent"),
 		OTELExporterOTLPEndpoint: getOr(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELExporterOTLPHeaders:  getOr(get, "OTEL_EXPORTER_OTLP_HEADERS", ""),
@@ -685,6 +694,14 @@ func getOr(get lookup, key, def string) string {
 		}
 	}
 	return def
+}
+
+// isSet reports whether key carries a real value, using getOr's notion of "real": present and
+// non-blank after trimming. Anything getOr would answer with its default reads as unset here, so
+// the two can never disagree about whether a caller supplied a value.
+func isSet(get lookup, key string) bool {
+	v, ok := get(key)
+	return ok && strings.TrimSpace(v) != ""
 }
 
 // getBool parses a boolean env var (REVIEW_ENABLED etc.). Unset or blank yields def; a

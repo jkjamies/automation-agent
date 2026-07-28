@@ -99,8 +99,8 @@ func TestToOllamaMessagesToolRoundTrip(t *testing.T) {
 		Config: &genai.GenerateContentConfig{SystemInstruction: genai.NewContentFromText("sys", genai.RoleUser)},
 		Contents: []*genai.Content{
 			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "read a.go"}}},
-			{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{Name: "read_file", Args: map[string]any{"path": "a.go"}}}}},
-			{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{Name: "read_file", Response: map[string]any{"content": "package a"}}}}},
+			{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call_1", Name: "read_file", Args: map[string]any{"path": "a.go"}}}}},
+			{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "call_1", Name: "read_file", Response: map[string]any{"content": "package a"}}}}},
 		},
 	}
 	msgs := toOllamaMessages(req)
@@ -116,14 +116,50 @@ func TestToOllamaMessagesToolRoundTrip(t *testing.T) {
 	if msgs[3].Role != "tool" || msgs[3].ToolName != "read_file" || !strings.Contains(msgs[3].Content, "package a") {
 		t.Errorf("tool result msg = %+v", msgs[3])
 	}
+	// The id has to survive the trip back out, on both halves of the pair. It is the only thing
+	// linking a tool result to the call that asked for it; dropping it leaves a turn with two
+	// parallel calls to one tool pairable only by position.
+	if got := msgs[2].ToolCalls[0].ID; got != "call_1" {
+		t.Errorf("assistant tool call id = %q, want call_1", got)
+	}
+	if got := msgs[3].ToolCallID; got != "call_1" {
+		t.Errorf("tool result tool_call_id = %q, want call_1", got)
+	}
 }
 
 func TestToGenaiFunctionCall(t *testing.T) {
 	args := api.NewToolCallFunctionArguments()
 	args.Set("x", "y")
-	fc := toGenaiFunctionCall(api.ToolCall{Function: api.ToolCallFunction{Name: "f", Arguments: args}})
+	fc := toGenaiFunctionCall(api.ToolCall{ID: "call_1", Function: api.ToolCallFunction{Name: "f", Arguments: args}}, 0)
 	if fc.Name != "f" || fc.Args["x"] != "y" {
 		t.Errorf("fc = %+v", fc)
+	}
+	if fc.ID != "call_1" {
+		t.Errorf("id = %q, want the model's own call id", fc.ID)
+	}
+}
+
+// Most local models emit tool calls with no id. The fallback has to distinguish two parallel
+// calls to the *same* tool, which is exactly what a name-only id could not do: both calls would
+// carry "f", and neither the long-running-tool bookkeeping nor the tool results that come back
+// could tell them apart.
+func TestToGenaiFunctionCallSynthesizesDistinctIDs(t *testing.T) {
+	args := api.NewToolCallFunctionArguments()
+	args.Set("path", "a.go")
+	calls := []api.ToolCall{
+		{Function: api.ToolCallFunction{Name: "read_file", Arguments: args}},
+		{Function: api.ToolCallFunction{Name: "read_file", Arguments: args}},
+	}
+	seen := map[string]bool{}
+	for i, tc := range calls {
+		fc := toGenaiFunctionCall(tc, i)
+		if fc.ID == "" {
+			t.Fatalf("call %d got no id", i)
+		}
+		if seen[fc.ID] {
+			t.Errorf("call %d reused id %q; parallel calls to one tool must stay distinguishable", i, fc.ID)
+		}
+		seen[fc.ID] = true
 	}
 }
 

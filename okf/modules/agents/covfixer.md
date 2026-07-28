@@ -40,7 +40,7 @@ Generated tests that don't compile or don't raise coverage are rejected by the `
 - `coverage.go` — `NewEngine(Deps)`: the coverage `Spec` (branch/label/check + titles).
 - `triage.go` — coverage report → `[]fixflow.FileWork` (files + uncovered regions).
 - `analyze.go` — `explore` (a tool-using agent via `fixflow.Explore` grounds a per-file plan in the repo's real conventions) then `execute` (parallel test generation, reading each source with `fixflow.ReadFile`).
-- `prompts/{triage,explore,analyze,summarize_result}.md`.
+- `prompts/{triage,explore,analyze}.md`. The terminal chat summary is assembled deterministically in Go (`fixflow.buildSummaryText`), not by a prompt.
 
 ## Testing
 

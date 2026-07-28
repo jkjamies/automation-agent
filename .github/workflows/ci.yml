@@ -53,14 +53,17 @@ jobs:
           path: ~/go/bin/golangci-lint
           key: golangci-${{ runner.os }}-${{ hashFiles('go/Makefile', 'go/go.mod') }}
 
-      # tidy + vet + lint + arch + test + coverage gate.
+      # tidy-check + vet + lint + arch + test + coverage gate. Read-only: `make ci` reports an
+      # untidy go.mod rather than tidying it, so a failure here names its own cause instead of
+      # surfacing as a mystery diff two steps later.
       - run: make ci
 
-      # `make ci` starts with `go mod tidy`, which rewrites go.mod/go.sum in place. Fail if it
-      # changed anything, so drift is caught here instead of landing silently. Formatting is
-      # not part of this check: golangci-lint *reports* gofmt/goimports violations rather than
-      # applying them (only `--fix` writes), so unformatted code fails the lint step above and
-      # never reaches here.
+      # A backstop, not a gate on any known rewrite: `make ci` is read-only end to end.
+      # `tidy-check` reports an untidy go.mod without touching it, and golangci-lint *reports*
+      # gofmt/goimports violations rather than applying them (only `--fix` writes), so
+      # unformatted code fails the lint step above and never reaches here. This step exists to
+      # catch anything that modifies the tree unexpectedly — a step added later, or a tool that
+      # starts writing where it used to only read.
       - name: Check for uncommitted changes
         run: git diff --exit-code
 

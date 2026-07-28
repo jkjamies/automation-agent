@@ -611,3 +611,35 @@ func TestLLMMaxConcurrentFollowsTheProvider(t *testing.T) {
 		t.Error("OLLAMA_NUM_CTX=0 should be rejected")
 	}
 }
+
+// A caller that must distinguish "explicitly set to the default" from "fell back to the default"
+// asks Config, not the environment — the playground does exactly this to pick its console
+// exporter without overriding a developer's choice. isSet must agree with getOr about what counts
+// as supplied, or the two would disagree on a blank value.
+func TestOTELTracesExporterSetTracksThePresenceOfTheVariable(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantSet bool
+		wantExp string
+	}{
+		{"unset", nil, false, OTELExporterNone},
+		{"blank reads as unset", map[string]string{"OTEL_TRACES_EXPORTER": "   "}, false, OTELExporterNone},
+		{"explicitly none", map[string]string{"OTEL_TRACES_EXPORTER": "none"}, true, OTELExporterNone},
+		{"explicit value", map[string]string{"OTEL_TRACES_EXPORTER": "console"}, true, OTELExporterConsole},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := loadFrom(mapLookup(tc.env))
+			if err != nil {
+				t.Fatalf("loadFrom: %v", err)
+			}
+			if c.OTELTracesExporterSet != tc.wantSet {
+				t.Errorf("OTELTracesExporterSet = %v, want %v", c.OTELTracesExporterSet, tc.wantSet)
+			}
+			if c.OTELTracesExporter != tc.wantExp {
+				t.Errorf("OTELTracesExporter = %q, want %q", c.OTELTracesExporter, tc.wantExp)
+			}
+		})
+	}
+}

@@ -13,7 +13,7 @@ GO_TOOLCHAIN     := go$(shell awk '/^go /{print $$2; exit}' go.mod)
 GOBIN            := $(shell go env GOPATH)/bin
 GOLANGCI         := $(GOBIN)/golangci-lint
 
-.PHONY: help build run test cover cover-firestore lint lint-install fmt vet arch tidy spec docs-check ollama-check ci
+.PHONY: help build run test cover cover-firestore lint lint-install fmt vet arch tidy tidy-check spec docs-check ollama-check ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -66,6 +66,20 @@ docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, 
 tidy: ## Tidy go.mod
 	go mod tidy
 
+# go mod tidy -diff exits 1 for an untidy module *and* for a real failure (an unresolvable
+# import, an unreachable proxy). The two are distinguishable by stream, not by status: the
+# diff goes to stdout, a failure goes to stderr and produces no stdout. Keying on stdout keeps
+# the "run make tidy" advice off failures that make tidy cannot fix, and lets the real error
+# through as itself.
+tidy-check: ## Verify go.mod/go.sum are already tidy, without modifying them
+	@untidy=$$(go mod tidy -diff); rc=$$?; \
+	if [ -n "$$untidy" ]; then \
+		printf '%s\n' "$$untidy"; \
+		echo "FAIL: go.mod/go.sum are not tidy — run 'make tidy'"; \
+		exit 1; \
+	fi; \
+	exit $$rc
+
 ollama-check: ## Verify the local Ollama server is reachable
 	@curl -sf $(OLLAMA_HOST)/api/tags >/dev/null && echo "ollama up at $(OLLAMA_HOST)" || { echo "ollama not reachable at $(OLLAMA_HOST)"; exit 1; }
 
@@ -80,4 +94,8 @@ spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove
 docker: ## Build the production container image (cmd/agent only)
 	docker build -t automation-agent .
 
-ci: tidy vet lint arch test cover ## Full local CI gate
+# A gate must not change what it is measuring. `tidy` rewrites go.mod/go.sum in place, so a
+# `make ci` that ran it would quietly fix an untidy module and report success — locally, and in
+# CI right up until the separate `git diff --exit-code` step notices. `tidy-check` reports the
+# same problem without touching the tree, so the failure names its own cause.
+ci: tidy-check vet lint arch test cover ## Full local CI gate (read-only: never modifies the tree)
