@@ -45,7 +45,13 @@ flowchart TD
   deployment serves a single GitHub org/installation — so there is no
   per-owner cache and no dynamic `repo→installation` resolution. The `repo`
   argument is accepted for the contract but ignored. `WithBaseURL` overrides the
-  token-exchange endpoint for tests.
+  token-exchange and identity endpoints for tests.
+- `AuthoredLogin` (the optional `IdentityResolver`) — resolves the login this deployment
+  authors content as: `<app-slug>[bot]` via a JWT `GET /app` in App mode, the user login via
+  `GET /user` in PAT mode, `""` when anonymous. It is what lets the reviewer recognize its own
+  comments. Both providers take a base-URL override (`WithBaseURL` / `WithStaticBaseURL`) so
+  either lookup can be pointed at a stub — the two are the same operation in the two auth
+  modes, and neither should need github.com to be tested.
 - `NewRoundTripper(base, provider)` — bridges the seam to the GitHub REST client
   (see [githubapi](/modules/platform/githubapi.md)): it injects
   `Authorization: Bearer <token>` on a clone of each request (an empty token is

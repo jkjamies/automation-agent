@@ -1,7 +1,7 @@
 ---
 type: Standard
 title: Testing
-description: How to run every kind of test and the rules they obey — 80% coverage, no LLM-content assertions, and stubbed networks.
+description: How to run every kind of test and the rules they obey — ≥80% coverage per package and overall, no LLM-content assertions, and stubbed networks.
 tags: [testing, coverage, conventions]
 sensitivity: internal
 bundle: automation-agent
@@ -18,8 +18,11 @@ truth — read it and you can run the suite without asking anyone. All commands 
 
 ## Principles
 
-- **Coverage ≥ 80%**, enforced by `make cover` (and `make ci`). Put the hard logic in
-  injectable, LLM-free functions so it's reachable by unit tests.
+- **Coverage ≥ 80%**, enforced by `make cover` (and `make ci`) **per package as well as
+  overall**. The total alone is an average, and an average hides its laggards: a package can
+  sit well under the standard indefinitely while the total reads healthy because the
+  well-tested packages outnumber it. Put the hard logic in injectable, LLM-free functions so
+  it's reachable by unit tests.
 - **Never assert on LLM output content.** LLM responses are non-deterministic; tests that
   check for keywords/tone/persona are flaky by nature. Validate agent *wiring* (with a
   fake `model.LLM`) and *deterministic tooling* instead. Behavior quality is checked
@@ -46,7 +49,7 @@ directory.** All targets live in `go/Makefile`.
 ```bash
 cd go
 make test            # go test ./...                — the whole suite (memory + sqlite backends)
-make cover           # tests + 80% coverage gate over ./internal/...
+make cover           # tests + 80% coverage gate over ./internal/... (per package and overall)
 make ci              # tidy-check + vet + lint + arch + test + cover  (the full local gate)
 make arch            # architecture conformance only (import boundaries)
 make docs-check      # okf/ bundle conformance (frontmatter, indexes, links)
@@ -132,7 +135,21 @@ These never assert on model *content* — they assert the call wiring round-trip
 
 - `make cover` runs `go test -coverprofile=coverage.out -covermode=atomic ./internal/...`
   (`cmd/` is composition-only and excluded), then greps `*_firestore.go:` lines out into
-  `coverage.gate.out` and fails if the remaining total is `< 80%`.
+  `coverage.gate.out`.
+- It applies the floor **twice** against that same profile, and either failing fails the gate:
+  - **Per package** — statement-weighted the way `go tool cover` computes a total, naming every
+    package below the floor rather than only the first:
+    ```text
+    FAIL: automation-agent/internal/auth 76.3% < 80%
+    FAIL: automation-agent/internal/gitrepo 70.0% < 80%
+    ```
+  - **Overall**, on the remaining total.
+- One knob (`COVER_MIN`) drives both, deliberately: the standard is "≥ 80%", and it should be
+  true of every package rather than only of their mean. A package that legitimately cannot clear
+  the bar gets an explicit exclusion rather than the floor being lowered for everyone.
+- Because both read `coverage.gate.out`, the `*_firestore.go` exclusion applies to the
+  per-package floor too — `agent/setup` is judged on its real figure rather than the lower one an
+  emulator-less run reports.
 - Inspect locally: `go tool cover -func=coverage.out` (per-func) or
   `go tool cover -html=coverage.out` (browser).
 - **Race detector** is not in the default gate; run it manually when touching concurrency
