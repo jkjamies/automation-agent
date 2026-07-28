@@ -35,7 +35,7 @@ tests:
 request, in two jobs.
 
 **`go`** shells out to the same `make ci`, so the hosted gate cannot drift from the local
-one, plus a `git diff --exit-code` afterwards.
+one, plus a `git diff --exit-code` afterward.
 
 That diff check is a **backstop**, not a gate on any known rewrite: `make ci` is read-only
 end to end. `tidy-check` (`go mod tidy -diff`) reports an untidy `go.mod` without touching

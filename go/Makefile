@@ -66,8 +66,19 @@ docs-check: ## Verify the okf/ knowledge bundle conforms (frontmatter, indexes, 
 tidy: ## Tidy go.mod
 	go mod tidy
 
+# go mod tidy -diff exits 1 for an untidy module *and* for a real failure (an unresolvable
+# import, an unreachable proxy). The two are distinguishable by stream, not by status: the
+# diff goes to stdout, a failure goes to stderr and produces no stdout. Keying on stdout keeps
+# the "run make tidy" advice off failures that make tidy cannot fix, and lets the real error
+# through as itself.
 tidy-check: ## Verify go.mod/go.sum are already tidy, without modifying them
-	@go mod tidy -diff || { echo "FAIL: go.mod/go.sum are not tidy — run 'make tidy'"; exit 1; }
+	@untidy=$$(go mod tidy -diff); rc=$$?; \
+	if [ -n "$$untidy" ]; then \
+		printf '%s\n' "$$untidy"; \
+		echo "FAIL: go.mod/go.sum are not tidy — run 'make tidy'"; \
+		exit 1; \
+	fi; \
+	exit $$rc
 
 ollama-check: ## Verify the local Ollama server is reachable
 	@curl -sf $(OLLAMA_HOST)/api/tags >/dev/null && echo "ollama up at $(OLLAMA_HOST)" || { echo "ollama not reachable at $(OLLAMA_HOST)"; exit 1; }
