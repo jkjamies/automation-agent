@@ -119,7 +119,13 @@ type Config struct {
 	MaxIterations int
 	// CITimeout bounds how long a suspended fix run waits for its CI result before
 	// it is resumed with a timeout outcome (notify + stop). Per-run timer, not a scan.
-	CITimeout           time.Duration
+	CITimeout time.Duration
+	// OrphanTTL bounds how long a fix run that can never be resolved lingers before the
+	// sweep reaps it (ORPHAN_TTL). A run reaches that state when the instance is reclaimed
+	// mid-apply, or when a redelivered kickoff displaces a parked run. It must exceed one
+	// apply attempt (bounded by TASKS_DISPATCH_DEADLINE), and generous is free: an orphan
+	// costs storage, never correctness.
+	OrphanTTL           time.Duration
 	GitHubWebhookSecret string
 	// InternalToken is the Bearer token guarding the /internal/* endpoints (Cloud Scheduler
 	// cron + sweep). Empty disables those endpoints (404).
@@ -394,6 +400,9 @@ func loadFrom(get lookup) (Config, error) {
 	if c.CITimeout, err = time.ParseDuration(getOr(get, "CI_TIMEOUT", "90m")); err != nil {
 		return Config{}, fmt.Errorf("CI_TIMEOUT: %w", err)
 	}
+	if c.OrphanTTL, err = time.ParseDuration(getOr(get, "ORPHAN_TTL", "24h")); err != nil {
+		return Config{}, fmt.Errorf("ORPHAN_TTL: %w", err)
+	}
 	if c.TasksDispatchDeadline, err = time.ParseDuration(getOr(get, "TASKS_DISPATCH_DEADLINE", "30m")); err != nil {
 		return Config{}, fmt.Errorf("TASKS_DISPATCH_DEADLINE: %w", err)
 	}
@@ -514,6 +523,13 @@ func (c Config) Validate() error {
 	}
 	if c.CITimeout <= 0 {
 		return fmt.Errorf("CI_TIMEOUT must be > 0, got %s", c.CITimeout)
+	}
+	// The orphan sweep must never reap a run that is merely mid-apply. No park record is
+	// written while an attempt runs, so the TTL has to clear a whole attempt — which the
+	// Cloud Tasks dispatch deadline caps at 30m.
+	if c.OrphanTTL <= c.TasksDispatchDeadline {
+		return fmt.Errorf("ORPHAN_TTL (%s) must exceed TASKS_DISPATCH_DEADLINE (%s), or a run still applying could be reaped",
+			c.OrphanTTL, c.TasksDispatchDeadline)
 	}
 	port, err := strconv.Atoi(c.Port)
 	if err != nil {

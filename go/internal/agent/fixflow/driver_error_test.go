@@ -243,3 +243,123 @@ func TestRedeliveredKickoffContinuesExistingBranch(t *testing.T) {
 		t.Errorf("branch tip content = %q, want the second attempt's — the redelivery did not land", content)
 	}
 }
+
+// failingSessionDelete lets a session delete fail while everything else works, which is the
+// case the clear ordering exists for.
+type failingSessionDelete struct {
+	session.Service
+	fail bool
+}
+
+func (f *failingSessionDelete) Delete(ctx context.Context, req *session.DeleteRequest) error {
+	if f.fail {
+		return errors.New("session delete unavailable")
+	}
+	return f.Service.Delete(ctx, req)
+}
+
+// clear deletes the session first and keeps the park record if that fails. The record is the
+// only thing that can lead anyone back to the session, so deleting it first and then failing
+// would leave a session nothing references and no sweep could ever find. Keeping it turns a
+// failed cleanup into one the orphan sweep retries.
+func TestClearKeepsRecordWhenSessionDeleteFails(t *testing.T) {
+	store := setup.NewMemoryParkStore()
+	sess := &failingSessionDelete{Service: session.InMemoryService()}
+	n := &fakeNotifier{}
+	e := NewEngine(testSpec(), Deps{
+		GH: &fakeGH{}, Notify: n, MaxIter: 3, CITimeout: time.Hour, ParkStore: store,
+		OrphanTTL: time.Hour, SessionService: sess,
+		CloneURL: func(_, _ string) string { return seedRemote(t) },
+	})
+	if err := e.Kickoff(context.Background(), []byte(`{"repo":"acme/api","base":"master","report":"r"}`)); err != nil {
+		t.Fatalf("Kickoff: %v", err)
+	}
+
+	sess.fail = true
+	if err := e.Resume(context.Background(), checkBody("success", 42, "")); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	// The success is still reported — cleanup trouble must not cost the human their result.
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0].Title, "succeeded") {
+		t.Fatalf("expected the success notification regardless, got %+v", n.msgs)
+	}
+	// And the record survives as the marker for the orphan sweep to retry.
+	orphans, err := store.SweepOrphans(context.Background(), e.spec.Name, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	if len(orphans) != 1 {
+		t.Fatalf("the park record should survive a failed session delete so cleanup can retry, got %+v", orphans)
+	}
+
+	// Once the record has aged past the TTL and the session backend has recovered, the
+	// sweep completes the cleanup it could not finish.
+	stale := orphans[0]
+	stale.UpdatedAt = time.Now().Add(-2 * time.Hour)
+	if err := store.Put(context.Background(), stale); err != nil {
+		t.Fatalf("age the record: %v", err)
+	}
+	sess.fail = false
+	if err := e.SweepOrphans(context.Background()); err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	if left, _ := store.SweepOrphans(context.Background(), e.spec.Name, time.Now().Add(time.Minute)); len(left) != 0 {
+		t.Errorf("the orphan should be gone once the session delete succeeds, got %+v", left)
+	}
+}
+
+// The orphan sweep reaps runs nothing can resolve, and says nothing while doing it: an
+// orphan is an already-dead run, not a human waiting on a PR.
+func TestSweepOrphansReapsSilently(t *testing.T) {
+	store := setup.NewMemoryParkStore()
+	n := &fakeNotifier{}
+	e := NewEngine(testSpec(), Deps{
+		GH: &fakeGH{}, Notify: n, MaxIter: 3, CITimeout: time.Hour, ParkStore: store,
+		OrphanTTL: time.Hour, CloneURL: func(_, _ string) string { return seedRemote(t) },
+	})
+	ctx := context.Background()
+	// Created but never parked, and older than the TTL — an instance reclaimed mid-apply.
+	_ = store.Put(ctx, setup.ParkRecord{SessionID: "dead", Workflow: e.spec.Name, Params: "{}",
+		UpdatedAt: time.Now().Add(-2 * time.Hour)})
+	// A run that started moments ago and may still be applying.
+	_ = store.Put(ctx, setup.ParkRecord{SessionID: "live", Workflow: e.spec.Name, Params: "{}",
+		UpdatedAt: time.Now()})
+
+	if err := e.SweepOrphans(ctx); err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	if _, ok, _ := store.Get(ctx, "dead"); ok {
+		t.Error("the stale unparked run should have been reaped")
+	}
+	if _, ok, _ := store.Get(ctx, "live"); !ok {
+		t.Error("a run that may still be applying must not be reaped")
+	}
+	if len(n.msgs) != 0 {
+		t.Errorf("orphan cleanup must not notify — nobody is waiting on a dead run, got %+v", n.msgs)
+	}
+}
+
+// A parked run awaiting CI is never treated as an orphan, however long it waits: the
+// timeout sweep owns it, and reaping it here would delete a run a human is waiting on.
+func TestSweepOrphansLeavesParkedRuns(t *testing.T) {
+	store := setup.NewMemoryParkStore()
+	n := &fakeNotifier{}
+	e := NewEngine(testSpec(), Deps{
+		GH: &fakeGH{}, Notify: n, MaxIter: 3, CITimeout: time.Hour, ParkStore: store,
+		OrphanTTL: time.Minute, CloneURL: func(_, _ string) string { return seedRemote(t) },
+	})
+	ctx := context.Background()
+	_ = store.Put(ctx, setup.ParkRecord{SessionID: "waiting", Workflow: e.spec.Name,
+		PRKey: "acme/api#42", CallID: "c", Attempts: 1, Params: "{}",
+		UpdatedAt: time.Now().Add(-2 * time.Hour)})
+
+	if err := e.SweepOrphans(ctx); err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	if _, ok, _ := store.Get(ctx, "waiting"); !ok {
+		t.Fatal("a parked run must survive the orphan sweep")
+	}
+	if n, _ := store.ParkedCount(ctx, e.spec.Name); n != 1 {
+		t.Errorf("parked count = %d, want 1 (still resolvable by a CI webhook)", n)
+	}
+}

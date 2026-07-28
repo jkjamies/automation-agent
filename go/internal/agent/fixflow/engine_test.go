@@ -20,7 +20,7 @@ import (
 func seedParked(e *Engine, prKey, sid, callID string, attempts int) {
 	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
 		SessionID: sid, Workflow: e.spec.Name, PRKey: prKey, CallID: callID,
-		Attempts: attempts, ParkedAt: time.Now(),
+		Attempts: attempts, UpdatedAt: time.Now(),
 	})
 }
 
@@ -247,7 +247,7 @@ func TestEngineSweepTimesOutStaleRun(t *testing.T) {
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
 	_ = e.driver.store.Put(context.Background(), setup.ParkRecord{
 		SessionID: "run-x", Workflow: e.spec.Name, PRKey: "acme/api#42", CallID: "c", Attempts: 1,
-		ParkedAt: time.Now().Add(-2 * time.Hour), // older than the 1h CITimeout
+		UpdatedAt: time.Now().Add(-2 * time.Hour), // older than the 1h CITimeout
 	})
 	if err := e.SweepTimeouts(context.Background()); err != nil {
 		t.Fatalf("SweepTimeouts: %v", err)
@@ -264,7 +264,7 @@ func TestEngineSweepTimesOutStaleRun(t *testing.T) {
 func TestEngineSweepSkipsFreshRun(t *testing.T) {
 	n := &fakeNotifier{}
 	e := newEngine(seedRemote(t), &fakeGH{}, n)
-	seedParked(e, "acme/api#42", "run-x", "c", 1) // ParkedAt = now
+	seedParked(e, "acme/api#42", "run-x", "c", 1) // UpdatedAt = now
 	if err := e.SweepTimeouts(context.Background()); err != nil {
 		t.Fatalf("SweepTimeouts: %v", err)
 	}
@@ -385,8 +385,8 @@ func TestSweepDoesNotClaimAnotherEnginesRun(t *testing.T) {
 	// Only the coverage engine has a stale parked run.
 	_ = shared.Put(context.Background(), setup.ParkRecord{
 		SessionID: "cov-sess", Workflow: "coverage", PRKey: "acme/api#42", CallID: "c1", Attempts: 1,
-		Params:   `{"owner":"acme","repo":"api","full_repo":"acme/api","base":"main"}`,
-		ParkedAt: time.Now().Add(-2 * time.Hour),
+		Params:    `{"owner":"acme","repo":"api","full_repo":"acme/api","base":"main"}`,
+		UpdatedAt: time.Now().Add(-2 * time.Hour),
 	})
 
 	if err := lint.SweepTimeouts(context.Background()); err != nil {

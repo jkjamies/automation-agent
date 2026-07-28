@@ -38,12 +38,11 @@ The detailed, copy-paste steps for each item are in
 - [ ] GitHub **Check runs** webhook → `https://<service>/webhooks/github` (HMAC =
       `GITHUB_WEBHOOK_SECRET`).
 - [ ] Two Cloud Scheduler jobs (Bearer `INTERNAL_TOKEN`): `/internal/cron/daily` (the daily
-      digest) and `/internal/sweep` (the durable timeout sweep). Cloud Scheduler is the only
-      trigger — the service runs no in-process cron.
+      digest) and `/internal/sweep` (the durable timeout sweep, which also reaps orphaned
+      runs). Cloud Scheduler is the only trigger — the service runs no in-process cron.
 
 ## TODO (not yet implemented)
 
-- [ ] **Orphan-session GC** for sessions created but never parked.
 - [ ] **Terraform/IaC** for Firestore + Cloud Run + Cloud Scheduler + Secret Manager.
 - [ ] **OIDC instead of a shared bearer** for `/internal/*`.
 - [ ] **Private ingress** — front the service with a self-hosted API gateway and make Cloud Run

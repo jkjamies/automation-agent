@@ -56,7 +56,7 @@ footprint for a workload that idles most of the day.
   guarded by a dedicated test). `sqlite` is durable-local; `memory` is the
   zero-dependency default (a restart strands parked runs).
 - The **ParkStore** — the park record: `owner/repo#pr → session id`, the parked interrupt
-  id, the attempt count, `parked_at`, and the run's serialized params (never
+  id, the attempt count, `updated_at`, and the run's serialized params (never
   model-controlled, so nothing in a run's history can redirect which repo or branch is
   edited). Its **atomic single-winner claim** (resolve-by-PR-key / sweep) is the only
   guard against stale or duplicate CI webhooks — a run resolves at most once.
@@ -64,14 +64,29 @@ footprint for a workload that idles most of the day.
 Time while parked is also infrastructure's job. Two layers free a run whose CI never
 reports: a soft per-run `CI_TIMEOUT` timer (in-process, lost on restart) and the durable
 catch-all sweep (`POST /internal/sweep`, driven by Cloud Scheduler), which claims stale
-records atomically and notifies for human review.
+*parked* records atomically and notifies for human review.
+
+That endpoint runs a second, different pass as well — `SweepOrphans`, which reaps records
+nothing can resolve and notifies **no one**. The distinction is the point: a parked run
+timing out means a human is waiting on a PR, while an orphan is a run that is already dead.
+It is described under [Terminal hygiene](#terminal-hygiene) below.
 
 ## Terminal hygiene
 
 Every terminal path — success, retries exhausted, timeout, apply failure, clean/no-work —
-sends a status-aware summary to Slack/Teams and then **clears the run**: the park record
-is deleted and the ADK session is deleted, so durable backends never accumulate finished
-runs.
+sends a status-aware summary to Slack/Teams and then **clears the run**: the ADK session is
+deleted and then the park record, so durable backends never accumulate finished runs. That
+order is deliberate. The record is the only thing that leads back to the session, so
+deleting it first and then failing would strand a session nothing references; keeping the
+record when the session delete fails leaves a marker the orphan sweep retries.
+
+Not every run reaches a terminal path, and the ones that don't are invisible to all of the
+above: a run whose instance was reclaimed mid-apply never parked, and a run displaced by a
+redelivered kickoff had its PR key taken by the newer run. No webhook can resolve either,
+and the timeout sweep only looks at *parked* records. So the same `/internal/sweep` also
+reaps records that are unparked and older than `ORPHAN_TTL`. It notifies no one — an orphan
+is a run that is already dead, not a human waiting on a PR — and it is worth doing because a
+park record carries the whole kickoff report, so leaking them is not free.
 
 ## Why this line is permanent
 

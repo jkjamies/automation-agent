@@ -19,7 +19,7 @@ The CI wait is a real ADK **IsLongRunning** suspend/resume: the `Driver` runs a 
 
 A run whose CI never reports is freed two ways: a soft per-run `CITimeout` timer (in-process, lost on restart) and the durable `SweepTimeouts` catch-all (driven by `/internal/sweep`). `ResolveByPRKey`/`Sweep` claim a run atomically (single winner), so a late/duplicate webhook racing the timer/sweep resolves it at most once.
 
-Terminal resolution (`clear`) deletes both the park record and the ADK session (`LongRunDriver.DeleteSession`) so durable backends don't accumulate finished runs.
+Terminal resolution (`clear`) deletes the ADK session (`LongRunDriver.DeleteSession`) and then the park record, so durable backends don't accumulate finished runs. The session goes first: the record is what leads back to it, so a failed session delete keeps the record as a marker the orphan sweep retries rather than stranding a session nothing references. Runs that never reach a terminal path — reclaimed mid-apply, or displaced by a redelivered kickoff — are reaped by `SweepOrphans` on the same `/internal/sweep` schedule, silently.
 
 **Once a run is underway, every terminal path notifies.** Success, retries exhausted, timeout, clean/no-work, an attempt that failed outright, *and* a run whose drive itself failed (the session backend being unavailable, say) all reach a human. This is the reason the failure paths route through one helper rather than returning bare errors: by the time most failures happen the attempt has already pushed a commit and opened a PR, and the dispatcher only logs — so a run dropped without a notification leaves that PR with nobody watching it.
 
@@ -52,13 +52,14 @@ flowchart TD
     C -->|"failure & attempts < MaxIter"| RT["resume run -> apply_fix again -> re-park (attempts+1)"]
     RT --> SUS
     TO["CITimeout timer fires"] -.-> TON["onTimeout: claim + summary + clear"]
-    SW["/internal/sweep -> SweepTimeouts (durable catch-all)"] -.-> TON
+    SW["/internal/sweep (Cloud Scheduler)"] -.->|"SweepTimeouts: stale parked runs"| TON
+    SW -.->|"SweepOrphans: runs nothing can resolve"| ORPH["reap silently: clear only<br/>no claim, no summary"]
 ```
 
 ## Implementation layout
 
 - `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
-- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the park record **and** the ADK session.
+- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts`/`SweepOrphans` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the ADK session **and then** the park record.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean / max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
 - `applyfix.go` — clone → branch → commit → push → ensure labeled PR. Whether the branch is
   created or continued is decided by whether the remote already has it, never by a flag the

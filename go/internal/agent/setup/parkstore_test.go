@@ -29,7 +29,7 @@ func firestorePrefix(base string) string {
 const wf = "lint"
 
 func parkRec(sid, prKey, callID string, attempts int) ParkRecord {
-	return ParkRecord{SessionID: sid, Workflow: wf, PRKey: prKey, CallID: callID, Attempts: attempts, ParkedAt: time.Now()}
+	return ParkRecord{SessionID: sid, Workflow: wf, PRKey: prKey, CallID: callID, Attempts: attempts, UpdatedAt: time.Now()}
 }
 
 func newSQLiteParkStore(t *testing.T) ParkStore {
@@ -186,7 +186,7 @@ func runParkStoreSuite(t *testing.T, newStore func(t *testing.T) ParkStore) {
 	// Only records parked before the cutoff are claimed; each exactly once.
 	t.Run("Sweep", func(t *testing.T) {
 		s := newStore(t)
-		stale := ParkRecord{SessionID: "old", Workflow: wf, PRKey: "o/r#1", CallID: "c", Attempts: 1, ParkedAt: time.Now().Add(-time.Hour)}
+		stale := ParkRecord{SessionID: "old", Workflow: wf, PRKey: "o/r#1", CallID: "c", Attempts: 1, UpdatedAt: time.Now().Add(-time.Hour)}
 		_ = s.Put(ctx, stale)
 		_ = s.Put(ctx, parkRec("new", "o/r#2", "c", 1))
 
@@ -210,17 +210,17 @@ func runParkStoreSuite(t *testing.T, newStore func(t *testing.T) ParkStore) {
 		}
 	})
 
-	// A run re-parked with a fresh ParkedAt after going stale is not swept: re-park updates
+	// A run re-parked with a fresh UpdatedAt after going stale is not swept: re-park updates
 	// the cutoff field, so the sweep leaves the fresh attempt alone.
 	t.Run("SweepSkipsFreshRepark", func(t *testing.T) {
 		s := newStore(t)
-		stale := ParkRecord{SessionID: "sess", Workflow: wf, PRKey: "o/r#8", CallID: "c1", Attempts: 1, ParkedAt: time.Now().Add(-time.Hour)}
+		stale := ParkRecord{SessionID: "sess", Workflow: wf, PRKey: "o/r#8", CallID: "c1", Attempts: 1, UpdatedAt: time.Now().Add(-time.Hour)}
 		_ = s.Put(ctx, stale)
 		// Resolve (a webhook) then re-park (a retry) under the same key, now fresh.
 		if _, ok, _ := s.ResolveByPRKey(ctx, wf, "o/r#8"); !ok {
 			t.Fatal("expected to resolve the stale park")
 		}
-		_ = s.Put(ctx, parkRec("sess", "o/r#8", "c2", 2)) // ParkedAt = now
+		_ = s.Put(ctx, parkRec("sess", "o/r#8", "c2", 2)) // UpdatedAt = now
 
 		if swept, err := s.Sweep(ctx, wf, time.Now().Add(-time.Minute)); err != nil || len(swept) != 0 {
 			t.Fatalf("sweep = %+v, err=%v; want nothing (the re-park is fresh)", swept, err)
@@ -249,6 +249,50 @@ func runParkStoreSuite(t *testing.T, newStore func(t *testing.T) ParkStore) {
 		}
 	})
 
+	// A record that is not parked and has gone stale is an orphan: nothing can ever resolve
+	// it. It gets there two ways — created but never parked (the instance died mid-apply), or
+	// parked and then displaced when another session took its PR key (a redelivered kickoff).
+	// The timeout sweep only looks at parked records, so without this these sit forever
+	// holding the whole kickoff report.
+	t.Run("SweepOrphans", func(t *testing.T) {
+		s := newStore(t)
+		// Never parked, stale.
+		_ = s.Put(ctx, ParkRecord{SessionID: "never-parked", Workflow: wf, Params: "p",
+			UpdatedAt: time.Now().Add(-time.Hour)})
+		// Never parked, but recent — a run that may still be applying right now.
+		_ = s.Put(ctx, ParkRecord{SessionID: "in-flight", Workflow: wf, Params: "p",
+			UpdatedAt: time.Now()})
+		// Parked and stale: the timeout sweep owns this one, not the orphan sweep.
+		_ = s.Put(ctx, ParkRecord{SessionID: "parked", Workflow: wf, PRKey: "o/r#1", CallID: "c",
+			UpdatedAt: time.Now().Add(-time.Hour)})
+		// Another workflow's orphan must be left alone.
+		_ = s.Put(ctx, ParkRecord{SessionID: "other-wf", Workflow: "coverage", Params: "p",
+			UpdatedAt: time.Now().Add(-time.Hour)})
+
+		got, err := s.SweepOrphans(ctx, wf, time.Now().Add(-time.Minute))
+		if err != nil {
+			t.Fatalf("SweepOrphans: %v", err)
+		}
+		if len(got) != 1 || got[0].SessionID != "never-parked" {
+			t.Fatalf("orphans = %+v, want only never-parked", ids(got))
+		}
+		// It does not claim, so the record is still there for the caller to delete — and a
+		// second sweep sees it again (deleting is idempotent, and this never notifies).
+		if again, _ := s.SweepOrphans(ctx, wf, time.Now().Add(-time.Minute)); len(again) != 1 {
+			t.Errorf("a second sweep should still see the unclaimed orphan, got %+v", ids(again))
+		}
+		if err := s.Delete(ctx, "never-parked"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if after, _ := s.SweepOrphans(ctx, wf, time.Now().Add(-time.Minute)); len(after) != 0 {
+			t.Errorf("nothing should remain after deleting the orphan, got %+v", ids(after))
+		}
+		// The parked run is untouched: still parked, still resolvable.
+		if n, _ := s.ParkedCount(ctx, wf); n != 1 {
+			t.Errorf("parked count = %d, want 1 (the orphan sweep must not unpark anything)", n)
+		}
+	})
+
 	// Every fix engine shares ONE store (one Firestore instance and collection), so a claim
 	// must never cross workflows. Without this scoping, whichever engine swept first resolved
 	// every stale run — reporting it under the wrong workflow's title and awaited check name,
@@ -258,9 +302,9 @@ func runParkStoreSuite(t *testing.T, newStore func(t *testing.T) ParkStore) {
 		// Two engines parked on the same repo. The PR numbers differ in practice (each engine
 		// pushes its own branch), but they are made identical here to pin the strongest case.
 		lint := ParkRecord{SessionID: "lint-sess", Workflow: "lint", PRKey: "o/r#5", CallID: "cl",
-			Attempts: 1, ParkedAt: time.Now().Add(-time.Hour)}
+			Attempts: 1, UpdatedAt: time.Now().Add(-time.Hour)}
 		cov := ParkRecord{SessionID: "cov-sess", Workflow: "coverage", PRKey: "o/r#5", CallID: "cc",
-			Attempts: 1, ParkedAt: time.Now().Add(-time.Hour)}
+			Attempts: 1, UpdatedAt: time.Now().Add(-time.Hour)}
 		if err := s.Put(ctx, lint); err != nil {
 			t.Fatalf("Put lint: %v", err)
 		}
@@ -383,4 +427,13 @@ func TestParkStoreAndSessionServiceAgreeOnBackend(t *testing.T) {
 	if parkErr == nil || sessErr == nil {
 		t.Errorf("both switches must reject an unknown backend (park=%v, session=%v)", parkErr, sessErr)
 	}
+}
+
+// ids renders session ids for readable sweep failures.
+func ids(recs []ParkRecord) []string {
+	out := make([]string, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, r.SessionID)
+	}
+	return out
 }

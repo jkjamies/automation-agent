@@ -106,6 +106,10 @@ type Driver struct {
 	lr      *setup.LongRunDriver
 	store   setup.ParkStore
 	timeout time.Duration
+	// orphanTTL is how long an unparked record may sit before the orphan sweep reaps it. It
+	// must exceed a single apply attempt, since no record is written while one runs — the
+	// execution transport's dispatch deadline (30m ceiling) bounds that.
+	orphanTTL time.Duration
 
 	mu     sync.Mutex
 	timers map[string]*time.Timer // prKey -> soft timeout timer
@@ -117,10 +121,11 @@ func newDriver(e *Engine) (*Driver, error) {
 		store = setup.NewMemoryParkStore()
 	}
 	dr := &Driver{
-		engine:  e,
-		store:   store,
-		timeout: e.d.CITimeout,
-		timers:  map[string]*time.Timer{},
+		engine:    e,
+		store:     store,
+		timeout:   e.d.CITimeout,
+		orphanTTL: e.d.OrphanTTL,
+		timers:    map[string]*time.Timer{},
 	}
 	fixer, err := newFixerAgent("fixer-"+e.spec.Name, dr.applyNode, dr.awaitNode)
 	if err != nil {
@@ -414,6 +419,24 @@ func (dr *Driver) SweepTimeouts(ctx context.Context) error {
 	return err
 }
 
+// SweepOrphans deletes this engine's runs that nothing can ever resolve: records that were
+// created but never parked (an instance reclaimed mid-apply), ones displaced when another
+// session took their PR key (a redelivered kickoff), and ones whose previous clear could not
+// delete the session. Driven by Cloud Scheduler alongside the timeout sweep.
+//
+// It never notifies. A parked run timing out means a human is waiting on a PR; an orphan
+// means the run is already dead and its outcome — if it had one — was reported long ago.
+// Notifying here would be noise on work nobody is tracking.
+func (dr *Driver) SweepOrphans(ctx context.Context) error {
+	orphans, err := dr.store.SweepOrphans(ctx, dr.workflow(), time.Now().Add(-dr.orphanTTL))
+	for _, run := range orphans {
+		dr.engine.d.Log.Info("reaping orphaned run",
+			"workflow", dr.engine.spec.Name, "session", run.SessionID, "last_update", run.UpdatedAt)
+		dr.clear(ctx, run.SessionID)
+	}
+	return err
+}
+
 // gatherChanges best-effort fetches the PR branch's base...head diff for a terminal
 // summary. On error it returns an empty comparison so the summary still reports the attempt
 // count and findings.
@@ -504,13 +527,21 @@ func (dr *Driver) newSessionID() string {
 // one ParkStore, so it stamps each record and scopes every claim — see setup.ParkRecord.
 func (dr *Driver) workflow() string { return dr.engine.spec.Name }
 
+// putRecord stamps the record's UpdatedAt and writes it. Every write goes through here so
+// the timestamp cannot be forgotten at a new call site: it is what both sweeps age records
+// by, and a record written without it would be invisible to the orphan sweep forever.
+func (dr *Driver) putRecord(ctx context.Context, rec setup.ParkRecord) error {
+	rec.UpdatedAt = time.Now()
+	return dr.store.Put(ctx, rec)
+}
+
 // putParams stores a fresh run's inputs (not yet parked: no PR key, no timer).
 func (dr *Driver) putParams(ctx context.Context, sid string, rp *runParams) error {
 	blob, err := marshalRunParams(rp)
 	if err != nil {
 		return err
 	}
-	return dr.store.Put(ctx, setup.ParkRecord{SessionID: sid, Workflow: dr.workflow(), Params: blob})
+	return dr.putRecord(ctx, setup.ParkRecord{SessionID: sid, Workflow: dr.workflow(), Params: blob})
 }
 
 // park records that sid is now suspended awaiting CI under key, and arms the soft timeout.
@@ -527,8 +558,7 @@ func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int
 	rec.PRKey = key
 	rec.CallID = callID
 	rec.Attempts = attempt
-	rec.ParkedAt = time.Now()
-	if err := dr.store.Put(ctx, rec); err != nil {
+	if err := dr.putRecord(ctx, rec); err != nil {
 		return err
 	}
 	dr.armTimer(key)
@@ -555,18 +585,26 @@ func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) erro
 		return err
 	}
 	rec.Params = blob
-	return dr.store.Put(ctx, rec)
+	return dr.putRecord(ctx, rec)
 }
 
-// clear is terminal cleanup: it removes the run from the park store and deletes the ADK
-// session so a durable backend does not leak completed runs. (The timer, if any, is
-// stopped by the resolve that precedes clear.)
+// clear is terminal cleanup: it deletes the ADK session and then the park record, so a
+// durable backend does not leak completed runs. (The timer, if any, is stopped by the
+// resolve that precedes clear.)
+//
+// The order matters. The session goes first, and the record is kept if that fails: the
+// record is the only thing that can lead anyone back to the session, so deleting it first
+// and then failing would leave a session nothing references and no sweep can ever find.
+// Keeping it means the orphan sweep retries this same clear later, which turns a failed
+// cleanup into a delayed one instead of a permanent leak.
 func (dr *Driver) clear(ctx context.Context, sid string) {
+	if err := dr.lr.DeleteSession(ctx, sid); err != nil {
+		dr.engine.d.Log.Error("delete session failed; keeping the park record so the orphan sweep retries",
+			"workflow", dr.engine.spec.Name, "session", sid, "err", err)
+		return
+	}
 	if err := dr.store.Delete(ctx, sid); err != nil {
 		dr.engine.d.Log.Error("clear run failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
-	}
-	if err := dr.lr.DeleteSession(ctx, sid); err != nil {
-		dr.engine.d.Log.Error("delete session failed", "workflow", dr.engine.spec.Name, "session", sid, "err", err)
 	}
 }
 

@@ -86,8 +86,10 @@ sequenceDiagram
 - `POST /internal/cron/daily` — Cloud Scheduler trigger for the daily
   [summary](/modules/agents/summary.md) digest (`KindCronDaily`); lets the schedule live
   GCP-side so Cloud Run scales to zero.
-- `POST /internal/sweep` — Cloud Scheduler trigger for the durable timeout sweep
-  (`SweepFunc` → `Engine.SweepTimeouts`), the restart-proof catch-all behind the soft timer.
+- `POST /internal/sweep` — Cloud Scheduler trigger for the durable sweeps (`SweepFunc`). It
+  runs two passes per engine: `Engine.SweepTimeouts`, the restart-proof catch-all behind the
+  soft timer, which claims stale **parked** runs and notifies; and `Engine.SweepOrphans`,
+  which silently reaps runs nothing can ever resolve.
 - `POST /internal/dispatch` — the **Cloud Tasks worker** (`DispatchFunc`, wired via
   `WithDispatch`). It decodes the queued `ingest.Envelope` and runs `dispatcher.Dispatch`
   **synchronously, in-request**, so on Cloud Run CPU stays allocated for the whole compute

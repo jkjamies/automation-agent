@@ -252,7 +252,7 @@ automation-agent/
 │       │   │   └── prompts/
 │       │   └── fixflow/               # generic fix engine shared by lint + coverage
 │       │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
-│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts) over a ParkStore
+│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts/SweepOrphans) over a ParkStore
 │       │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
 │       │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
 │       │       ├── analyze.go         # analyze step
@@ -455,8 +455,10 @@ lint payload ──▶ root ──▶ fixflow Driver (workflow-graph fixer, hold
    │
    ├─ (CI never reports, warm)    CI_TIMEOUT timer ─▶ onTimeout: claim, notify "needs review", clear
    └─ (CI never reports, restarted) POST /internal/sweep ─▶ ParkStore.Sweep: claim stale, notify, clear
+                                                        └▶ ParkStore.SweepOrphans: reap unresolvable, silently
 
-   clear = ParkStore.Delete + LongRunDriver.DeleteSession (no leaked sessions on durable backends)
+   clear = LongRunDriver.DeleteSession, then ParkStore.Delete (no leaked sessions on durable
+           backends; on a failed session delete the record is kept for SweepOrphans to retry)
 ```
 
 ### CI signal — a dedicated, label-triggered agent check (GitHub)
@@ -551,14 +553,18 @@ three layers, all funnelling through the `ParkStore`'s atomic single-winner clai
   for `CI_TIMEOUT` (default 90m). If CI never reports, `onTimeout` claims the run and posts
   "needs human review" + PR link. The timer is in-process, so a restart loses it — hence:
 - **`ParkStore.Sweep` (durable catch-all).** Cloud Scheduler POSTs `/internal/sweep`, which
-  claims every parked record whose `ParkedAt` precedes `now − CI_TIMEOUT` and resolves it the
+  claims every parked record whose `UpdatedAt` precedes `now − CI_TIMEOUT` and resolves it the
   same way. This is the restart-safe replacement for the lost timer. Exactly one of {webhook,
   timer, sweep} wins, via the store's atomic claim (mutex / sqlite CAS / firestore txn).
-- **Eager terminal cleanup.** On resolve the Driver `clear`s the run — `ParkStore.Delete` +
-  `LongRunDriver.DeleteSession` — so a durable backend does not leak completed sessions. (A
-  finished PR is still merged/closed by the normal review workflow.) A *separate* orphan-session
-  GC for sessions that crash between create-and-park is a planned hardening — see
-  `DEPLOYMENT.md`.
+- **Eager terminal cleanup.** On resolve the Driver `clear`s the run — `LongRunDriver.DeleteSession`
+  first, then `ParkStore.Delete` — so a durable backend does not leak completed sessions. The
+  order matters: the record is the only thing that leads back to the session, so a failed
+  session delete keeps the record as a marker `ParkStore.SweepOrphans` retries, rather than
+  stranding a session nothing references. (A
+  finished PR is still merged/closed by the normal review workflow.) The runs that never reach
+  a terminal path at all — reclaimed mid-apply, displaced by a redelivered kickoff, or left by a
+  failed session delete — are reaped by `ParkStore.SweepOrphans` on the same `/internal/sweep`
+  schedule, after `ORPHAN_TTL` and without notifying anyone.
 
 ### ADK mechanics
 

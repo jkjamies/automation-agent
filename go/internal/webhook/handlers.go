@@ -86,8 +86,8 @@ func (s *Server) handleCronDaily(w http.ResponseWriter, r *http.Request) {
 	s.dispatch(r.Context(), w, ingest.New(ingest.KindCronDaily, "internal:/cron/daily", nil, s.now()))
 }
 
-// handleSweep runs the durable timeout sweep (Cloud Scheduler drives it on a schedule),
-// resolving parked runs whose CI never reported.
+// handleSweep runs the durable sweeps (Cloud Scheduler drives it on a schedule): resolving
+// parked runs whose CI never reported, and reaping runs nothing can ever resolve.
 func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request) {
 	if !s.internalAuthenticated(w, r) {
 		return
