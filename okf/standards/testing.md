@@ -1,7 +1,7 @@
 ---
 type: Standard
 title: Testing
-description: How to run every kind of test and the rules they obey — 80% coverage, no LLM-content assertions, and stubbed networks.
+description: How to run every kind of test and the rules they obey — ≥80% coverage per package and overall, no LLM-content assertions, and stubbed networks.
 tags: [testing, coverage, conventions]
 sensitivity: internal
 bundle: automation-agent
@@ -135,7 +135,21 @@ These never assert on model *content* — they assert the call wiring round-trip
 
 - `make cover` runs `go test -coverprofile=coverage.out -covermode=atomic ./internal/...`
   (`cmd/` is composition-only and excluded), then greps `*_firestore.go:` lines out into
-  `coverage.gate.out` and fails if the remaining total is `< 80%`.
+  `coverage.gate.out`.
+- It applies the floor **twice** against that same profile, and either failing fails the gate:
+  - **Per package** — statement-weighted the way `go tool cover` computes a total, naming every
+    package below the floor rather than only the first:
+    ```
+    FAIL: automation-agent/internal/auth 76.3% < 80%
+    FAIL: automation-agent/internal/gitrepo 70.0% < 80%
+    ```
+  - **Overall**, on the remaining total.
+- One knob (`COVER_MIN`) drives both, deliberately: the standard is "≥ 80%", and it should be
+  true of every package rather than only of their mean. A package that legitimately cannot clear
+  the bar gets an explicit exclusion rather than the floor being lowered for everyone.
+- Because both read `coverage.gate.out`, the `*_firestore.go` exclusion applies to the
+  per-package floor too — `agent/setup` is judged on its real figure rather than the lower one an
+  emulator-less run reports.
 - Inspect locally: `go tool cover -func=coverage.out` (per-func) or
   `go tool cover -html=coverage.out` (browser).
 - **Race detector** is not in the default gate; run it manually when touching concurrency
