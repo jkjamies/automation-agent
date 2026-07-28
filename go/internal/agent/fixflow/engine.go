@@ -27,7 +27,7 @@ type FileWork struct {
 }
 
 // ErrNoWork is what a Triage step returns when the report contains nothing actionable —
-// the target is already clean. It is not a failure: the Driver reports it as a positive
+// the target is already clean. It is not a failure: the driver reports it as a positive
 // "nothing to address" outcome (a clean ✅ notification) instead of asking a human to
 // review a fix that was never needed. Triage steps wrap it with %w so errors.Is detects it.
 var ErrNoWork = errors.New("no actionable work")
@@ -133,11 +133,11 @@ type Deps struct {
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait pause/resume itself is
-// owned by the Driver (a parking workflow graph + an injected setup.ParkStore backend).
+// owned by the driver (a parking workflow graph + an injected setup.ParkStore backend).
 type Engine struct {
 	spec   Spec
 	d      Deps
-	driver *Driver
+	driver *driver
 }
 
 // NewEngine builds an engine, applying defaults. It panics if the long-run agent cannot
@@ -241,7 +241,7 @@ func (e *Engine) Resume(ctx context.Context, raw []byte) error {
 
 // attemptOnce runs a single fix attempt against rp: triage → checkout → analyze →
 // commit, returning the resulting PR. It is the body the apply_fix tool invokes; the
-// surrounding suspend/retry loop lives in the Driver. One checkout is shared by analyze
+// surrounding suspend/retry loop lives in the driver. One checkout is shared by analyze
 // (read/explore) and commit (write/push).
 func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, error) {
 	work, err := e.spec.Triage(ctx, e.d.LLM, rp.report)

@@ -79,7 +79,7 @@ func unmarshalRunParams(s string) (*runParams, error) {
 	}, nil
 }
 
-// Driver runs a Spec's CI-wait loop on the workflow engine's pause/resume. It owns the
+// driver runs a Spec's CI-wait loop on the workflow engine's pause/resume. It owns the
 // fixer workflow agent and a ParkStore of parked runs; all policy — retry vs give up,
 // attempt counting, the per-run timeout — lives here, while the workflow graph only
 // encodes the fixed apply_fix → await_ci shape:
@@ -101,7 +101,7 @@ func unmarshalRunParams(s string) (*runParams, error) {
 // The ParkStore's atomic claim is the only guard against stale or duplicate CI results:
 // a resume fed to a session whose park was already resolved starts a fresh run rather
 // than erroring, so Resume must never bypass the claim.
-type Driver struct {
+type driver struct {
 	engine  *Engine
 	lr      *setup.LongRunDriver
 	store   setup.ParkStore
@@ -115,12 +115,12 @@ type Driver struct {
 	timers map[string]*time.Timer // prKey -> soft timeout timer
 }
 
-func newDriver(e *Engine) (*Driver, error) {
+func newDriver(e *Engine) (*driver, error) {
 	store := e.d.ParkStore
 	if store == nil {
 		store = setup.NewMemoryParkStore()
 	}
-	dr := &Driver{
+	dr := &driver{
 		engine:    e,
 		store:     store,
 		timeout:   e.d.CITimeout,
@@ -209,7 +209,7 @@ func (o applyFixOutcome) route() string {
 // model- or event-supplied), so nothing in the run's history can redirect which repo or
 // branch is edited. An attempt error is reported as an "error" output rather than a node
 // failure: the run must conclude (so afterDrive notifies a human), not fail mid-graph.
-func (dr *Driver) applyNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+func (dr *driver) applyNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
 	outcome := dr.applyFix(nc)
 	ev := session.NewEvent(nc, nc.InvocationID())
 	ev.Output = outcome.output()
@@ -222,7 +222,7 @@ func (dr *Driver) applyNode(nc agent.Context, _ any, emit func(*session.Event) e
 
 // applyFix performs the attempt and folds every outcome — including load/decode errors —
 // into an applyFixOutcome.
-func (dr *Driver) applyFix(nc agent.Context) applyFixOutcome {
+func (dr *driver) applyFix(nc agent.Context) applyFixOutcome {
 	rec, ok, err := dr.store.Get(nc, nc.SessionID())
 	if err != nil {
 		return applyFixOutcome{Err: fmt.Errorf("apply_fix: load run %q: %w", nc.SessionID(), err)}
@@ -251,7 +251,7 @@ func (dr *Driver) applyFix(nc agent.Context) applyFixOutcome {
 // routes on the conclusion — "failure" cycles back to apply_fix, anything else concludes.
 // The interrupt id is derived from the invocation so the re-entered node can correlate
 // its own pause; it is unique per run because each fix run owns its session/invocation.
-func (dr *Driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
+func (dr *driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) error) (any, error) {
 	reply, err := workflow.ResumeOrRequestInput(nc, emit, session.RequestInput{
 		InterruptID: nodeAwaitCI + "-" + nc.InvocationID(),
 		Message:     "Waiting for CI to report on the fix PR.",
@@ -279,7 +279,7 @@ func (dr *Driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) e
 }
 
 // Kickoff starts a new suspended run: apply the fix, then park awaiting CI.
-func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
+func (dr *driver) Kickoff(ctx context.Context, k Kickoff) error {
 	base, err := dr.resolveBase(ctx, k)
 	if err != nil {
 		return err
@@ -311,7 +311,7 @@ func (dr *Driver) Kickoff(ctx context.Context, k Kickoff) error {
 // A lookup failure fails the kickoff rather than falling back to a guessed name: every
 // downstream step (branch point, PR base, compare) needs a ref that really exists, and a
 // wrong guess surfaces only as an opaque GitHub 422 when the PR is opened.
-func (dr *Driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
+func (dr *driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
 	if k.Base != "" {
 		return k.Base, nil
 	}
@@ -324,7 +324,7 @@ func (dr *Driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
 }
 
 // Resume reacts to a CI conclusion for a parked run.
-func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
+func (dr *driver) Resume(ctx context.Context, in ResumeInput) error {
 	if in.PRNumber == 0 {
 		return fmt.Errorf("resume: missing PR number")
 	}
@@ -382,7 +382,7 @@ func (dr *Driver) Resume(ctx context.Context, in ResumeInput) error {
 
 // onTimeout fires (from the soft per-run timer) when a parked run's CI never reports. It
 // claims the run, frees it, and asks for human review.
-func (dr *Driver) onTimeout(key string) {
+func (dr *driver) onTimeout(key string) {
 	ctx := context.Background()
 	run, ok, err := dr.store.ResolveByPRKey(ctx, dr.workflow(), key)
 	if err != nil {
@@ -403,7 +403,7 @@ func (dr *Driver) onTimeout(key string) {
 // durable catch-all behind the soft in-memory timer (which a restart loses). Driven by
 // Cloud Scheduler via /internal/sweep. The store's Sweep claims each run atomically, so a
 // webhook racing the sweep still resolves it at most once.
-func (dr *Driver) SweepTimeouts(ctx context.Context) error {
+func (dr *driver) SweepTimeouts(ctx context.Context) error {
 	// Process every record the store claimed even if Sweep also returns an error: the store's
 	// contract is that returned records are already claimed (pr_key cleared), so skipping them
 	// on error would strand them. Propagate the error afterwards so the handler 500s and Cloud
@@ -427,7 +427,7 @@ func (dr *Driver) SweepTimeouts(ctx context.Context) error {
 // It never notifies. A parked run timing out means a human is waiting on a PR; an orphan
 // means the run is already dead and its outcome — if it had one — was reported long ago.
 // Notifying here would be noise on work nobody is tracking.
-func (dr *Driver) SweepOrphans(ctx context.Context) error {
+func (dr *driver) SweepOrphans(ctx context.Context) error {
 	orphans, err := dr.store.SweepOrphans(ctx, dr.workflow(), time.Now().Add(-dr.orphanTTL))
 	for _, run := range orphans {
 		dr.engine.d.Log.Info("reaping orphaned run",
@@ -440,7 +440,7 @@ func (dr *Driver) SweepOrphans(ctx context.Context) error {
 // gatherChanges best-effort fetches the PR branch's base...head diff for a terminal
 // summary. On error it returns an empty comparison so the summary still reports the attempt
 // count and findings.
-func (dr *Driver) gatherChanges(ctx context.Context, rp *runParams) githubapi.Comparison {
+func (dr *driver) gatherChanges(ctx context.Context, rp *runParams) githubapi.Comparison {
 	cmp, err := dr.engine.d.GH.Compare(ctx, rp.owner, rp.repo, rp.base, dr.engine.spec.Branch)
 	if err != nil {
 		dr.engine.d.Log.Warn("compare for summary failed", "workflow", dr.engine.spec.Name, "repo", rp.fullRepo, "err", err)
@@ -451,7 +451,7 @@ func (dr *Driver) gatherChanges(ctx context.Context, rp *runParams) githubapi.Co
 
 // terminalNotify builds and sends the status-aware summary for a finished run: the outcome
 // framing, the original targeted findings, and what actually changed on the PR.
-func (dr *Driver) terminalNotify(ctx context.Context, outcome terminalOutcome, title string, run setup.ParkRecord, fullRepo string, prNumber int, lastOutput string) error {
+func (dr *driver) terminalNotify(ctx context.Context, outcome terminalOutcome, title string, run setup.ParkRecord, fullRepo string, prNumber int, lastOutput string) error {
 	in := summaryInput{
 		outcome: outcome, workflow: dr.engine.spec.Name, fullRepo: fullRepo,
 		prNumber: prNumber, attempts: run.Attempts, lastOutput: lastOutput,
@@ -469,7 +469,7 @@ func (dr *Driver) terminalNotify(ctx context.Context, outcome terminalOutcome, t
 
 // afterDrive inspects a drive's outcome and either surfaces an apply error or parks the
 // run (and arms its timeout) under its PR key.
-func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setup.DriveResult, attempt int) error {
+func (dr *driver) afterDrive(ctx context.Context, sid, fullRepo string, res setup.DriveResult, attempt int) error {
 	apply := res.NodeOutput(nodeApplyFix)
 	if apply != nil {
 		if msg, bad := apply["error"]; bad {
@@ -498,7 +498,7 @@ func (dr *Driver) afterDrive(ctx context.Context, sid, fullRepo string, res setu
 // failure, not a CI failure) and notifies a human. Without this, an apply error would
 // only bubble up to the dispatcher's logger and never reach the review channel — a fix
 // that can't even open its PR would vanish silently.
-func (dr *Driver) failApply(ctx context.Context, sid, fullRepo, reason string) error {
+func (dr *driver) failApply(ctx context.Context, sid, fullRepo, reason string) error {
 	dr.clear(ctx, sid)
 	_ = dr.engine.notify(ctx, dr.engine.spec.ReviewTitle,
 		fmt.Sprintf("%s: the %s fix could not be applied (%s). Please review.", fullRepo, dr.engine.spec.Name, reason), "")
@@ -509,7 +509,7 @@ func (dr *Driver) failApply(ctx context.Context, sid, fullRepo, reason string) e
 // the run never parked, so it just frees the run and sends a positive "already clean"
 // notice — never the human-review alarm. Returns nil so the dispatcher does not log a
 // no-op as a failure.
-func (dr *Driver) finishClean(ctx context.Context, sid, fullRepo string) error {
+func (dr *driver) finishClean(ctx context.Context, sid, fullRepo string) error {
 	dr.engine.d.Log.Info("nothing to address; already clean", "workflow", dr.engine.spec.Name, "repo", fullRepo)
 	dr.clear(ctx, sid)
 	text := buildSummaryText(summaryInput{outcome: outcomeClean, workflow: dr.engine.spec.Name, fullRepo: fullRepo})
@@ -519,24 +519,24 @@ func (dr *Driver) finishClean(ctx context.Context, sid, fullRepo string) error {
 // newSessionID returns a globally unique session id. A UUID (not a process-local counter)
 // is required because the ParkStore is shared across Drivers and, with a durable backend,
 // across restarts and instances — a counter would collide or overwrite persisted runs.
-func (dr *Driver) newSessionID() string {
+func (dr *driver) newSessionID() string {
 	return uuid.NewString()
 }
 
 // workflow is this driver's owning engine name ("lint" | "coverage"). Every engine shares
 // one ParkStore, so it stamps each record and scopes every claim — see setup.ParkRecord.
-func (dr *Driver) workflow() string { return dr.engine.spec.Name }
+func (dr *driver) workflow() string { return dr.engine.spec.Name }
 
 // putRecord stamps the record's UpdatedAt and writes it. Every write goes through here so
 // the timestamp cannot be forgotten at a new call site: it is what both sweeps age records
 // by, and a record written without it would be invisible to the orphan sweep forever.
-func (dr *Driver) putRecord(ctx context.Context, rec setup.ParkRecord) error {
+func (dr *driver) putRecord(ctx context.Context, rec setup.ParkRecord) error {
 	rec.UpdatedAt = time.Now()
 	return dr.store.Put(ctx, rec)
 }
 
 // putParams stores a fresh run's inputs (not yet parked: no PR key, no timer).
-func (dr *Driver) putParams(ctx context.Context, sid string, rp *runParams) error {
+func (dr *driver) putParams(ctx context.Context, sid string, rp *runParams) error {
 	blob, err := marshalRunParams(rp)
 	if err != nil {
 		return err
@@ -546,7 +546,7 @@ func (dr *Driver) putParams(ctx context.Context, sid string, rp *runParams) erro
 
 // park records that sid is now suspended awaiting CI under key, and arms the soft timeout.
 // It preserves the run's stored params (read-modify-write of the existing record).
-func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int) error {
+func (dr *driver) park(ctx context.Context, sid, key, callID string, attempt int) error {
 	rec, ok, err := dr.store.Get(ctx, sid)
 	if err != nil {
 		return err
@@ -567,7 +567,7 @@ func (dr *Driver) park(ctx context.Context, sid, key, callID string, attempt int
 
 // updateForRetry records the previous attempt's CI failure as feedback, persisting it for
 // the retry's apply_fix.
-func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) error {
+func (dr *driver) updateForRetry(ctx context.Context, sid, feedback string) error {
 	rec, ok, err := dr.store.Get(ctx, sid)
 	if err != nil {
 		return err
@@ -597,7 +597,7 @@ func (dr *Driver) updateForRetry(ctx context.Context, sid, feedback string) erro
 // and then failing would leave a session nothing references and no sweep can ever find.
 // Keeping it means the orphan sweep retries this same clear later, which turns a failed
 // cleanup into a delayed one instead of a permanent leak.
-func (dr *Driver) clear(ctx context.Context, sid string) {
+func (dr *driver) clear(ctx context.Context, sid string) {
 	if err := dr.lr.DeleteSession(ctx, sid); err != nil {
 		dr.engine.d.Log.Error("delete session failed; keeping the park record so the orphan sweep retries",
 			"workflow", dr.engine.spec.Name, "session", sid, "err", err)
@@ -608,7 +608,7 @@ func (dr *Driver) clear(ctx context.Context, sid string) {
 	}
 }
 
-func (dr *Driver) armTimer(key string) {
+func (dr *driver) armTimer(key string) {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()
 	if old, ok := dr.timers[key]; ok {
@@ -617,7 +617,7 @@ func (dr *Driver) armTimer(key string) {
 	dr.timers[key] = time.AfterFunc(dr.timeout, func() { dr.onTimeout(key) })
 }
 
-func (dr *Driver) stopTimer(key string) {
+func (dr *driver) stopTimer(key string) {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()
 	if t, ok := dr.timers[key]; ok {
@@ -627,7 +627,7 @@ func (dr *Driver) stopTimer(key string) {
 }
 
 // parkedCount reports the number of this engine's currently parked runs (used by tests).
-func (dr *Driver) parkedCount() int {
+func (dr *driver) parkedCount() int {
 	n, _ := dr.store.ParkedCount(context.Background(), dr.workflow())
 	return n
 }

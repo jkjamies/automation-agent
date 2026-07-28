@@ -117,6 +117,11 @@ ARCH tests.
 All verified on pkg.go.dev. `gh` CLI is **not** a dependency — go-github + go-git cover
 everything in-process.
 
+This table is the catalogue of what is used and why. The rule for admitting something new to
+it — standard library first, an already-present module next, a new one last, and provider/storage
+SDKs confined to `internal/agent/setup` — is in
+[Go style § Adding a dependency](/standards/go-style.md#adding-a-dependency).
+
 | Concern | Library | Notes |
 |---|---|---|
 | Agent framework | `google.golang.org/adk/v2` | v2.x; agents, workflow agents, runner, model interface |
@@ -252,7 +257,7 @@ automation-agent/
 │       │   │   └── prompts/
 │       │   └── fixflow/               # generic fix engine shared by lint + coverage
 │       │       ├── engine.go          # Spec-driven engine (triage→analyze→commit→PR)
-│       │       ├── driver.go          # suspend/resume Driver (Kickoff/Resume/onTimeout/SweepTimeouts/SweepOrphans) over a ParkStore
+│       │       ├── driver.go          # suspend/resume driver (Kickoff/Resume/onTimeout/SweepTimeouts/SweepOrphans) over a ParkStore
 │       │       ├── summary.go         # status-aware terminal summaries (success/exhausted/timeout)
 │       │       ├── applyfix.go        # one fix attempt: checkout/edit/commit/push/PR
 │       │       ├── analyze.go         # analyze step
@@ -278,7 +283,7 @@ automation-agent/
 Suspend/resume state is split across two `internal/agent/setup`-owned stores, both selected
 by one `SESSION_BACKEND` env (`memory`|`sqlite`|`firestore`): the ADK `session.Service`
 (suspend/resume event history) and the `setup.ParkStore` (the park record — `prKey→sessionID`,
-attempts, serialized run params). The `fixflow` Driver holds a `ParkStore`, not an in-process
+attempts, serialized run params). The `fixflow` driver holds a `ParkStore`, not an in-process
 map. Resume is webhook-driven (fast path), with a per-run `CI_TIMEOUT` timer **and** the
 durable `ParkStore` sweep (driven by Cloud Scheduler via `/internal/sweep`) as catch-alls.
 There is no PR-scan ticker over labeled PRs. With a durable backend a process restart resumes
@@ -401,7 +406,7 @@ webhook. Where that suspended state lives is a config choice, not a hardcoded "i
 GitHub still holds the durable PR artifacts (PR number/branch/head SHA, the check conclusion,
 the `automation-agent` label) and the findings remain re-derivable from the check output — but
 GitHub is **not** scanned to recover in-flight state. Instead, when a fix applies and parks on
-`await_ci`, the Driver writes a park record to the `ParkStore` (keyed by sessionID, indexed by
+`await_ci`, the driver writes a park record to the `ParkStore` (keyed by sessionID, indexed by
 PR key) and arms a per-run `CI_TIMEOUT` timer. Consequences:
 
 1. **The `memory` default keeps it lightweight** — no DB, no file, no volume, nothing to clean
@@ -434,21 +439,21 @@ PR key) and arms a per-run `CI_TIMEOUT` timer. Consequences:
 ### Flow
 
 ```
-lint payload ──▶ root ──▶ fixflow Driver (workflow-graph fixer, holds a ParkStore)
+lint payload ──▶ root ──▶ fixflow driver (workflow-graph fixer, holds a ParkStore)
    │
    │  Kickoff: mint sessionID (UUID); Put run params in the ParkStore
    │  attempt i:
    │   1. apply_fix node : load run params from ParkStore by sessionID (never event-supplied);
    │                       analyze + go-git clone/branch/edit/commit/push; go-github open/update PR
    │   2. await_ci node  : request-input PAUSE — the run SUSPENDS on an interrupt id;
-   │                       Driver parks the record {sessionID, prKey, callID (interrupt id),
+   │                       driver parks the record {sessionID, prKey, callID (interrupt id),
    │                       attempts, params} in the ParkStore and arms a CI_TIMEOUT timer.
    │                       The session.Service holds the paused run's event history (the
    │                       engine rebuilds the paused graph state from it on resume).
    │                       (sqlite/firestore: both persist → a restart can resume.)
    │
    ▼ (20–40+ min later)
-/webhooks/github (check_run) ──▶ Driver.Resume: ResolveByPRKey atomically claims the run
+/webhooks/github (check_run) ──▶ driver.Resume: ResolveByPRKey atomically claims the run
                   ┌─ CI success ─▶ finish: post success summary (Slack/Teams) + PR link; clear
                   ├─ CI failure & attempts < MAX_ITERATIONS ─▶ resume the run: apply_fix again WITH ci feedback
                   └─ CI failure & attempts == MAX_ITERATIONS ─▶ finish: "needs human review" + PR link; clear
@@ -531,7 +536,7 @@ counter would collide once the store is shared/durable). The PR itself plus its 
 remain the durable artifacts on GitHub.
 
 **Attempt count: tracked in the park record.** Each record carries its `Attempts`; the
-Driver increments it on each retry and compares against `MAX_ITERATIONS`. It is **not**
+driver increments it on each retry and compares against `MAX_ITERATIONS`. It is **not**
 derived from GitHub SHAs. The give-up decision:
 
 - **CI failed and attempts == `MAX_ITERATIONS` (3)** → post the failure summary
@@ -556,7 +561,7 @@ three layers, all funnelling through the `ParkStore`'s atomic single-winner clai
   claims every parked record whose `UpdatedAt` precedes `now − CI_TIMEOUT` and resolves it the
   same way. This is the restart-safe replacement for the lost timer. Exactly one of {webhook,
   timer, sweep} wins, via the store's atomic claim (mutex / sqlite CAS / firestore txn).
-- **Eager terminal cleanup.** On resolve the Driver `clear`s the run — `LongRunDriver.DeleteSession`
+- **Eager terminal cleanup.** On resolve the driver `clear`s the run — `LongRunDriver.DeleteSession`
   first, then `ParkStore.Delete` — so a durable backend does not leak completed sessions. The
   order matters: the record is the only thing that leads back to the session, so a failed
   session delete keeps the record as a marker `ParkStore.SweepOrphans` retries, rather than

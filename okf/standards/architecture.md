@@ -30,7 +30,7 @@ Ingest (cron / webhook / future hooks) → `ingest.Envelope` → **root agent** 
    import Ollama/Gemini/genai; agents receive a `model.LLM` interface. The same boundary
    covers the **durable-session SDKs** — `glebarez/sqlite`, `gorm`, and
    `cloud.google.com/go/firestore`: they back the sqlite/firestore session + park stores and
-   live setup-only. Agents and the Driver depend on the `session.Service` / `setup.ParkStore`
+   live setup-only. Agents and the driver depend on the `session.Service` / `setup.ParkStore`
    interfaces, never the SDKs.
 3. **Nothing imports `cmd/...`.** Entrypoints are leaves.
 4. **Only `internal/config` reads the environment.**
@@ -43,7 +43,7 @@ both confined to `internal/agent/setup` and selected by one `SESSION_BACKEND` en
 
 - the ADK **`session.Service`** — the suspend/resume event history, and
 - the **`setup.ParkStore`** — the park record (`prKey→sessionID`, attempts, serialized run
-  params). The `fixflow` Driver holds this interface, **not** an in-process registry.
+  params). The `fixflow` driver holds this interface, **not** an in-process registry.
 
 Suspend/resume rides on ADK long-running tools; a per-run `CI_TIMEOUT` timer fast-paths each
 wait and the durable `ParkStore.Sweep` (Cloud Scheduler → `/internal/sweep`) is the restart-safe

@@ -16,7 +16,7 @@ import (
 )
 
 // erroringStore wraps a real ParkStore and forces a chosen method to fail, proving the
-// Driver surfaces store errors instead of silently dropping a run.
+// driver surfaces store errors instead of silently dropping a run.
 type erroringStore struct {
 	setup.ParkStore
 	failGet, failPut, failResolve, failDelete bool

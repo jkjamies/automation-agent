@@ -15,7 +15,7 @@ The reusable engine behind the PR-fixing agents ([lint-fixer](/modules/agents/li
 
 ## Durable suspend/resume
 
-The CI wait is a real ADK **IsLongRunning** suspend/resume: the `Driver` runs a `fixer` agent that calls `apply_fix` then parks on `await_ci`. Both the ADK session and the parked run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`): the run is recorded in the injected `setup.ParkStore` (`ParkRecord` keyed by a UUID session id, with a `owner/repo#pr` `PRKey` index for CI resume). With a durable backend a process restart resumes in-flight runs; the default `memory` backend stays ephemeral (a restart strands them). Attempts are counted in the park record — **not** from GitHub commits.
+The CI wait is a real ADK **IsLongRunning** suspend/resume: the `driver` runs a `fixer` agent that calls `apply_fix` then parks on `await_ci`. Both the ADK session and the parked run are persisted through `SESSION_BACKEND` (`memory` | `sqlite` | `firestore`): the run is recorded in the injected `setup.ParkStore` (`ParkRecord` keyed by a UUID session id, with a `owner/repo#pr` `PRKey` index for CI resume). With a durable backend a process restart resumes in-flight runs; the default `memory` backend stays ephemeral (a restart strands them). Attempts are counted in the park record — **not** from GitHub commits.
 
 A run whose CI never reports is freed two ways: a soft per-run `CITimeout` timer (in-process, lost on restart) and the durable `SweepTimeouts` catch-all (driven by `/internal/sweep`). `ResolveByPRKey`/`Sweep` claim a run atomically (single winner), so a late/duplicate webhook racing the timer/sweep resolves it at most once.
 
@@ -27,7 +27,7 @@ The qualifier is deliberate. A failure *before* the run starts — the kickoff's
 
 ## Workflow graph
 
-The outer loop is a deterministic workflow graph (`Start → apply_fix → await_ci`, with a conditional `failure` cycle back to `apply_fix` and a shared `conclude` terminal), so retry/stop/timeout policy is all in the `Driver`, not the graph. The substantive LLM work (triage, exploration, code edits) happens inside the `apply_fix` node → `attemptOnce`.
+The outer loop is a deterministic workflow graph (`Start → apply_fix → await_ci`, with a conditional `failure` cycle back to `apply_fix` and a shared `conclude` terminal), so retry/stop/timeout policy is all in the `driver`, not the graph. The substantive LLM work (triage, exploration, code edits) happens inside the `apply_fix` node → `attemptOnce`.
 
 ## Flow
 
@@ -35,7 +35,7 @@ The outer loop is a deterministic workflow graph (`Start → apply_fix → await
 flowchart TD
     Spec["Spec{Name, Branch, Label, CheckName, Triage, Analyze, titles}"] --> E["NewEngine(spec, Deps)"]
     K["Kickoff(raw)"] --> KP["ParseKickoff{repo, base, report}"]
-    KP --> DK["Driver.Kickoff: run fixer agent"]
+    KP --> DK["driver.Kickoff: run fixer agent"]
     DK --> AF["apply_fix -> attemptOnce: Triage -> Open -> Analyze -> Commit (clone/branch/push/ensure PR)"]
     AF -->|"triage found nothing (ErrNoWork)"| CLN["clean summary (CleanTitle) + clear; no PR, no park (StopWhen concludes)"]
     AF --> AW["await_ci (IsLongRunning)"]
@@ -58,8 +58,8 @@ flowchart TD
 
 ## Implementation layout
 
-- `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the Driver) + `attemptOnce` (one apply attempt).
-- `driver.go` — `Driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts`/`SweepOrphans` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the ADK session **and then** the park record.
+- `engine.go` — `Engine` + `Spec` + `Deps` + `FileWork`/`FileEdit`/`AnalyzeInput`; `Kickoff`/`Resume` (delegate to the driver) + `attemptOnce` (one apply attempt).
+- `driver.go` — `driver`: the `apply_fix`/`await_ci`/`conclude` workflow nodes, the `fixer` workflow agent (declarative edges, `await_ci` parks via request-input), and the Kickoff/Resume/onTimeout/`SweepTimeouts`/`SweepOrphans` lifecycle over the injected `setup.ParkStore`. Terminal `clear` deletes the ADK session **and then** the park record.
 - `summary.go` — `buildSummaryText`: the status-aware terminal summary (success / clean / max-iter / timeout framings) enriched with `GH.Compare` (base...branch diff) + the park record. The clean framing is a workflow-prefixed fun line rotated deterministically by repo.
 - `applyfix.go` — clone → branch → commit → push → ensure labeled PR. Whether the branch is
   created or continued is decided by whether the remote already has it, never by a flag the
