@@ -11,19 +11,26 @@ timestamp: 2026-07-04T00:00:00Z
 # Go style
 
 **The baseline is [Google's Go Style Guide](https://google.github.io/styleguide/go/).** Read
-it for anything about how Go code should look and read: formatting, naming, doc comments,
-error construction and handling, import grouping, `context` placement, and the language rules
-that go with them. It is more thorough and better argued than a restatement here would be, and
-restating it would only create a second copy to keep in sync.
+it for anything about how Go code should look and read. It is more thorough and better argued
+than a restatement here would be, and restating it would only create a second copy to keep in
+sync. It assumes familiarity with [Effective Go](https://go.dev/doc/effective_go), which is the
+common baseline underneath both.
 
-Its four documents, in decreasing order of how binding they are:
+It is three documents plus an overview, and they carry different weight — *canonical* means
+prescriptive and enduring, *normative* means an agreed reference for reviewers that may change
+over time:
 
-| Document | What it is |
-|---|---|
-| [Style Guide](https://google.github.io/styleguide/go/guide) | The core principles — clarity, simplicity, concision, maintainability, consistency — and how to trade them off |
-| [Style Decisions](https://google.github.io/styleguide/go/decisions) | Specific rulings on naming, commentary, imports, errors, and language constructs |
-| [Best Practices](https://google.github.io/styleguide/go/best-practices) | Patterns for common problems; guidance rather than rulings |
-| [Style Guide overview](https://google.github.io/styleguide/go/) | How the three fit together and which wins on conflict |
+| Document | Normative | Canonical | What it is |
+|---|---|---|---|
+| [Style Guide](https://google.github.io/styleguide/go/guide) | Yes | Yes | The foundation; definitive, and the basis for the other two |
+| [Style Decisions](https://google.github.io/styleguide/go/decisions) | Yes | No | Decisions on specific style points, with the reasoning behind them |
+| [Best Practices](https://google.github.io/styleguide/go/best-practices) | No | No | Patterns that solve common problems and survive maintenance |
+
+**Adopting it is not a mandate to churn existing code.** The guide says so itself: adherence
+"is not intended to be absolute", the documents "will never be exhaustive", and they explicitly
+do not intend to "justify large-scale changes to get rid of style differences" — write new code
+to the guide and fix nearby issues as you pass through. A diff whose only content is style
+alignment is not the goal.
 
 `make lint` mechanically enforces the subset a linter can check — `revive` and `staticcheck`
 (which on the golangci-lint v2 schema subsumes the former `stylecheck` `ST*` diagnostics), plus
@@ -39,8 +46,16 @@ they live here rather than being deducible from the guide above.
 ### Visibility — export the seam, not the machinery
 
 **A type or function is exported only if it appears in the package's contract with the rest of
-the service.** In practice that means it is named in an exported signature, or it is the seam a
-caller is meant to hold.
+the service.** Three forms count as contract, and the third is the one that looks like a
+violation but isn't:
+
+1. It is named in an exported signature — a parameter, a result, an exported struct field.
+2. It is the seam a caller holds. `tasks.Transport` is returned by no exported function in its
+   own package, but `cmd/agent` declares variables of it; the interface *is* the contract.
+3. It is an **optional-capability interface** a caller type-asserts against.
+   `auth.IdentityResolver` appears in no signature anywhere — `cmd/agent` does
+   `provider.(auth.IdentityResolver)` to ask whether a provider can resolve its own login.
+   Unexporting it would make that question unaskable from outside.
 
 The reason is not aesthetic. This service is built on injected interfaces — `model.LLM`,
 `session.Service`, `setup.ParkStore`, each agent's `Deps` — and the [import
@@ -59,9 +74,10 @@ The pattern, using the [fixflow](/modules/agents/fixflow.md) engine as the worke
 
 Corollaries worth stating because they are easy to get wrong:
 
-- **An exported type that appears in no exported signature is a mistake, not a convenience.**
-  It is unconstructible from outside yet still shows up in `godoc` as public API, so it
-  documents a contract that does not exist.
+- **An exported type that matches none of the three forms above is a mistake, not a
+  convenience.** It is unreachable from outside yet still shows up in `godoc` as public API, so
+  it documents a contract that does not exist. `fixflow.Driver` was one until it became
+  `fixflow.driver`.
 - **Test access is not a reason to export.** Tests live in the same package and see unexported
   identifiers already; an `_test` package that needs an export is a signal the seam is in the
   wrong place.
