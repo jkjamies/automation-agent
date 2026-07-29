@@ -26,6 +26,8 @@ import (
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v78/github"
+
+	"automation-agent/internal/useragent"
 )
 
 // IdentityResolver is optionally implemented by a TokenProvider that can report the GitHub login
@@ -169,7 +171,7 @@ func (p *AppProvider) AuthoredLogin(ctx context.Context) (string, error) {
 	if p.login != "" {
 		return p.login, nil
 	}
-	gh := github.NewClient(&http.Client{Transport: p.apps})
+	gh := github.NewClient(&http.Client{Transport: useragent.Transport(p.apps)})
 	if p.baseURL != "" {
 		u, err := url.Parse(p.baseURL + "/")
 		if err != nil {

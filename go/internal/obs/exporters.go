@@ -9,6 +9,9 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/api/option"
+
+	"automation-agent/internal/useragent"
 )
 
 // newExporter builds the span exporter for cfg.Exporter. The caller has already rejected
@@ -31,7 +34,17 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 			return nil, fmt.Errorf("obs: exporter %q requires an OTLP endpoint", ExporterOTLP)
 		}
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(cfg.OTLPEndpoint)}
-		if headers := parseOTLPHeaders(cfg.OTLPHeaders); len(headers) > 0 {
+		// Merged into the configured headers rather than set separately, because WithHeaders
+		// replaces the map wholesale — two calls would silently drop the operator's values. A
+		// User-Agent the operator set explicitly wins; ours is the default, not an override.
+		headers := parseOTLPHeaders(cfg.OTLPHeaders)
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		if _, set := headers["User-Agent"]; !set {
+			headers["User-Agent"] = useragent.String()
+		}
+		if len(headers) > 0 {
 			opts = append(opts, otlptracehttp.WithHeaders(headers))
 		}
 		exp, err := otlptracehttp.New(ctx, opts...)
@@ -42,7 +55,9 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 	case ExporterGCP:
 		// No project id: the Cloud Trace exporter detects it from Application Default
 		// Credentials / the metadata server, matching how the rest of the GCP path authenticates.
-		exp, err := texporter.New()
+		exp, err := texporter.New(texporter.WithTraceClientOptions(
+			[]option.ClientOption{option.WithUserAgent(useragent.String())},
+		))
 		if err != nil {
 			return nil, fmt.Errorf("obs: build gcp (cloud trace) exporter: %w", err)
 		}

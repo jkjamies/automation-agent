@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"automation-agent/internal/useragent"
 )
 
 // Message is a provider-agnostic notification.
@@ -58,6 +60,9 @@ func postJSON(ctx context.Context, httpc *http.Client, url string, payload any) 
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Set here rather than on defaultClient's transport: callers may inject their own client,
+	// and a Slack or Teams admin looking at webhook traffic should see us either way.
+	req.Header.Set("User-Agent", useragent.String())
 
 	resp, err := httpc.Do(req)
 	if err != nil {

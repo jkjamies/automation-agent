@@ -33,6 +33,7 @@ import (
 	"automation-agent/internal/notify"
 	"automation-agent/internal/obs"
 	"automation-agent/internal/tasks"
+	"automation-agent/internal/useragent"
 	"automation-agent/internal/webhook"
 )
 
@@ -54,6 +55,19 @@ func run(logger *slog.Logger) error {
 	// Load .env if present (no-op when absent); real environment still wins.
 	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warn("could not load .env", "err", err)
+	}
+
+	// Brand the git transport. go-git builds its own HTTP requests, so there is no client for
+	// useragent.Transport to wrap — but it appends this variable to its own agent string, which
+	// is the seam the library provides for exactly this. Set here rather than in gitrepo because
+	// writing the environment is composition's business, not a tooling package's, and it must
+	// happen before any clone. An operator-supplied value is kept and ours appended to it.
+	gitAgent := useragent.String()
+	if extra, ok := os.LookupEnv("GO_GIT_USER_AGENT_EXTRA"); ok && extra != "" {
+		gitAgent = extra + " " + gitAgent
+	}
+	if err := os.Setenv("GO_GIT_USER_AGENT_EXTRA", gitAgent); err != nil {
+		logger.Warn("could not brand the git user agent", "err", err)
 	}
 
 	cfg, err := config.Load()

@@ -106,7 +106,7 @@ Webhook-triggered work is handed to the **execution transport** (`go/internal/ta
 
 - `go/cmd/agent/` — the service entrypoint (`package main`). Composition only: loads `.env` (optional) + `config`, builds the LLM and code LLM (`setup.BuildLLM` / `setup.BuildCodeLLM`), the `githubapi` client, the `SESSION_BACKEND`-selected session service + `ParkStore`, the notifier, the summary agent, and the lint/coverage `fixflow` engines sharing one `fixflow.Deps` (incl. `CITimeout`, `SessionService`, `ParkStore`); then the root dispatcher, the execution transport, and the webhook HTTP server (`ReadHeaderTimeout` 10s); blocks on SIGINT/SIGTERM, then shuts down the server and drains the transport.
 - `go/cmd/playground/` — a local dev entrypoint (never deployed).
-- `go/internal/` — all business logic: `config` (sole env reader), `ingest`, `notify`, `githubapi`, `gitrepo`, `webhook`, `tasks`, `obs` (OpenTelemetry, see [/standards/observability.md](/standards/observability.md)), `auth`, and `agent/{setup,root,summary,lintfixer,covfixer,fixflow,reviewer}`.
+- `go/internal/` — all business logic: `config` (sole env reader), `ingest`, `notify`, `githubapi`, `gitrepo`, `webhook`, `tasks`, `obs` (OpenTelemetry, see [/standards/observability.md](/standards/observability.md)), `auth`, `useragent` (the [egress identity](/modules/platform/useragent.md) every outbound request carries), and `agent/{setup,root,summary,lintfixer,covfixer,fixflow,reviewer}`.
 - `go/ARCH/` — architecture-conformance tests, pure standard library.
 
 ## Build / run / test

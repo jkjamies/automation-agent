@@ -8,6 +8,7 @@ import (
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	gax "github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -15,6 +16,7 @@ import (
 
 	"automation-agent/internal/ingest"
 	"automation-agent/internal/obs"
+	"automation-agent/internal/useragent"
 )
 
 // MaxTaskBytes is the Cloud Tasks size limit for an HTTP-target task, measured on the
@@ -56,7 +58,9 @@ type CloudTasks struct {
 // per-task dispatch deadline (config validated to Cloud Tasks' 15s..30m range). Close releases
 // the client.
 func NewCloudTasks(ctx context.Context, project, location, queue, dispatchURL, token string, deadline time.Duration) (*CloudTasks, error) {
-	client, err := cloudtasks.NewClient(ctx)
+	// gRPC, so there is no RoundTripper to wrap — the client option is the equivalent seam, and
+	// it appends to the library's own token rather than replacing it.
+	client, err := cloudtasks.NewClient(ctx, option.WithUserAgent(useragent.String()))
 	if err != nil {
 		return nil, fmt.Errorf("tasks: cloud tasks client: %w", err)
 	}

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"automation-agent/internal/useragent"
 )
 
 // captureServer records the body of the next POST it receives.
@@ -97,5 +99,24 @@ func TestTeamsCardOmitsActionsWithoutLink(t *testing.T) {
 	content := card["attachments"].([]map[string]any)[0]["content"].(map[string]any)
 	if _, has := content["actions"]; has {
 		t.Error("no link -> no actions")
+	}
+}
+
+// Every outbound request identifies this service. Asserted at the wire rather than on the
+// header-setting call, because the value a Slack or Teams admin sees in their logs is the
+// only thing that matters here.
+func TestNotificationsIdentifyTheService(t *testing.T) {
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := postJSON(context.Background(), defaultClient(), srv.URL, map[string]string{"text": "x"}); err != nil {
+		t.Fatalf("postJSON: %v", err)
+	}
+	if want := useragent.String(); ua != want {
+		t.Errorf("webhook saw User-Agent %q, want %q", ua, want)
 	}
 }
