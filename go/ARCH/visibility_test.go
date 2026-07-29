@@ -264,13 +264,20 @@ func localFuncResults(p *visPkg) map[string][]ast.Expr {
 // What the AST can prove, it proves; what it cannot, it declines to guess:
 //
 //   - a composite literal (`T{…}`, `&T{…}`, `[]T{…}`) names its type outright
+//   - a function literal's signature is its type, so `func(T) {}` exposes T — a caller
+//     holding the var has to supply one
+//   - `new(T)` and `make([]T, n)` take a *type* as their first argument, and the spec fixes
+//     that meaning, so it is readable without resolving anything
 //   - a call to a package-local function contributes that function's result types
-//   - a call to anything else (another package, a method, a func value) yields nothing.
-//     Resolving those needs a type checker, and this suite is stdlib AST only.
+//   - a call to a local type is a conversion, which names the type outright
+//   - a call to anything else (another package, a method) yields nothing. Resolving those
+//     needs a type checker, and this suite is stdlib AST only.
 //
-// Declining to guess is the safe direction: a missed type can only under-report the surface,
-// which risks a false positive that a reviewer resolves by naming the type in a signature —
-// whereas guessing wrongly would silently excuse the very thing the check exists to find.
+// Declining to guess is the safe direction, but note which way that cuts: a missed type
+// *under*-reports the surface, so a type that is genuinely reachable looks unreachable and the
+// gate fails on correct code. Over-reporting is the quiet failure. So the cases above are the
+// ones worth resolving precisely — each is a type position the grammar guarantees, not an
+// inference — while anything needing real type information is left alone.
 func inferredTypes(v ast.Expr, results map[string][]ast.Expr) []ast.Expr {
 	switch e := v.(type) {
 	case *ast.UnaryExpr: // &T{…}
@@ -281,15 +288,27 @@ func inferredTypes(v ast.Expr, results map[string][]ast.Expr) []ast.Expr {
 		if e.Type != nil {
 			return []ast.Expr{e.Type}
 		}
+	case *ast.FuncLit:
+		// The signature is the var's type: its parameters and results are all reachable
+		// through the value a caller holds.
+		return []ast.Expr{e.Type}
 	case *ast.CallExpr:
+		id, ok := e.Fun.(*ast.Ident)
+		if !ok {
+			return nil
+		}
+		// A local declaration of this name shadows any builtin, so it is checked first.
+		if res, ok := results[id.Name]; ok {
+			return res
+		}
+		// new(T) / make(T, …): the first argument is a type, per the spec. Everything
+		// reachable through it — []T, map[K]V, chan T — is named right there.
+		if (id.Name == "new" || id.Name == "make") && len(e.Args) > 0 {
+			return []ast.Expr{e.Args[0]}
+		}
 		// A conversion T(x) parses identically to a call; if the name is a local type
 		// rather than a local function, it is still the type of the value either way.
-		if id, ok := e.Fun.(*ast.Ident); ok {
-			if res, ok := results[id.Name]; ok {
-				return res
-			}
-			return []ast.Expr{id}
-		}
+		return []ast.Expr{id}
 	}
 	return nil
 }
@@ -423,11 +442,27 @@ type Registry struct{}
 
 type Named interface{ Do() }
 
+type Allocation struct{}
+
+type Element struct{}
+
+type Mapped2 struct{}
+
+type Param struct{}
+
+type Returned struct{}
+
 var (
 	Default   = newClient()
 	Direct    = &Registry{}
 	Explicit  Named = nil
 	Laundered = Unreachable
+
+	// Type positions the grammar guarantees, each reachable only through this var.
+	Allocated = new(Allocation)
+	Slice     = make([]Element, 0)
+	Mapped    = make(map[string]Mapped2)
+	Callback  = func(Param) Returned { return Returned{} }
 )
 `
 	fset := token.NewFileSet()
@@ -439,9 +474,14 @@ var (
 
 	// Proved by the AST, so genuinely part of the surface.
 	for _, want := range []string{
-		"Client",   // newClient's declared result — Default is a *Client
-		"Registry", // named outright by the &Registry{} composite literal
-		"Named",    // Explicit's declared type
+		"Client",     // newClient's declared result — Default is a *Client
+		"Registry",   // named outright by the &Registry{} composite literal
+		"Named",      // Explicit's declared type
+		"Allocation", // new(T): first argument is a type, per the spec
+		"Element",    // make([]T, n): likewise, through the slice type
+		"Mapped2",    // make(map[K]V): likewise, through the map type
+		"Param",      // a func literal's parameters are reachable via the value
+		"Returned",   // and so are its results
 	} {
 		if !surface[want] {
 			t.Errorf("%s should be exported surface", want)
@@ -453,6 +493,8 @@ var (
 	for _, notWant := range []string{
 		"newClient",   // how Default is built, not what Default is
 		"Unreachable", // assigned as a func value; still reachable from nowhere
+		"new",         // the builtin itself is not a type
+		"make",        // nor is this one
 	} {
 		if surface[notWant] {
 			t.Errorf("%s must not count as exported surface — it is a value, not a type", notWant)
