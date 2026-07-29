@@ -93,8 +93,22 @@ tidy-check: ## Verify go.mod/go.sum are already tidy, without modifying them
 	fi; \
 	exit $$rc
 
-ollama-check: ## Verify the local Ollama server is reachable
-	@curl -sf $(OLLAMA_HOST)/api/tags >/dev/null && echo "ollama up at $(OLLAMA_HOST)" || { echo "ollama not reachable at $(OLLAMA_HOST)"; exit 1; }
+ollama-check: ## Verify the local Ollama server is reachable, and list the models it has pulled
+	@# The inventory, not just a heartbeat: "is the configured tag actually a thing?" is the
+	@# question that gets asked, and a model family renaming a generation or a size is the way
+	@# a working config goes stale. `make run` enforces this at startup (setup.VerifyOllamaModels);
+	@# this is the same answer without booting the service.
+	@# One fetch, reused. Make runs each recipe line in its own shell, so a captured variable
+	@# does not survive to the next line — the inventory has to be fetched and consumed in one.
+	@# It also has to be *one* request: if a second one failed after the first succeeded, the
+	@# `grep .` fallback below would report "(none)" and exit 0, which reads as "you have no
+	@# models pulled" when the truth is "I could not ask" — the opposite answer, from the one
+	@# target whose job is answering this.
+	@tags=$$(curl -sf "$(OLLAMA_HOST)/api/tags") || { echo "ollama not reachable at $(OLLAMA_HOST)"; exit 1; }; \
+	  echo "ollama up at $(OLLAMA_HOST); models pulled:"; \
+	  printf '%s\n' "$$tags" \
+	  | sed 's/[{,]/\n/g' | sed -n 's/.*"name" *: *"\([^"]*\)".*/  \1/p' | sort \
+	  | grep . || echo "  (none — pull one, e.g. 'ollama pull $(shell grep -m1 '^OLLAMA_MODEL=' ../.env.example | cut -d= -f2)')"
 
 spec: ## Scaffold a spec from a template: make spec name=<slug> kind=<add|remove|change|migrate>
 	@test -n "$(name)" || { echo "usage: make spec name=<slug> kind=<add|remove|change|migrate>"; exit 1; }

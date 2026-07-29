@@ -349,8 +349,8 @@ func loadFrom(get lookup) (Config, error) {
 	c := Config{
 		LLMProvider:          Provider(getOr(get, "LLM_PROVIDER", string(ProviderOllama))),
 		OllamaHost:           getOr(get, "OLLAMA_HOST", "http://localhost:11434"),
-		OllamaModel:          getOr(get, "OLLAMA_MODEL", "gemma4:12b"),
-		OllamaCodeModel:      getOr(get, "OLLAMA_CODE_MODEL", "gemma4:26b"),
+		OllamaModel:          getOr(get, "OLLAMA_MODEL", DefaultOllamaModel),
+		OllamaCodeModel:      getOr(get, "OLLAMA_CODE_MODEL", DefaultOllamaCodeModel),
 		GeminiModel:          getOr(get, "GEMINI_MODEL", ""),
 		GeminiCodeModel:      getOr(get, "GEMINI_CODE_MODEL", ""),
 		SessionBackend:       SessionBackend(getOr(get, "SESSION_BACKEND", string(SessionMemory))),
@@ -759,6 +759,22 @@ const defaultOllamaNumCtx = 32768
 // overflowed cap does not fail loudly — sizegate treats a non-positive maxDiffBytes as "no
 // limit", so the size gate this window exists to compute would be switched off entirely.
 const maxOllamaNumCtx = 1 << 24 // 16,777,216 tokens ≈ 64 MiB of prompt
+
+// Default Ollama model tags. Exported and defined once because a tag is a moving target — a
+// model family gets a new generation, a size is renamed, a tag is withdrawn — and the default
+// previously appeared in the loader, the live tests of three packages, .env.example, and the
+// docs. Changing it meant finding all of them, and the live tests had drifted to a tag
+// (`gemma4:e4b`) that existed nowhere else.
+//
+// A tag that the local server does not have is a startup error, not a mystery mid-run failure:
+// see setup.VerifyOllamaModels, which is what makes a wrong default here cheap to discover.
+const (
+	// DefaultOllamaModel is the base tier: triage, exploration, summarization.
+	DefaultOllamaModel = "gemma4:12b"
+	// DefaultOllamaCodeModel is the code tier: lint rewrites and test generation, where a
+	// larger model earns its latency.
+	DefaultOllamaCodeModel = "gemma4:26b"
+)
 
 // approxBytesPerToken converts a token budget to a byte budget for sizing decisions. Code
 // and diffs tokenize denser than prose; 4 is the conventional rough figure and is only used

@@ -13,6 +13,7 @@ import (
 
 	"automation-agent/internal/agent/fixflow"
 	"automation-agent/internal/agent/setup"
+	"automation-agent/internal/config"
 )
 
 // scriptedLLM routes by the system prompt: triage, explore (plan), or execute (test).
@@ -122,11 +123,11 @@ func TestLiveCoverage(t *testing.T) {
 	}
 	tag := os.Getenv("OLLAMA_MODEL")
 	if tag == "" {
-		tag = "gemma4:12b"
+		tag = config.DefaultOllamaModel
 	}
 	codeTag := os.Getenv("OLLAMA_CODE_MODEL")
 	if codeTag == "" {
-		codeTag = tag
+		codeTag = config.DefaultOllamaCodeModel
 	}
 	llm, err := setup.NewOllamaModel("http://localhost:11434", tag, 32768)
 	if err != nil {
