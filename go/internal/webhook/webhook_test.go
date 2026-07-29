@@ -393,3 +393,29 @@ func TestInternalDispatchTransientErrorIs500(t *testing.T) {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
 }
+
+// The server stamps every envelope with its own clock. Asserted through the public API
+// rather than by injecting a clock: bounding the timestamp by a window the test controls
+// is deterministic without a seam that exists only for the test to reach.
+func TestIngressStampsReceivedAt(t *testing.T) {
+	for _, tc := range []struct{ name, path, body string }{
+		{"lint", "/webhooks/lint", `{"problems":[]}`},
+		{"coverage", "/webhooks/coverage", `{"report":"jacoco"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &capture{}
+			before := time.Now()
+			if rec := do(t, New(c.ingest), http.MethodPost, tc.path, tc.body, nil); rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", rec.Code)
+			}
+			after := time.Now()
+
+			if c.env.ReceivedAt.IsZero() {
+				t.Fatal("ReceivedAt is zero — the envelope was never stamped")
+			}
+			if c.env.ReceivedAt.Before(before) || c.env.ReceivedAt.After(after) {
+				t.Errorf("ReceivedAt = %v, want within [%v, %v]", c.env.ReceivedAt, before, after)
+			}
+		})
+	}
+}

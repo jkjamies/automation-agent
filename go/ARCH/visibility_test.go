@@ -124,13 +124,14 @@ func externalRefs(pkgs map[string]*visPkg) map[string]map[string]bool {
 // exportedSurface returns the identifiers a package names in its own exported API: the
 // parameters, results and type parameters of exported functions, the same for exported
 // methods on exported receivers, the types of exported struct fields, the signatures of
-// exported interface methods, and the types and initializers of exported vars and consts.
+// exported interface methods, and the types of exported vars and consts.
 //
 // An exported method on an *unexported* receiver is deliberately not surface. That single
 // distinction is what gives the check teeth: a type nothing outside can name does not become
 // part of the contract by having capitalized methods.
 func exportedSurface(p *visPkg) map[string]bool {
 	surface := map[string]bool{}
+	results := localFuncResults(p)
 
 	// add records every bare identifier in a type expression. A qualified name (pkg.T)
 	// belongs to another package, so descending into it would only add noise.
@@ -207,11 +208,21 @@ func exportedSurface(p *visPkg) map[string]bool {
 						if !exported {
 							continue
 						}
+						// A declared type IS the contract; the initializer is implementation,
+						// so it is not walked. `var Default Thing = newThing()` exposes Thing,
+						// not newThing — a caller can hold Default but can never call it.
 						if s.Type != nil {
 							add(s.Type)
+							continue
 						}
+						// With the type inferred, recover what the AST can prove and nothing
+						// more. See inferredTypes: this deliberately does not fall back to
+						// "every identifier mentioned", which would let an unreachable
+						// function launder itself into the surface by appearing in a value.
 						for _, v := range s.Values {
-							add(v)
+							for _, t := range inferredTypes(v, results) {
+								add(t)
+							}
 						}
 					}
 				}
@@ -219,6 +230,68 @@ func exportedSurface(p *visPkg) map[string]bool {
 		}
 	}
 	return surface
+}
+
+// localFuncResults maps each package-local plain function to its result type expressions, so
+// the type of `var Default = newThing()` can be recovered without a type checker.
+func localFuncResults(p *visPkg) map[string][]ast.Expr {
+	out := map[string][]ast.Expr{}
+	for _, f := range p.files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Type.Results == nil {
+				continue
+			}
+			var res []ast.Expr
+			for _, r := range fd.Type.Results.List {
+				res = append(res, r.Type)
+			}
+			out[fd.Name.Name] = res
+		}
+	}
+	return out
+}
+
+// inferredTypes returns the type expressions an initializer proves, for a var or const whose
+// type is inferred rather than declared.
+//
+// The distinction that matters is between a *type* position and a *value* position. In
+// `var Default = newClient()`, `newClient` sits in a value position: it is how the value is
+// produced, not what the value is. Treating it as surface would mean an exported function that
+// nothing can reach could excuse itself from this check by appearing in some exported var's
+// initializer — so only the function's declared results are taken, never its name.
+//
+// What the AST can prove, it proves; what it cannot, it declines to guess:
+//
+//   - a composite literal (`T{…}`, `&T{…}`, `[]T{…}`) names its type outright
+//   - a call to a package-local function contributes that function's result types
+//   - a call to anything else (another package, a method, a func value) yields nothing.
+//     Resolving those needs a type checker, and this suite is stdlib AST only.
+//
+// Declining to guess is the safe direction: a missed type can only under-report the surface,
+// which risks a false positive that a reviewer resolves by naming the type in a signature —
+// whereas guessing wrongly would silently excuse the very thing the check exists to find.
+func inferredTypes(v ast.Expr, results map[string][]ast.Expr) []ast.Expr {
+	switch e := v.(type) {
+	case *ast.UnaryExpr: // &T{…}
+		if e.Op == token.AND {
+			return inferredTypes(e.X, results)
+		}
+	case *ast.CompositeLit:
+		if e.Type != nil {
+			return []ast.Expr{e.Type}
+		}
+	case *ast.CallExpr:
+		// A conversion T(x) parses identically to a call; if the name is a local type
+		// rather than a local function, it is still the type of the value either way.
+		if id, ok := e.Fun.(*ast.Ident); ok {
+			if res, ok := results[id.Name]; ok {
+				return res
+			}
+			return []ast.Expr{id}
+		}
+	}
+	return nil
 }
 
 // exportedSignature reports whether a function declaration contributes to the package's
@@ -328,6 +401,61 @@ func TestExportedIdentifiersAreReachable(t *testing.T) {
 			t.Errorf("%s: exported %s %s is unreachable from outside the package — "+
 				"it is in no exported signature and no other package refers to it; unexport it",
 				rel(root, dir), declared[n], n)
+		}
+	}
+}
+
+// The initializer of an exported var is implementation, not contract. This pins the
+// distinction with synthetic source, because the tree itself does not currently contain an
+// exported var built by a local call — so nothing else would notice if it regressed.
+func TestInitializersDoNotLaunderUnreachableIdentifiers(t *testing.T) {
+	const src = `package p
+
+type Client struct{}
+
+// newClient is unreachable from outside: nothing names it in an exported signature.
+func newClient() *Client { return &Client{} }
+
+// Unreachable is the identifier under test — exported, but reachable from nowhere.
+func Unreachable() string { return "" }
+
+type Registry struct{}
+
+type Named interface{ Do() }
+
+var (
+	Default   = newClient()
+	Direct    = &Registry{}
+	Explicit  Named = nil
+	Laundered = Unreachable
+)
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	surface := exportedSurface(&visPkg{path: "example/p", name: "p", files: []*ast.File{f}})
+
+	// Proved by the AST, so genuinely part of the surface.
+	for _, want := range []string{
+		"Client",   // newClient's declared result — Default is a *Client
+		"Registry", // named outright by the &Registry{} composite literal
+		"Named",    // Explicit's declared type
+	} {
+		if !surface[want] {
+			t.Errorf("%s should be exported surface", want)
+		}
+	}
+
+	// Value positions, not type positions: counting these would excuse an unreachable
+	// identifier from the check purely because some exported var mentions it.
+	for _, notWant := range []string{
+		"newClient",   // how Default is built, not what Default is
+		"Unreachable", // assigned as a func value; still reachable from nowhere
+	} {
+		if surface[notWant] {
+			t.Errorf("%s must not count as exported surface — it is a value, not a type", notWant)
 		}
 	}
 }
