@@ -17,7 +17,9 @@ A lightweight, long-running Go service that ingests events from many sources
   …) and opens a PR adding tests for *meaningful* uncovered logic, with the same CI
   loop. Shares the `fixflow` engine with the lint-fixer.
 - **Reviewer** — an in-house PR code reviewer: one-shot, advisory, comment-only, and
-  steered off the reviewed repo's own standards docs. Off by default (`REVIEW_ENABLED`).
+  steered off the reviewed repo's own standards docs. Off by default: it needs both
+  `REVIEW_ENABLED=true` **and** the GitHub App subscribed to the **Pull request** event
+  (with either missing it is silent rather than erroring).
 
 Built on the [Agent Development Kit for Go](https://github.com/google/adk-go),
 local-first on **Ollama + Gemma**, with a config switch to **Gemini/Vertex** for
@@ -31,7 +33,7 @@ cloud deployment.
 ```bash
 cp .env.example .env      # then edit
 make help                 # list all targets
-make ci                   # tidy + vet + lint + arch + test + coverage gate
+make ci                   # tidy-check + vet + lint + arch + test + coverage gate (read-only)
 make run                  # run the service
 make playground           # local ADK web UI at http://localhost:8080 (dev only)
 ```
@@ -54,12 +56,13 @@ which is what lets Cloud Run scale toward zero.
 
 ## What's here
 
-The full service is implemented in Go and `make ci` is green (≥80% coverage; Firestore
-validated against the emulator): the summary, lint-fixer, and coverage-fixer workflows, the
-root dispatcher, the deterministic tooling, and the durable-sessions design (the
+The service is written in Go: the summary, lint-fixer, coverage-fixer, and reviewer
+workflows, the root dispatcher, the deterministic tooling, and durable sessions (the
 `SESSION_BACKEND` switch, the `ParkStore` seam, Firestore session/park backends,
-status-aware summaries, and the Cloud Scheduler `/internal` ingress). The core service runs
-locally and the LLM steps are verified against real Gemma.
+status-aware summaries, and the Cloud Scheduler `/internal` ingress, whose sweep both frees
+runs whose CI never reported and reaps runs nothing can resolve after `ORPHAN_TTL`). It runs
+locally against a real Ollama model; `make ci` is the gate, and
+[testing](okf/standards/testing.md) describes what that covers.
 
 To run against live repos and cloud infrastructure you supply the surrounding pieces:
 
@@ -67,8 +70,14 @@ To run against live repos and cloud infrastructure you supply the surrounding pi
   reports lint results back to `/webhooks/github`; template in
   [`okf/standards/ci-integration.md`](okf/standards/ci-integration.md)). The
   lint-fixer opens a PR but the loop only resumes once this check reports.
-- `GITHUB_TOKEN` (repo scope) so the lint-fixer can open/label PRs and read private repos.
-  This is the **GitHub REST API** credential — it is always required, even over SSH. For
+- **GitHub credentials.** Production authenticates as a **GitHub App** (short-lived,
+  repo-scoped installation tokens): `GITHUB_APP_ID` + `GITHUB_APP_INSTALLATION_ID` + the
+  private-key PEM, with the App subscribed to **Check run** and **Pull request**. Omit those
+  and the service falls back to a PAT (repo scope) for local dev, resolved in order:
+  `GITHUB_TOKEN`, then `GH_TOKEN`, then whatever `gh auth token` reports from an existing
+  `gh auth login`. That last step is skipped in App mode, so a deployment never silently
+  picks up a developer's PAT. Either way this is the **GitHub REST API** credential and is
+  always required, even over SSH. For
   local dev you can clone/push over SSH instead of an https token by setting
   `GIT_TRANSPORT=ssh` (uses your ssh-agent / `~/.ssh` keys, with `GIT_SSH_KEY` to pin a
   specific key) — but SSH only authenticates the git transport, so you **still** need a
@@ -80,9 +89,11 @@ To run against live repos and cloud infrastructure you supply the surrounding pi
   cleanly, so Cloud Run can scale toward zero with Cloud Scheduler driving the daily digest
   and sweep. Full step-by-step in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
-Not yet implemented: summary repo org auto-discovery (`GITHUB_ORG`) in place of a static
-`REPOS` list, an eval harness for lint-fix quality, orphan-session GC, IaC/Terraform, and
-OIDC for `/internal/*` (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
+Deliberate boundaries, so you know what you are not getting: summary repos come from a
+static `REPOS` list rather than org auto-discovery (`GITHUB_ORG`); there is no eval harness
+scoring lint-fix quality; deployment is the documented `gcloud` steps rather than
+IaC/Terraform; and `/internal/*` is guarded by a bearer token rather than OIDC (see
+[`DEPLOYMENT.md`](DEPLOYMENT.md)).
 
 ## Layout
 

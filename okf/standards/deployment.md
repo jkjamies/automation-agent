@@ -63,7 +63,7 @@ recovery.
 | `GET /healthz` | none | liveness |
 | `POST /webhooks/lint` | HMAC (`GITHUB_WEBHOOK_SECRET`) | kick off a lint fix |
 | `POST /webhooks/coverage` | HMAC | kick off a coverage fix |
-| `POST /webhooks/github` | HMAC | `check_run` event → resume the parked fix |
+| `POST /webhooks/github` | HMAC | the App's single delivery URL, routed by `X-GitHub-Event`: `check_run` → resume the parked fix; `pull_request` → kick off the [PR code review](/modules/agents/reviewer.md) |
 | `POST /internal/cron/daily` | Bearer (`INTERNAL_TOKEN`) | fire the daily commit digest |
 | `POST /internal/sweep` | Bearer | resolve runs whose CI never reported within `CI_TIMEOUT`, and reap runs nothing can resolve (`ORPHAN_TTL`) |
 | `POST /internal/dispatch` | Bearer | Cloud Tasks worker — run one queued workflow **in-request** (see [Execution transport](#execution-transport-webhook--dispatcher)) |
@@ -150,6 +150,34 @@ The vars that matter specifically for a **cloud** deploy:
 | `REPOS` | the kickoff allowlist — **required** in App mode (empty is rejected) |
 | `FIRESTORE_PROJECT` / `FIRESTORE_COLLECTION` | blank = detect from ADC / default `automation_agent` |
 | `OTEL_TRACES_EXPORTER` | tracing sink — `none` (default, off) or, to enable: `gcp` (Cloud Trace via ADC; grant `roles/cloudtrace.agent`) / `otlp` (a vendor or a Collector — see [Observability](#observability-tracing--optional-collector-fan-out)) |
+| `REVIEW_ENABLED` | `false` by default — the PR reviewer's kill switch (see [Reviewer configuration](#reviewer-configuration)) |
+
+#### Reviewer configuration
+
+The [PR code-review agent](/modules/agents/reviewer.md) is **off by default** and needs two
+things, both easy to half-do:
+
+1. `REVIEW_ENABLED=true`, and
+2. the App subscribed to the **Pull request** event.
+
+Miss either and the reviewer is silent — no reviews, no error, nothing in the logs to explain
+it, because with no subscription nothing is ever delivered and with the switch off the
+delivery is dropped at the dispatcher. Check both before concluding the agent is broken.
+
+The rest have working defaults and are worth setting only to tune cost or noise:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `REVIEW_ENABLED` | `false` | the kill switch |
+| `REVIEW_SKIP_DRAFTS` | `true` | draft PRs are reviewed on `ready_for_review` instead |
+| `REVIEW_MAX_FILES` / `REVIEW_MAX_DIFF_BYTES` | `50` / provider-sized | over either cap the PR gets a "too large, please split" comment and a neutral check — no model call |
+| `REVIEW_EXCLUDE_GLOBS` | generated-file set | excluded from both the size measurement and the review |
+| `REVIEW_STANDARDS` / `REVIEW_STANDARDS_GLOBS` / `REVIEW_STANDARDS_MAX_BYTES` | `true` / common convention-doc paths / provider-sized | steer the review off the reviewed repo's own standards docs |
+| `REVIEW_MIN_CONFIDENCE` / `REVIEW_UNCITED_MODE` | provider-sized / `nitpick` | noise gates: drop low-confidence findings, and demote or drop findings citing no rule |
+| `REVIEW_DEBOUNCE` | set to coalesce | rapid pushes collapse to one review of the latest SHA |
+
+No extra GitHub scopes: **Pull requests** (Read & write) and **Checks** (Read & write) are
+already in the least-privilege set above.
 
 ### GitHub App setup (production auth)
 
@@ -173,7 +201,14 @@ before the GCP steps below; you end up with four values the service consumes.
    and **Webhook secret** = the *same string* you will set as `GITHUB_WEBHOOK_SECRET`. This
    match is **mandatory** — if they differ, GitHub's `X-Hub-Signature-256` fails and every
    delivery 401s. (You can fill the URL in after Cloud Run has a hostname, but set the secret now.)
-4. **Subscribe to events.** Check **Check run**. (The reviewer spec later adds **Pull request**.)
+4. **Subscribe to events.** Check **Check run** *and* **Pull request**. Both are delivered to the
+   one webhook URL above and routed by the `X-GitHub-Event` header.
+   - **Check run** — resumes a parked lint/coverage fix when its CI check reports. Required.
+   - **Pull request** — the PR code-review agent's kickoff. Required if you intend to use it,
+     and easy to miss: with `REVIEW_ENABLED=true` but no `pull_request` subscription, nothing
+     is ever delivered, so the reviewer produces **no output and no error** — it simply never
+     runs. Subscribe now even if the reviewer is off; the deliveries are ignored until you
+     enable it, and it saves diagnosing silence later.
 5. **Installation scope.** "Where can this app be installed?" → **Only on this account**.
 6. **Create**, then note the numeric **App ID** from the App's *General* page → this is
    `GITHUB_APP_ID`.
@@ -217,8 +252,10 @@ startup error, never a silent PAT fallback.
    Store secrets (the App private key, webhook secret, internal token) in **Secret
    Manager** and mount them as env — not `.env`. (Omit the `GITHUB_APP_*` vars to fall
    back to a `GITHUB_TOKEN` PAT — the local-dev path, not recommended for production.)
-   The App-level webhook from step 3 delivers `check_run` to `/webhooks/github`; there
-   are **no per-repo webhooks** to configure. The lint/coverage kickoffs
+   The PR reviewer is **off by default**: add `REVIEW_ENABLED=true` to turn it on (see
+   [Reviewer configuration](#reviewer-configuration) below). The App-level webhook from step 3
+   delivers both `check_run` and `pull_request` to `/webhooks/github`; there are **no per-repo
+   webhooks** to configure. The lint/coverage kickoffs
    (`/webhooks/{lint,coverage}`) are POSTed by your CI with the same secret in
    `X-Hub-Signature-256` (see [CI Integration](/standards/ci-integration.md)).
 5. **Cloud Scheduler** — two jobs, each an HTTP POST with header
