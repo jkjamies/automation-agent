@@ -22,6 +22,7 @@ package reviewer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -208,7 +209,16 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 	// Coalesce-to-latest: a deny/review acts on the event's SHA, so if a newer push has superseded
 	// it (debounce only narrows the window — Cloud Tasks has no ordering), skip rather than post a
 	// stale review. A skip decision produced nothing, so it needs no check.
-	if d.kind != decisionSkip && e.superseded(ctx, owner, repo, ev) {
+	//
+	// This is the first of several such checks. Each guards the stage that follows it, because
+	// the work between them is expensive and none of it is worth doing — or publishing — once a
+	// newer push has won. A superseded run must discard its own output rather than post it: the
+	// summary comment is keyed per PR (not per SHA), so a slower older review would otherwise
+	// overwrite a newer one's scorecard, and its reconciliation pass would minimize the newer
+	// review's inline comments as OUTDATED. alreadyPublished cannot catch that — it keys on the
+	// head SHA, and two concurrent reviews have different SHAs by construction.
+	stale := func(c context.Context) bool { return e.superseded(c, owner, repo, ev) }
+	if d.kind != decisionSkip && stale(ctx) {
 		e.log.Info("stale review skipped (superseded by a newer push)", "pr", pr, "event_sha", ev.HeadSHA)
 		return nil
 	}
@@ -231,10 +241,27 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		// when disabled or none found, in which case the lenses review generically.
 		std := e.discoverStandards(ctx, owner, repo, ev.HeadSHA, d.files)
 		meta.standards = std.sourceList()
+		// Standards discovery costs a tree walk, N file fetches, and a distiller model call, so
+		// re-check before committing to the fan-out — by far the most expensive stage, and the one
+		// whose LLM concurrency slots a doomed run would hold against the review that will publish.
+		if stale(ctx) {
+			e.log.Info("review superseded before fan-out; skipping", "pr", pr, "event_sha", ev.HeadSHA)
+			return nil
+		}
 		// Fan out the category lenses + glue pass, score, then publish the review.
-		card, findings, err := e.review(ctx, d.files, std)
+		card, findings, err := e.review(ctx, d.files, std, stale)
+		if errors.Is(err, errSuperseded) {
+			e.log.Info("review superseded mid-run; discarding", "pr", pr, "event_sha", ev.HeadSHA)
+			return nil
+		}
 		if err != nil {
 			return err
+		}
+		// The last gate, and the only one that is about correctness rather than wasted compute:
+		// everything above this point is recoverable, but a published stale review is not.
+		if stale(ctx) {
+			e.log.Info("review completed but superseded before publish; discarding", "pr", pr, "event_sha", ev.HeadSHA)
+			return nil
 		}
 		if err := e.publish(ctx, card, findings, meta); err != nil {
 			return err
@@ -295,6 +322,15 @@ func (e *Engine) decide(ctx context.Context, ev githubapi.PullRequestEvent) (dec
 func skip(format string, args ...any) decision {
 	return decision{kind: decisionSkip, reason: fmt.Sprintf(format, args...)}
 }
+
+// errSuperseded is returned by a review stage that found a newer push had landed while it was
+// working. It is not a failure: the caller logs it and returns nil, so the dispatch is not
+// retried — the task for the newer SHA is already handling this PR.
+var errSuperseded = errors.New("reviewer: superseded by a newer push")
+
+// staleFunc reports whether this run has been overtaken. It is passed as a closure rather than
+// threading the event through every stage, which also lets tests drive the transition.
+type staleFunc func(context.Context) bool
 
 // superseded reports whether a newer push has replaced the SHA this task was enqueued for, so the
 // review is stale and should be skipped (coalesce-to-latest). It is best-effort: a missing event

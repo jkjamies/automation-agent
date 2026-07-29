@@ -70,7 +70,20 @@ The reviewer's kickoff is a **native GitHub event** (`pull_request`), not a cust
 Rapid pushes to one PR are collapsed so only the latest SHA is reviewed (two parts, because Cloud Tasks gives no ordering and cannot cancel an in-flight task):
 
 - **Debounce at enqueue** (`enqueue.go`, `EnqueueOptions`): a `synchronize` review is enqueued with `REVIEW_DEBOUNCE` delay under a per-PR-per-window Cloud Tasks dedup name, so a burst of pushes collapses to one delayed task. The name carries a time bucket (receipt time floored to the debounce window) so a push minutes later doesn't collide with Cloud Tasks' ~1h name reservation and get silently dropped. `opened`/`reopened`/`ready_for_review` enqueue immediately. This is a workflow concern, so it lives here, not in the transport. Only the Cloud Tasks backend honors the hints (and it is the backend, not this layer, that treats a duplicate name as a successful coalesce rather than an error).
-- **Staleness at execution** (`Kickoff` → `superseded`): before doing the review work, the engine fetches the PR's current head SHA and skips if it no longer matches the event's SHA (a newer push won). Best-effort — a lookup error proceeds rather than suppressing a real review.
+- **Staleness at execution** (`Kickoff` → `superseded`): the engine fetches the PR's current head SHA and skips if it no longer matches the event's SHA (a newer push won). Best-effort — a lookup error proceeds rather than suppressing a real review.
+
+  This is checked at **every stage boundary**, not once — and which boundaries exist depends on the decision:
+
+  - **Review** has four: at intake, after standards discovery, after the lens fan-out (before glue), and again before publish.
+  - **Deny** has one, and that is not an omission. Intake sits immediately before `publishDeny` with nothing between them but a struct literal, so there is no expensive stage to guard. A second lookup there would *widen* the exposure rather than narrow it: `superseded` is itself a GitHub round-trip, so its answer is already up to that round-trip old when it returns — a check costing ~100 ms to close a window measured in nanoseconds.
+
+  Debounce and the intake check together cover the *queue* window, but a review takes minutes, so a push can easily land while one is already running — and then the two are concurrent, on different SHAs. That is the gap the later review-path checks exist for, and it is why the deny path does not need them.
+
+  The last check is the one that matters for correctness. A superseded run must discard its own output rather than post it: the summary comment's marker is keyed **per PR, not per SHA**, so a slower older review would overwrite a newer one's scorecard, and its reconciliation pass would minimize the newer review's inline comments as **OUTDATED**. `alreadyPublished` cannot prevent this — it keys on the head SHA, and two concurrent reviews have different SHAs by construction, so it only ever guarded a redelivered task for the *same* SHA.
+
+  The earlier checks are compute savings, and they are not free money: a doomed run holds `LLM_MAX_CONCURRENT` slots that the review which *will* publish is queued behind. Losing the race before the fan-out skips the fan-out entirely.
+
+  The checks sit at stage boundaries rather than inside each lens deliberately. The lenses run concurrently, so a per-lens check would ask GitHub the same question N times at the same instant and still could not stop the calls already in flight; the boundary is the only place the answer changes the outcome. True mid-fan-out preemption (a poller cancelling the context) is deliberately not built — it needs a background goroutine per review plus disambiguating "cancelled because superseded" from "cancelled because the dispatch deadline expired", and the stage checks get most of the benefit.
 
 **Incremental re-review** (re-evaluating only the files changed since the last reviewed SHA) is intentionally **not** built: GitHub-as-store persists rendered comments, not structured findings, so the latest SHA is always reviewed in full and reconciled against the existing comments.
 
