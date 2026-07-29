@@ -45,6 +45,11 @@ gate or the PR:
 - **Import boundaries**: tooling packages never import agents; provider SDKs
   (Ollama/Gemini/genai) only inside the `agent/setup` layer; nothing imports
   `cmd`; the config layer is the only place that reads environment variables.
+- **Go style**: [Google's Go Style Guide](https://google.github.io/styleguide/go/) is the
+  baseline. `make lint` decides everything a linter can — every rule in `go/.golangci.yml`
+  cites the guide section it enforces — and `ARCH/` decides the cross-package rules a linter
+  cannot see, including what may be exported. The deltas the guide cannot cover are in
+  [`okf/standards/go-style.md`](okf/standards/go-style.md).
 - **Testing**: coverage ≥ 80 %, enforced per package as well as overall; never
   assert on LLM output content; tests stay deterministic.
 - **Prompts are markdown** under each agent's `prompts/` directory, loaded from embedded

@@ -79,7 +79,7 @@ func newCIWaiter(t *testing.T) *runner.Runner {
 func park(t *testing.T, r *runner.Runner, uid, sid string) string {
 	t.Helper()
 	var id string
-	for ev, err := range r.Run(context.Background(), uid, sid, UserText("fix coverage"), agent.RunConfig{}) {
+	for ev, err := range r.Run(context.Background(), uid, sid, userText("fix coverage"), agent.RunConfig{}) {
 		if err != nil {
 			t.Fatalf("park run: %v", err)
 		}

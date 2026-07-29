@@ -5,7 +5,7 @@ description: The local gate (tidy, vet, lint, architecture tests, tests, coverag
 tags: [ci, testing, quality-gate]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 One self-contained local gate, run from `go/`:
@@ -55,6 +55,15 @@ quiet gap: `internal/agent/setup` measures ~82% with the emulator and ~41% witho
 missing half is precisely the durability path production depends on.
 
 Still not run in CI: anything that calls a real model.
+
+**The lint step is the mechanical half of [Go style](/standards/go-style.md).** Every linter
+and every `revive` rule *added* to `go/.golangci.yml` carries the
+[Go Style Guide](https://google.github.io/styleguide/go/) section it enforces as an inline
+citation, so the config is auditable against its source rather than being an accumulated
+preference list — and a proposed rule that cannot cite one does not go in. `revive`'s default
+set is the exception, kept as a block because naming any rule replaces the defaults rather than
+adding to them. A linter that would be *stricter* than the guide stays out and its rule goes to
+review instead; the file names those and why.
 
 **golangci-lint is built from source, pinned, at the module's own Go toolchain.** A
 released binary is built against whatever Go its release used, and golangci-lint refuses to

@@ -3,7 +3,7 @@ package reviewer
 import "testing"
 
 func TestDropLowConfidence(t *testing.T) {
-	in := []Finding{
+	in := []finding{
 		{Message: "a", Confidence: 0.9},
 		{Message: "b", Confidence: 0.4},
 		{Message: "c", Confidence: 0.6},
@@ -26,7 +26,7 @@ func TestDropLowConfidence(t *testing.T) {
 
 func TestDedupe(t *testing.T) {
 	t.Run("same fingerprint keeps worst severity", func(t *testing.T) {
-		in := []Finding{
+		in := []finding{
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMedium, Confidence: 0.5},
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityCritical, Confidence: 0.5},
 		}
@@ -40,7 +40,7 @@ func TestDedupe(t *testing.T) {
 	})
 
 	t.Run("same line across lenses collapses", func(t *testing.T) {
-		in := []Finding{
+		in := []finding{
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMajor, Confidence: 0.5},
 			{File: "a.go", Line: 1, Dimension: DimPerformance, Message: "issue", Severity: SeverityCritical, Confidence: 0.5},
 		}
@@ -54,7 +54,7 @@ func TestDedupe(t *testing.T) {
 	})
 
 	t.Run("severity tie broken by confidence", func(t *testing.T) {
-		in := []Finding{
+		in := []finding{
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMajor, Confidence: 0.6},
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "issue", Severity: SeverityMajor, Confidence: 0.95},
 		}
@@ -65,7 +65,7 @@ func TestDedupe(t *testing.T) {
 	})
 
 	t.Run("distinct findings preserved in order", func(t *testing.T) {
-		in := []Finding{
+		in := []finding{
 			{File: "a.go", Line: 1, Dimension: DimSecurity, Message: "x"},
 			{File: "b.go", Line: 2, Dimension: DimPerformance, Message: "y"},
 		}
@@ -76,7 +76,7 @@ func TestDedupe(t *testing.T) {
 }
 
 func TestDemoteToNitpick(t *testing.T) {
-	in := []Finding{{Severity: SeverityCritical}, {Severity: SeverityMajor}}
+	in := []finding{{Severity: SeverityCritical}, {Severity: SeverityMajor}}
 	got := demoteToNitpick(in)
 	for _, f := range got {
 		if f.Severity != SeverityNitpick {

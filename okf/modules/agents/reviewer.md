@@ -6,7 +6,7 @@ resource: go/internal/agent/reviewer
 tags: [code-review, pull-request, advisory]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # PR Code-Review Workflow
@@ -162,7 +162,7 @@ Category agents deliberately do not set `OutputSchema` — schema validation fai
 - `reviewer.go` — `Deps`, `Engine`, `NewEngine`, `Engine.Kickoff(ctx, raw)`, and the `decide` intake orchestration + skip helpers. Gated by `REVIEW_ENABLED` (default false, the kill switch).
 - `filter.go` — the exclude-glob `fileFilter` (basename and `**`-aware path globs) that drops generated/vendored/binary churn and totals the filtered patch bytes.
 - `sizegate.go` — `oversize`, the two-dimensional file-count/diff-byte cap.
-- `findings.go` — the `Finding` schema, severity/dimension normalization, `fingerprint`, and the defensive `parseFindings`.
+- `findings.go` — the `finding` schema, severity/dimension normalization, `fingerprint`, and the defensive `parseFindings`.
 - `categories.go` — the consolidated category set + `selectCategories` (UI-only gating).
 - `scorecard.go` — the count-based `scoreFindings`.
 - `glue.go` — the deterministic verify gate + cross-lens `dedupe` the glue pass owns.

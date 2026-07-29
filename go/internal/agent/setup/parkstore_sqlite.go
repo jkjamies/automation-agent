@@ -46,8 +46,8 @@ type sqliteParkStore struct {
 	db *gorm.DB
 }
 
-// NewSQLiteParkStore opens (and migrates) a park store over the sqlite file at dsn.
-func NewSQLiteParkStore(dsn string) (ParkStore, error) {
+// newSQLiteParkStore opens (and migrates) a park store over the sqlite file at dsn.
+func newSQLiteParkStore(dsn string) (ParkStore, error) {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		PrepareStmt: true,
 		Logger:      logger.Default.LogMode(logger.Silent),

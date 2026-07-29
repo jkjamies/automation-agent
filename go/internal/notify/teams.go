@@ -13,8 +13,8 @@ type teamsNotifier struct {
 	httpc *http.Client
 }
 
-// NewTeams builds a Teams notifier for the given Workflows webhook URL.
-func NewTeams(url string) Notifier {
+// newTeams builds a Teams notifier for the given Workflows webhook URL.
+func newTeams(url string) Notifier {
 	return &teamsNotifier{url: url, httpc: defaultClient()}
 }
 

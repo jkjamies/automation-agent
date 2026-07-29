@@ -35,14 +35,14 @@ func TestParseTriage(t *testing.T) {
 }
 
 func TestTriage(t *testing.T) {
-	work, err := Triage(context.Background(), stubLLM{`[{"path":"a.go","problems":["x"]}]`}, "report")
+	work, err := triage(context.Background(), stubLLM{`[{"path":"a.go","problems":["x"]}]`}, "report")
 	if err != nil {
 		t.Fatalf("Triage: %v", err)
 	}
 	if len(work) != 1 || work[0].Path != "a.go" {
 		t.Errorf("work = %+v", work)
 	}
-	if _, err := Triage(context.Background(), stubLLM{"[]"}, "report"); !errors.Is(err, fixflow.ErrNoWork) {
+	if _, err := triage(context.Background(), stubLLM{"[]"}, "report"); !errors.Is(err, fixflow.ErrNoWork) {
 		t.Errorf("empty triage should report ErrNoWork, got %v", err)
 	}
 }
@@ -66,7 +66,7 @@ func TestAnalyze(t *testing.T) {
 		RepoDir: dir,
 		Work:    []fixflow.FileWork{{Path: "a.go", Items: []string{"x"}}},
 	}
-	edits, err := Analyze(context.Background(), in)
+	edits, err := analyze(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}

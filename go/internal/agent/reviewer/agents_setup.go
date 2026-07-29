@@ -51,7 +51,7 @@ func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (ag
 // category findings so far, and the repo's standards rule menu, emitting additional architectural-
 // alignment / testability / test-coverage findings (cross-lens dedup is done deterministically in
 // code, not here).
-func (e *Engine) buildGlueAgent(diff string, prior []Finding, std *standards) (agent.Agent, error) {
+func (e *Engine) buildGlueAgent(diff string, prior []finding, std *standards) (agent.Agent, error) {
 	body, err := prompts.Get("glue")
 	if err != nil {
 		return nil, fmt.Errorf("reviewer: load glue prompt: %w", err)

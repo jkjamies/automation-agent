@@ -45,7 +45,7 @@ func NewSessionService(ctx context.Context, cfg config.Config) (session.Service,
 		}
 		return svc, nil
 	case config.SessionFirestore:
-		return NewFirestoreSessionService(ctx, cfg.FirestoreProject, cfg.FirestoreCollection)
+		return newFirestoreSessionService(ctx, cfg.FirestoreProject, cfg.FirestoreCollection)
 	default:
 		return nil, fmt.Errorf("unknown session backend %q", cfg.SessionBackend)
 	}

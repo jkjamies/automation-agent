@@ -38,7 +38,7 @@ func parseFPMarker(body string) string {
 // reconcileResult is the outcome of comparing this run's inline findings against the comments
 // already on the PR: which findings to post fresh, and which existing comments to minimize.
 type reconcileResult struct {
-	toPost     []Finding // inline findings with no existing comment yet
+	toPost     []finding // inline findings with no existing comment yet
 	toMinimize []string  // node ids of fingerprinted comments whose finding is gone this run
 }
 
@@ -48,7 +48,7 @@ type reconcileResult struct {
 // comment with no matching finding this run is minimized as outdated (the finding was fixed or no
 // longer applies). Comments without our marker (foreign, or pre-reconciliation) are ignored.
 // toMinimize is sorted for deterministic behavior and tests.
-func reconcile(findings []Finding, existing []githubapi.ReviewCommentRef) reconcileResult {
+func reconcile(findings []finding, existing []githubapi.ReviewCommentRef) reconcileResult {
 	current := make(map[string]bool, len(findings))
 	for _, f := range findings {
 		current[f.fingerprint()] = true

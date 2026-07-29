@@ -55,11 +55,11 @@ type StaticProvider struct {
 // StaticOption configures a StaticProvider.
 type StaticOption func(*StaticProvider)
 
-// WithStaticBaseURL overrides the GitHub API base used by AuthoredLogin's identity lookup.
-// Tests point it at an httptest stub; production leaves the default. It mirrors WithBaseURL on
+// withStaticBaseURL overrides the GitHub API base used by AuthoredLogin's identity lookup.
+// Tests point it at an httptest stub; production leaves the default. It mirrors withBaseURL on
 // AppProvider: the two identity lookups are the same operation in the two auth modes, and both
 // need to be reachable without talking to github.com.
-func WithStaticBaseURL(rawURL string) StaticOption {
+func withStaticBaseURL(rawURL string) StaticOption {
 	return func(p *StaticProvider) { p.baseURL = rawURL }
 }
 
@@ -116,10 +116,10 @@ type AppProvider struct {
 // AppOption configures an AppProvider.
 type AppOption func(*AppProvider)
 
-// WithBaseURL overrides the GitHub API base used for the token-exchange call
+// withBaseURL overrides the GitHub API base used for the token-exchange call
 // (POST /app/installations/{id}/access_tokens) and the JWT identity lookup (GET /app). Tests
 // point this at an httptest stub; production leaves it at the default (https://api.github.com).
-func WithBaseURL(rawURL string) AppOption {
+func withBaseURL(rawURL string) AppOption {
 	return func(p *AppProvider) { p.baseURL = rawURL }
 }
 

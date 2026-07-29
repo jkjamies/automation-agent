@@ -32,22 +32,22 @@ func parkRec(sid, prKey, callID string, attempts int) ParkRecord {
 	return ParkRecord{SessionID: sid, Workflow: wf, PRKey: prKey, CallID: callID, Attempts: attempts, UpdatedAt: time.Now()}
 }
 
-func newSQLiteParkStore(t *testing.T) ParkStore {
+func sqliteStoreForTest(t *testing.T) ParkStore {
 	t.Helper()
-	s, err := NewSQLiteParkStore("file:" + filepath.Join(t.TempDir(), "park.db"))
+	s, err := newSQLiteParkStore("file:" + filepath.Join(t.TempDir(), "park.db"))
 	if err != nil {
 		t.Fatalf("new sqlite park store: %v", err)
 	}
 	return s
 }
 
-// newFirestoreParkStore builds a store against the Firestore emulator (FIRESTORE_EMULATOR_HOST).
+// firestoreStoreForTest builds a store against the Firestore emulator (FIRESTORE_EMULATOR_HOST).
 // Each call uses a collection unique to the running subtest, so the shared emulator state
 // does not leak between cases.
-func newFirestoreParkStore(t *testing.T) ParkStore {
+func firestoreStoreForTest(t *testing.T) ParkStore {
 	t.Helper()
 	ctx := context.Background()
-	s, err := NewFirestoreParkStore(ctx, "test-project", firestorePrefix("park"))
+	s, err := newFirestoreParkStore(ctx, "test-project", firestorePrefix("park"))
 	if err != nil {
 		t.Fatalf("new firestore park store: %v", err)
 	}
@@ -62,12 +62,12 @@ func newFirestoreParkStore(t *testing.T) ParkStore {
 func TestParkStoreConformance(t *testing.T) {
 	backends := map[string]func(t *testing.T) ParkStore{
 		"memory": func(*testing.T) ParkStore { return NewMemoryParkStore() },
-		"sqlite": newSQLiteParkStore,
+		"sqlite": sqliteStoreForTest,
 	}
 	// The firestore backend joins the suite only when the emulator is reachable, so CI
 	// without it still runs memory + sqlite.
 	if os.Getenv("FIRESTORE_EMULATOR_HOST") != "" {
-		backends["firestore"] = newFirestoreParkStore
+		backends["firestore"] = firestoreStoreForTest
 	}
 	for name, newStore := range backends {
 		t.Run(name, func(t *testing.T) { runParkStoreSuite(t, newStore) })
@@ -351,7 +351,7 @@ func TestSQLiteParkStoreCrossProcess(t *testing.T) {
 	ctx := context.Background()
 	dsn := "file:" + filepath.Join(t.TempDir(), "park.db")
 
-	s1, err := NewSQLiteParkStore(dsn)
+	s1, err := newSQLiteParkStore(dsn)
 	if err != nil {
 		t.Fatalf("first store: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestSQLiteParkStoreCrossProcess(t *testing.T) {
 	}
 
 	// A brand-new store over the same file (simulating a restart) still sees the parked run.
-	s2, err := NewSQLiteParkStore(dsn)
+	s2, err := newSQLiteParkStore(dsn)
 	if err != nil {
 		t.Fatalf("second store: %v", err)
 	}

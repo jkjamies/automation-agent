@@ -91,12 +91,12 @@ func TestParseFindings(t *testing.T) {
 }
 
 func TestFingerprintStable(t *testing.T) {
-	a := Finding{File: "a.go", Line: 3, Dimension: DimSecurity, Message: "SQL  Injection here"}
-	b := Finding{File: "a.go", Line: 3, Dimension: DimSecurity, Message: "sql injection HERE"}
+	a := finding{File: "a.go", Line: 3, Dimension: DimSecurity, Message: "SQL  Injection here"}
+	b := finding{File: "a.go", Line: 3, Dimension: DimSecurity, Message: "sql injection HERE"}
 	if a.fingerprint() != b.fingerprint() {
 		t.Errorf("messages differing only by case/space must fingerprint equal:\n%q\n%q", a.fingerprint(), b.fingerprint())
 	}
-	c := Finding{File: "a.go", Line: 4, Dimension: DimSecurity, Message: "sql injection here"}
+	c := finding{File: "a.go", Line: 4, Dimension: DimSecurity, Message: "sql injection here"}
 	if a.fingerprint() == c.fingerprint() {
 		t.Error("different lines must fingerprint differently")
 	}

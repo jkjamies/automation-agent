@@ -142,12 +142,12 @@ func parseSampler(name string) sdktrace.Sampler {
 	}
 }
 
-// Flush forces any buffered spans out through the exporter now. The HTTP middleware calls
+// flush forces any buffered spans out through the exporter now. The HTTP middleware calls
 // it before every traced handler returns: BatchSpanProcessor exports on a background
 // timer, but Cloud Run throttles CPU the instant a response is sent, so an un-flushed
 // trailing batch would be lost on scale-to-zero. It resolves the active global provider
 // and is a no-op when tracing is disabled (the global is the framework's no-op provider).
-func Flush(ctx context.Context) error {
+func flush(ctx context.Context) error {
 	if tp, ok := otel.GetTracerProvider().(interface {
 		ForceFlush(context.Context) error
 	}); ok {

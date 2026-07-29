@@ -7,7 +7,7 @@ import (
 )
 
 func TestUserTextAndContentText(t *testing.T) {
-	c := UserText("hello")
+	c := userText("hello")
 	if c.Role != genai.RoleUser {
 		t.Errorf("role = %q, want user", c.Role)
 	}
@@ -20,11 +20,11 @@ func TestUserTextAndContentText(t *testing.T) {
 }
 
 func TestLastText(t *testing.T) {
-	if LastText(nil) != "" {
-		t.Error("LastText(nil) should be empty")
+	if lastText(nil) != "" {
+		t.Error("lastText(nil) should be empty")
 	}
-	contents := []*genai.Content{UserText("first"), UserText("last")}
-	if got := LastText(contents); got != "last" {
-		t.Errorf("LastText = %q, want last", got)
+	contents := []*genai.Content{userText("first"), userText("last")}
+	if got := lastText(contents); got != "last" {
+		t.Errorf("lastText = %q, want last", got)
 	}
 }

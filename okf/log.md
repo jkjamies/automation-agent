@@ -1,6 +1,15 @@
 # Bundle Update Log
 
-## 2026-07-04
+## 2026-07-29
+* **Rewrite**: [Go style](/standards/go-style.md) now adopts
+  [Google's Go Style Guide](https://google.github.io/styleguide/go/) as the baseline and
+  records where each layer of it is enforced — linter, architecture test, or review — rather
+  than restating it. What the guide's own documents rule on became links; three deltas
+  survive (visibility, dependency admission, configuration), each grounded in the guide
+  section it instantiates.
+* **Update**: [Architecture rules](/standards/architecture.md) gained the visibility
+  conformance rule the `ARCH/` suite now enforces: an exported identifier must appear in its
+  package's exported signature surface or be referred to by another package.
 * **Update**: Owning concepts gained *Why* sections capturing the rationale behind the
   load-bearing choices — the execution transport, the durable session store, the model
   provider, and GitHub App auth — so reasoning survives the disposable specs where it was

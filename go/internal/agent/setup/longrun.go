@@ -84,7 +84,7 @@ func (d *LongRunDriver) DeleteSession(ctx context.Context, sessionID string) err
 // Start seeds a fresh invocation on sessionID with input and drives until the agent
 // parks on a request-input pause or finishes.
 func (d *LongRunDriver) Start(ctx context.Context, sessionID, input string) (DriveResult, error) {
-	return d.drive(ctx, sessionID, UserText(input))
+	return d.drive(ctx, sessionID, userText(input))
 }
 
 // Resume feeds the real result for a parked request-input pause (callID is the interrupt

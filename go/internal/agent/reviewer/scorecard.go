@@ -58,7 +58,7 @@ func dimLevel(s dimScore) level {
 // scoreFindings builds the scorecard from already-confidence-gated findings (spec Decision 5):
 // a per-dimension histogram + level, then overall = critical-cap (any critical in an always-on
 // critical dimension → red) combined with the worst dimension level.
-func scoreFindings(findings []Finding) scorecard {
+func scoreFindings(findings []finding) scorecard {
 	byDim := make(map[Dimension]*dimScore)
 	criticalCap := false
 	for _, f := range findings {

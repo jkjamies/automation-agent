@@ -26,9 +26,9 @@ import (
 // formats) into one uniform tagged rule list; the compact list is injected into every lens and a
 // lazy get_rule tool serves the full text on demand. All API-only (no clone).
 
-// Rule is one distilled, dimension-tagged convention rule extracted from the reviewed repo's own
+// rule is one distilled, dimension-tagged convention rule extracted from the reviewed repo's own
 // standards docs.
-type Rule struct {
+type rule struct {
 	ID        string
 	Dimension Dimension
 	Summary   string
@@ -38,8 +38,8 @@ type Rule struct {
 // standards is the distilled rule set for one repo at one docs revision: the compact rule menu
 // injected into every lens, plus the full source docs for lazy get_rule drill-down.
 type standards struct {
-	rules   []Rule
-	byID    map[string]Rule
+	rules   []rule
+	byID    map[string]rule
 	docs    map[string]string // source path -> full doc text
 	sources []string          // distinct source paths, sorted (for the summary report)
 }
@@ -279,7 +279,7 @@ func standardsCacheKey(owner, repo string, matched []githubapi.TreeEntry) string
 
 // distill runs the base-tier distiller sub-agent over the discovered docs, returning the parsed
 // rule list. Best-effort: a runner/drive error logs and returns nil (review generic).
-func (e *Engine) distill(ctx context.Context, docs map[string]string, sources []string) ([]Rule, error) {
+func (e *Engine) distill(ctx context.Context, docs map[string]string, sources []string) ([]rule, error) {
 	a, err := e.buildDistillerAgent(docs, sources)
 	if err != nil {
 		return nil, fmt.Errorf("build distiller: %w", err)
@@ -319,11 +319,11 @@ func buildDistillerInstruction(promptBody string, docs map[string]string, source
 
 // buildStandards assembles the standards from distilled rules + the fetched docs. nil when there
 // are no rules (so empty() and a generic fallback hold).
-func buildStandards(rules []Rule, docs map[string]string, sources []string) *standards {
+func buildStandards(rules []rule, docs map[string]string, sources []string) *standards {
 	if len(rules) == 0 {
 		return nil
 	}
-	byID := make(map[string]Rule, len(rules))
+	byID := make(map[string]rule, len(rules))
 	for _, r := range rules {
 		byID[r.ID] = r
 	}
@@ -344,7 +344,7 @@ type ruleWire struct {
 // (mirrors parseFindings): it scans for the first JSON array that decodes into the rule shape,
 // tolerating fences/prose, and never errors — a garbled distillation degrades to "no rules" (a
 // generic review) rather than failing.
-func parseRules(raw string) []Rule {
+func parseRules(raw string) []rule {
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '[' {
 			continue
@@ -356,7 +356,7 @@ func parseRules(raw string) []Rule {
 		if len(wires) == 0 {
 			continue
 		}
-		out := make([]Rule, 0, len(wires))
+		out := make([]rule, 0, len(wires))
 		seen := map[string]bool{}
 		for _, w := range wires {
 			id := strings.TrimSpace(w.ID)
@@ -365,7 +365,7 @@ func parseRules(raw string) []Rule {
 				continue // a rule needs a unique id and a summary to be usable
 			}
 			seen[id] = true
-			out = append(out, Rule{
+			out = append(out, rule{
 				ID:        id,
 				Dimension: normalizeDimension(w.Dimension),
 				Summary:   summary,
@@ -426,7 +426,7 @@ const (
 // the repo's own injected rules: an empty or unknown rule_id is dropped or demoted to nitpick per
 // REVIEW_UNCITED_MODE. So a conformance finding only survives at full weight if it cites a real
 // repo rule. When standards-awareness is off, findings pass through untouched.
-func (e *Engine) gateCitations(findings []Finding, std *standards) []Finding {
+func (e *Engine) gateCitations(findings []finding, std *standards) []finding {
 	// With no standards discovered, conformance findings have nothing to cite, so gating them would
 	// suppress legitimate generic findings — pass everything through.
 	if !e.standardsEnabled || std.empty() {

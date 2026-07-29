@@ -33,12 +33,12 @@ func New(provider, slackURL, teamsURL string) (Notifier, error) {
 		if slackURL == "" {
 			return nil, fmt.Errorf("SLACK_WEBHOOK_URL is required for notify provider slack")
 		}
-		return NewSlack(slackURL), nil
+		return newSlack(slackURL), nil
 	case "teams":
 		if teamsURL == "" {
 			return nil, fmt.Errorf("TEAMS_WEBHOOK_URL is required for notify provider teams")
 		}
-		return NewTeams(teamsURL), nil
+		return newTeams(teamsURL), nil
 	default:
 		return nil, fmt.Errorf("unknown notify provider %q (want slack|teams)", provider)
 	}

@@ -8,7 +8,7 @@ package reviewer
 
 // dropLowConfidence removes findings below the configured minimum confidence (spec Decision
 // 13's phase-1 verify gate). A non-positive minimum keeps everything.
-func dropLowConfidence(findings []Finding, threshold float64) []Finding {
+func dropLowConfidence(findings []finding, threshold float64) []finding {
 	if threshold <= 0 {
 		return findings
 	}
@@ -25,9 +25,9 @@ func dropLowConfidence(findings []Finding, threshold float64) []Finding {
 // keeping the one with the worst severity (ties broken by higher confidence). The glue pass's
 // job of removing the same line flagged by multiple lenses (spec Decision 7/3) is done here
 // deterministically. Input order is otherwise preserved.
-func dedupe(findings []Finding) []Finding {
+func dedupe(findings []finding) []finding {
 	seen := make(map[string]int, len(findings)) // fingerprint -> index in out
-	out := make([]Finding, 0, len(findings))
+	out := make([]finding, 0, len(findings))
 	for _, f := range findings {
 		fp := f.fingerprint()
 		if i, ok := seen[fp]; ok {
@@ -44,7 +44,7 @@ func dedupe(findings []Finding) []Finding {
 
 // better reports whether a should replace b among duplicates: worse severity wins; on a tie,
 // higher confidence.
-func better(a, b Finding) bool {
+func better(a, b finding) bool {
 	if ra, rb := severityRank(a.Severity), severityRank(b.Severity); ra != rb {
 		return ra > rb
 	}
@@ -54,7 +54,7 @@ func better(a, b Finding) bool {
 // demoteToNitpick forces every finding to nitpick severity. The catch-all "(other)" category
 // is intentionally low-signal, so its findings are demoted rather than allowed to drive the
 // scorecard (spec Decision 3).
-func demoteToNitpick(findings []Finding) []Finding {
+func demoteToNitpick(findings []finding) []finding {
 	for i := range findings {
 		findings[i].Severity = SeverityNitpick
 	}

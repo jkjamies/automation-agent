@@ -23,10 +23,10 @@ func Inject(ctx context.Context) map[string]string {
 	return carrier
 }
 
-// Extract returns a context carrying the trace context found in carrier, rooting a new
+// extract returns a context carrying the trace context found in carrier, rooting a new
 // span as a child of the upstream trace. The HTTP middleware extracts automatically from
 // inbound request headers; this explicit helper backs the propagation round-trip tests
 // and any non-HTTP carrier. A carrier with no trace context yields ctx unchanged.
-func Extract(ctx context.Context, carrier map[string]string) context.Context {
+func extract(ctx context.Context, carrier map[string]string) context.Context {
 	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(carrier))
 }

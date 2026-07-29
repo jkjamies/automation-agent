@@ -2,8 +2,8 @@ package reviewer
 
 import "testing"
 
-func f(dim Dimension, sev Severity) Finding {
-	return Finding{File: "a.go", Dimension: dim, Severity: sev, Message: string(dim) + " " + string(sev), Confidence: 1}
+func f(dim Dimension, sev Severity) finding {
+	return finding{File: "a.go", Dimension: dim, Severity: sev, Message: string(dim) + " " + string(sev), Confidence: 1}
 }
 
 func TestDimLevel(t *testing.T) {
@@ -28,14 +28,14 @@ func TestDimLevel(t *testing.T) {
 
 func TestScoreFindings(t *testing.T) {
 	t.Run("critical in security caps overall red even if isolated", func(t *testing.T) {
-		card := scoreFindings([]Finding{f(DimSecurity, SeverityCritical)})
+		card := scoreFindings([]finding{f(DimSecurity, SeverityCritical)})
 		if card.overall != levelRed {
 			t.Errorf("overall = %v, want red", card.overall)
 		}
 	})
 
 	t.Run("critical in a non-critical dimension still reds that dim but via worst-level", func(t *testing.T) {
-		card := scoreFindings([]Finding{f(DimReadability, SeverityCritical)})
+		card := scoreFindings([]finding{f(DimReadability, SeverityCritical)})
 		if card.overall != levelRed {
 			t.Errorf("overall = %v, want red (worst dim level)", card.overall)
 		}
@@ -43,7 +43,7 @@ func TestScoreFindings(t *testing.T) {
 
 	t.Run("worst-level wins without critical-cap", func(t *testing.T) {
 		// one major (yellow dim) + three medium in another dim (yellow) -> overall yellow
-		card := scoreFindings([]Finding{
+		card := scoreFindings([]finding{
 			f(DimPerformance, SeverityMajor),
 			f(DimReadability, SeverityMedium), f(DimReadability, SeverityMedium), f(DimReadability, SeverityMedium),
 		})
@@ -53,7 +53,7 @@ func TestScoreFindings(t *testing.T) {
 	})
 
 	t.Run("all green", func(t *testing.T) {
-		card := scoreFindings([]Finding{f(DimMaintainability, SeverityNitpick), f(DimPerformance, SeverityMedium)})
+		card := scoreFindings([]finding{f(DimMaintainability, SeverityNitpick), f(DimPerformance, SeverityMedium)})
 		if card.overall != levelGreen {
 			t.Errorf("overall = %v, want green", card.overall)
 		}
@@ -63,7 +63,7 @@ func TestScoreFindings(t *testing.T) {
 	})
 
 	t.Run("histogram and stable dim order", func(t *testing.T) {
-		card := scoreFindings([]Finding{
+		card := scoreFindings([]finding{
 			f(DimSecurity, SeverityMajor), f(DimSecurity, SeverityMedium),
 			f(DimPerformance, SeverityNitpick),
 		})

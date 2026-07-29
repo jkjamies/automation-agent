@@ -12,9 +12,9 @@ import (
 	"automation-agent/internal/agent/setup"
 )
 
-// Triage uses the LLM to normalize an arbitrary coverage report into the source
+// triage uses the LLM to normalize an arbitrary coverage report into the source
 // files with meaningful uncovered logic.
-func Triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWork, error) {
+func triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWork, error) {
 	out, err := setup.GenerateText(ctx, llm, prompts.MustGet("triage"), report)
 	if err != nil {
 		return nil, fmt.Errorf("triage: %w", err)

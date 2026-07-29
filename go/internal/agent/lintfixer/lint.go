@@ -27,7 +27,7 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 		SuccessTitle:  "Lint fix succeeded ✅",
 		ReviewTitle:   "Lint fix needs human review ⚠️",
 		CleanTitle:    "Lint already clean 👏",
-		Triage:        Triage,
-		Analyze:       Analyze,
+		Triage:        triage,
+		Analyze:       analyze,
 	}, d)
 }

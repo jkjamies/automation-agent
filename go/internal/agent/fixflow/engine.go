@@ -27,7 +27,7 @@ type FileWork struct {
 }
 
 // ErrNoWork is what a Triage step returns when the report contains nothing actionable —
-// the target is already clean. It is not a failure: the Driver reports it as a positive
+// the target is already clean. It is not a failure: the driver reports it as a positive
 // "nothing to address" outcome (a clean ✅ notification) instead of asking a human to
 // review a fix that was never needed. Triage steps wrap it with %w so errors.Is detects it.
 var ErrNoWork = errors.New("no actionable work")
@@ -133,11 +133,11 @@ type Deps struct {
 }
 
 // Engine runs one Spec's event-driven fix loop. The CI-wait pause/resume itself is
-// owned by the Driver (a parking workflow graph + an injected setup.ParkStore backend).
+// owned by the driver (a parking workflow graph + an injected setup.ParkStore backend).
 type Engine struct {
 	spec   Spec
 	d      Deps
-	driver *Driver
+	driver *driver
 }
 
 // NewEngine builds an engine, applying defaults. It panics if the long-run agent cannot
@@ -193,7 +193,7 @@ func (e *Engine) SweepOrphans(ctx context.Context) error { return e.driver.Sweep
 
 // Kickoff handles a kickoff envelope: it starts a suspended fix run (apply → await CI).
 func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
-	k, err := ParseKickoff(raw)
+	k, err := parseKickoff(raw)
 	if err != nil {
 		return err
 	}
@@ -211,10 +211,10 @@ func (e *Engine) repoAllowed(repo string) bool {
 	return len(e.d.Repos) == 0 || slices.Contains(e.d.Repos, repo)
 }
 
-// ResumeInput is the normalized resume context derived from a check_run webhook. The
+// resumeInput is the normalized resume context derived from a check_run webhook. The
 // parked run already holds the owner/repo/branch from kickoff, so resume only needs the
 // PR identity, the conclusion, and the CI output (used as retry feedback).
-type ResumeInput struct {
+type resumeInput struct {
 	FullRepo   string
 	PRNumber   int
 	Conclusion string
@@ -231,7 +231,7 @@ func (e *Engine) Resume(ctx context.Context, raw []byte) error {
 	if ev.CheckName != e.spec.CheckName || ev.Status != "completed" {
 		return nil
 	}
-	return e.driver.Resume(ctx, ResumeInput{
+	return e.driver.Resume(ctx, resumeInput{
 		FullRepo:   ev.RepoFullName,
 		PRNumber:   ev.PRNumber,
 		Conclusion: ev.Conclusion,
@@ -241,12 +241,12 @@ func (e *Engine) Resume(ctx context.Context, raw []byte) error {
 
 // attemptOnce runs a single fix attempt against rp: triage → checkout → analyze →
 // commit, returning the resulting PR. It is the body the apply_fix tool invokes; the
-// surrounding suspend/retry loop lives in the Driver. One checkout is shared by analyze
+// surrounding suspend/retry loop lives in the driver. One checkout is shared by analyze
 // (read/explore) and commit (write/push).
-func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, error) {
+func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (applyResult, error) {
 	work, err := e.spec.Triage(ctx, e.d.LLM, rp.report)
 	if err != nil {
-		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
+		return applyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
 	work, dropped := e.capWork(work)
 	if dropped > 0 {
@@ -254,27 +254,27 @@ func (e *Engine) attemptOnce(ctx context.Context, rp *runParams) (ApplyResult, e
 			"workflow", e.spec.Name, "repo", rp.fullRepo, "editing", len(work), "dropped", dropped)
 	}
 
-	cfg := ApplyConfig{
+	cfg := applyConfig{
 		Owner: rp.owner, Repo: rp.repo, CloneURL: e.cloneURL(rp.owner, rp.repo), Provider: e.d.Provider, SSHKey: e.d.SSHKey,
 		Base: rp.base, Branch: e.spec.Branch, Label: e.d.PRLabel,
 		CommitMessage: e.spec.CommitMessage, PRTitle: e.spec.PRTitle, PRBody: prBody(e.spec, work, dropped),
 		Author: e.d.Author,
 	}
 
-	gitRepo, err := Open(ctx, cfg)
+	gitRepo, err := openCheckout(ctx, cfg)
 	if err != nil {
-		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
+		return applyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
 	defer func() { _ = os.RemoveAll(gitRepo.Dir()) }()
 
 	edits, err := e.spec.Analyze(ctx, AnalyzeInput{LLM: e.d.LLM, CodeLLM: e.d.CodeLLM, RepoDir: gitRepo.Dir(), Work: work, Feedback: rp.feedback, Log: e.d.Log})
 	if err != nil {
-		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
+		return applyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
 
-	res, err := Commit(ctx, e.d.GH, gitRepo, cfg, edits)
+	res, err := commitEdits(ctx, e.d.GH, gitRepo, cfg, edits)
 	if err != nil {
-		return ApplyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
+		return applyResult{}, fmt.Errorf("%s %s: %w", rp.fullRepo, e.spec.Name, err)
 	}
 	return res, nil
 }

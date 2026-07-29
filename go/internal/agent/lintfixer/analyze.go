@@ -9,10 +9,10 @@ import (
 	"automation-agent/internal/agent/setup"
 )
 
-// Analyze rewrites each affected source file to fix its lint problems, one parallel
+// analyze rewrites each affected source file to fix its lint problems, one parallel
 // agent per file, reading the current source from the checkout. Feedback (from a
 // retry) is the previous attempt's CI failure.
-func Analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, error) {
+func analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, error) {
 	return fixflow.ParallelAnalyze(ctx, in.Work, func(ctx context.Context, w fixflow.FileWork) (fixflow.FileEdit, error) {
 		src, err := fixflow.ReadFile(in.RepoDir, w.Path)
 		if err != nil {

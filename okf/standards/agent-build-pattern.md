@@ -42,7 +42,7 @@ the ≥80% coverage target attainable without testing LLM output.
 `lintfixer/` and `covfixer/` do not use the `Build<Name>Agent` wiring file. Each one builds
 a `fixflow.Spec` (branch/label/check names plus its triage/analyze steps) and exposes
 `NewEngine(d fixflow.Deps) *fixflow.Engine`. The shared `fixflow` engine carries the
-suspend/resume Driver and the triage→analyze→commit→PR→await-CI loop, so the fixers stay
+suspend/resume driver and the triage→analyze→commit→PR→await-CI loop, so the fixers stay
 thin. The same testability split still holds: each fixer's deterministic logic (its
 `triage` step and `Spec` builder in the fixer package, the engine's `analyze` step) is
 unit-tested directly without an LLM.

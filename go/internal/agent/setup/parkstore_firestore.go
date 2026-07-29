@@ -48,11 +48,11 @@ type firestoreParkStore struct {
 	coll   string
 }
 
-// NewFirestoreParkStore opens a Firestore-backed park store. project may be "" to detect it
+// newFirestoreParkStore opens a Firestore-backed park store. project may be "" to detect it
 // from ADC / GOOGLE_CLOUD_PROJECT. The returned store also implements io.Closer, which is how
 // the entrypoint releases the client at shutdown (it type-asserts rather than depending on
 // the concrete type).
-func NewFirestoreParkStore(ctx context.Context, project, collection string) (ParkStore, error) {
+func newFirestoreParkStore(ctx context.Context, project, collection string) (ParkStore, error) {
 	if project == "" {
 		project = firestore.DetectProjectID
 	}
@@ -154,7 +154,7 @@ func (s *firestoreParkStore) Sweep(ctx context.Context, workflow string, cutoff 
 	var candidates []stale
 	for {
 		snap, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -258,7 +258,7 @@ func (s *firestoreParkStore) SweepOrphans(ctx context.Context, workflow string, 
 	var out []ParkRecord
 	for {
 		snap, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -281,7 +281,7 @@ func (s *firestoreParkStore) ParkedCount(ctx context.Context, workflow string) (
 	n := 0
 	for {
 		snap, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

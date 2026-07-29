@@ -169,8 +169,8 @@ func branchHasFile(t *testing.T, dir, branch, path string) bool {
 	return err == nil
 }
 
-func applyCfg(remote string) ApplyConfig {
-	return ApplyConfig{
+func applyCfg(remote string) applyConfig {
+	return applyConfig{
 		Owner: "acme", Repo: "api", CloneURL: remote, Base: "master", Branch: "agent/fix",
 		Label: "automation-agent", CommitMessage: "fix", PRTitle: "Fix", PRBody: "auto",
 		Author: gitrepo.Author{Name: "agent", Email: "a@x"},
@@ -182,9 +182,9 @@ func applyCfg(remote string) ApplyConfig {
 func TestApplyFixCreatesPRAndPushes(t *testing.T) {
 	remote := seedRemote(t)
 	gh := &fakeGH{}
-	res, err := ApplyFix(context.Background(), gh, applyCfg(remote), []FileEdit{{Path: "internal/foo.go", Content: "package foo\n"}})
+	res, err := applyFix(context.Background(), gh, applyCfg(remote), []FileEdit{{Path: "internal/foo.go", Content: "package foo\n"}})
 	if err != nil {
-		t.Fatalf("ApplyFix: %v", err)
+		t.Fatalf("applyFix: %v", err)
 	}
 	if res.PR.Number != 42 || res.HeadSHA == "" {
 		t.Errorf("result = %+v", res)
@@ -203,12 +203,12 @@ func TestApplyFixCreatesPRAndPushes(t *testing.T) {
 
 func TestApplyFixRetryReusesBranch(t *testing.T) {
 	remote := seedRemote(t)
-	if _, err := ApplyFix(context.Background(), &fakeGH{}, applyCfg(remote), []FileEdit{{Path: "a.go", Content: "package a\n"}}); err != nil {
+	if _, err := applyFix(context.Background(), &fakeGH{}, applyCfg(remote), []FileEdit{{Path: "a.go", Content: "package a\n"}}); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	retry := applyCfg(remote)
 	gh := &fakeGH{existing: []githubapi.PR{{Number: 9, Branch: "agent/fix"}}}
-	res, err := ApplyFix(context.Background(), gh, retry, []FileEdit{{Path: "b.go", Content: "package b\n"}})
+	res, err := applyFix(context.Background(), gh, retry, []FileEdit{{Path: "b.go", Content: "package b\n"}})
 	if err != nil {
 		t.Fatalf("retry apply: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestApplyFixRetryReusesBranch(t *testing.T) {
 func TestApplyFixNoOpEditSucceeds(t *testing.T) {
 	remote := seedRemote(t)
 	edits := []FileEdit{{Path: "a.go", Content: "package a\n"}}
-	first, err := ApplyFix(context.Background(), &fakeGH{}, applyCfg(remote), edits)
+	first, err := applyFix(context.Background(), &fakeGH{}, applyCfg(remote), edits)
 	if err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestApplyFixNoOpEditSucceeds(t *testing.T) {
 	// Re-apply identical content on the existing branch: CommitAll has nothing to commit.
 	retry := applyCfg(remote)
 	gh := &fakeGH{existing: []githubapi.PR{{Number: 7, Branch: "agent/fix"}}}
-	res, err := ApplyFix(context.Background(), gh, retry, edits)
+	res, err := applyFix(context.Background(), gh, retry, edits)
 	if err != nil {
 		t.Fatalf("no-op re-apply should succeed, got: %v", err)
 	}
@@ -244,21 +244,21 @@ func TestApplyFixNoOpEditSucceeds(t *testing.T) {
 }
 
 func TestApplyFixNoEdits(t *testing.T) {
-	if _, err := ApplyFix(context.Background(), &fakeGH{}, applyCfg("x"), nil); err == nil {
+	if _, err := applyFix(context.Background(), &fakeGH{}, applyCfg("x"), nil); err == nil {
 		t.Fatal("expected error with no edits")
 	}
 }
 
 func TestApplyFixCloneError(t *testing.T) {
 	bad := applyCfg(filepath.Join(t.TempDir(), "nope"))
-	if _, err := ApplyFix(context.Background(), &fakeGH{}, bad, []FileEdit{{Path: "x.go", Content: "package x\n"}}); err == nil {
+	if _, err := applyFix(context.Background(), &fakeGH{}, bad, []FileEdit{{Path: "x.go", Content: "package x\n"}}); err == nil {
 		t.Fatal("expected clone error")
 	}
 }
 
 func TestApplyFixCreateError(t *testing.T) {
 	gh := &fakeGH{createErr: context.DeadlineExceeded}
-	if _, err := ApplyFix(context.Background(), gh, applyCfg(seedRemote(t)), []FileEdit{{Path: "x.go", Content: "package x\n"}}); err == nil {
+	if _, err := applyFix(context.Background(), gh, applyCfg(seedRemote(t)), []FileEdit{{Path: "x.go", Content: "package x\n"}}); err == nil {
 		t.Fatal("expected error when PR creation fails")
 	}
 }

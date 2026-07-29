@@ -6,7 +6,7 @@ resource: go/internal/agent/covfixer
 tags: [coverage, test-generation, ci-loop]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # Coverage Fixer Workflow
@@ -19,15 +19,15 @@ The **test-coverage** configuration of the [fixflow engine](/modules/agents/fixf
 
 ```mermaid
 flowchart TD
-    K["KindCoverage -> Engine.Kickoff"] --> Open["fixflow.Open: clone + checkout (shared)"]
-    Open --> T["Triage(LLM, report) -> []FileWork (files + uncovered)"]
+    K["KindCoverage -> Engine.Kickoff"] --> Open["openCheckout: clone + checkout (shared)"]
+    Open --> T["triage(LLM, report) -> []FileWork (files + uncovered)"]
     T --> EX["explore: fixflow.Explore (tool-using agent, read_file/list_dir)"]
     EX -->|"navigates the real checkout"| Plan["LLM plan (prompts/explore.md) -> [{source, test_path, framework, notes}]"]
     Plan --> Exec["execute: fixflow.ParallelAnalyze (one per file)"]
     Exec --> Read["fixflow.ReadFile(checkout, source)"]
     Exec -->|"prompts/analyze.md: write test from brief"| Gen["GenerateText -> test content"]
     Gen --> FE["FileEdit{plan.test_path, content}"]
-    FE --> Commit["fixflow.Commit -> branch automation-agent/test-coverage, label automation-agent"]
+    FE --> Commit["commitEdits -> branch automation-agent/test-coverage, label automation-agent"]
     Commit --> Loop["suspend -> agent-coverage-verify (runs tests + coverage) -> resume: success / retry-with-feedback / needs-review"]
 ```
 
@@ -37,7 +37,7 @@ Generated tests that don't compile or don't raise coverage are rejected by the `
 
 ## Implementation layout
 
-- `coverage.go` — `NewEngine(Deps)`: the coverage `Spec` (branch/label/check + titles).
+- `coverage.go` — `NewEngine(Deps)`: the coverage `Spec` (branch/check + titles); the PR label is one service-wide setting on `fixflow.Deps`, not per-Spec.
 - `triage.go` — coverage report → `[]fixflow.FileWork` (files + uncovered regions).
 - `analyze.go` — `explore` (a tool-using agent via `fixflow.Explore` grounds a per-file plan in the repo's real conventions) then `execute` (parallel test generation, reading each source with `fixflow.ReadFile`).
 - `prompts/{triage,explore,analyze}.md`. The terminal chat summary is assembled deterministically in Go (`fixflow.buildSummaryText`), not by a prompt.

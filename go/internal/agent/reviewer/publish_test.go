@@ -12,7 +12,7 @@ import (
 func TestPublishRoutesFindings(t *testing.T) {
 	// a.go's hunk makes head lines 1 (context), 2 and 3 (added) commentable.
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1,2 +1,3 @@\n a\n+b\n+c\n"}}
-	findings := []Finding{
+	findings := []finding{
 		{File: "a.go", Line: 2, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli", Suggestion: "safe()", FixPrompt: "fix it"},
 		{File: "a.go", Line: 99, Dimension: DimPerformance, Severity: SeverityMajor, Message: "n+1 query"}, // out of diff
 		{File: "b.go", Line: 1, Dimension: DimMaintainability, Severity: SeverityNitpick, Message: "rename"},
@@ -114,7 +114,7 @@ func TestPublishWriteErrorPropagates(t *testing.T) {
 func TestPublishIdempotentOnRepublishedSHA(t *testing.T) {
 	gh := &fakeGH{agentCheck: githubapi.CheckResult{Found: true}}
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
-	findings := []Finding{{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "x"}}
+	findings := []finding{{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "x"}}
 	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
 	if err := testEngine(gh).publish(context.Background(), scoreFindings(findings), findings, meta); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -127,14 +127,14 @@ func TestPublishIdempotentOnRepublishedSHA(t *testing.T) {
 
 func TestPublishReconciles(t *testing.T) {
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
-	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli"}
+	sqli := finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli"}
 	gh := &fakeGH{existing: []githubapi.ReviewCommentRef{
-		{NodeID: "keep", Body: "old body " + fpMarker(finding.fingerprint())},
+		{NodeID: "keep", Body: "old body " + fpMarker(sqli.fingerprint())},
 		{NodeID: "stale", Body: "fixed finding " + fpMarker("a.go:9:obsolete")},
 		{NodeID: "foreign", Body: "a human comment with no marker"},
 	}}
 	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
-	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]finding{sqli}), []finding{sqli}, meta); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if gh.review != nil {
@@ -150,13 +150,13 @@ func TestPublishReconciles(t *testing.T) {
 // and the PR is left without its summary/check).
 func TestPublishMinimizeFailureStillPublishes(t *testing.T) {
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
-	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
+	fnd := finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
 	gh := &fakeGH{
 		minimizeErr: errors.New("graphql boom"),
 		existing:    []githubapi.ReviewCommentRef{{NodeID: "stale", Body: "fixed " + fpMarker("a.go:9:obsolete")}},
 	}
 	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
-	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]finding{fnd}), []finding{fnd}, meta); err != nil {
 		t.Fatalf("publish must not fail when minimize fails: %v", err)
 	}
 	if len(gh.minimized) != 1 || gh.minimized[0] != "stale" {
@@ -173,16 +173,16 @@ func TestPublishMinimizeFailureStillPublishes(t *testing.T) {
 // A finding with no existing comment is posted, carrying its fingerprint marker for next time.
 func TestPublishPostsNewFinding(t *testing.T) {
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x\n"}}
-	finding := Finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
+	fnd := finding{File: "a.go", Line: 1, Dimension: DimSecurity, Severity: SeverityCritical, Message: "new"}
 	gh := &fakeGH{} // no existing comments
 	meta := publishMeta{owner: "o", repo: "r", number: 1, headSHA: "s", files: files}
-	if err := testEngine(gh).publish(context.Background(), scoreFindings([]Finding{finding}), []Finding{finding}, meta); err != nil {
+	if err := testEngine(gh).publish(context.Background(), scoreFindings([]finding{fnd}), []finding{fnd}, meta); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if gh.review == nil || len(gh.review.Comments) != 1 {
 		t.Fatalf("a new finding must be posted, got %+v", gh.review)
 	}
-	if !strings.Contains(gh.review.Comments[0].Body, fpMarker(finding.fingerprint())) {
+	if !strings.Contains(gh.review.Comments[0].Body, fpMarker(fnd.fingerprint())) {
 		t.Error("posted comment must carry its fingerprint marker")
 	}
 	if len(gh.minimized) != 0 {
