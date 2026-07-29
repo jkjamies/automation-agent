@@ -4,10 +4,10 @@ The rules every change obeys. The architecture & build plan is the authoritative
 the rest are focused contracts a change must not break.
 
 * [Architecture & build plan](architecture-design.md) - The authoritative language-neutral design of the automation agent — goals, topology, durable suspend/resume sessions, configuration, and deployment.
-* [Architecture rules](architecture.md) - The import-boundary and durable-session state rules the architecture test suite enforces.
+* [Architecture rules](architecture.md) - The import-boundary, visibility, and durable-session state rules the architecture test suite enforces.
 * [The build-agent pattern](agent-build-pattern.md) - Splits every standalone agent directory into pure ADK wiring and deterministic LLM-free logic so structure and behavior are testable without a model.
 * [Testing](testing.md) - How to run every kind of test and the rules they obey — ≥80% coverage per package and overall, no LLM-content assertions, and stubbed networks.
-* [Go style](go-style.md) - Google's Go Style Guide is the baseline; this concept records only the project-specific deltas — visibility, dependency admission, and the seams the architecture depends on.
+* [Go style](go-style.md) - Google's Go Style Guide is the baseline; this concept records where each layer of it is enforced and the three project-specific deltas its documents cannot cover.
 * [Documentation & diagrams](documentation.md) - How the repo documents itself — the knowledge bundle, factual docs, and the rule that docs and diagrams move with the code in the same change.
 * [OKF format](okf-format.md) - The bundle's own format contract — layout, frontmatter schema, the type taxonomy, timestamp semantics, link convention, and the conformance floor.
 * [Security model](security.md) - The service's security controls in one view — ingress authentication per route class, credential lifecycle, secret storage, and input hardening.

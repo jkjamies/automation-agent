@@ -1,11 +1,11 @@
 ---
 type: Standard
 title: Architecture rules
-description: The import-boundary and durable-session state rules the ARCH test suite enforces.
+description: The import-boundary, visibility, and durable-session state rules the ARCH test suite enforces.
 tags: [architecture, import-boundaries, sessions]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # Architecture rules
@@ -34,6 +34,16 @@ Ingest (cron / webhook / future hooks) → `ingest.Envelope` → **root agent** 
    interfaces, never the SDKs.
 3. **Nothing imports `cmd/...`.** Entrypoints are leaves.
 4. **Only `internal/config` reads the environment.**
+
+## Visibility (enforced by `ARCH/`)
+
+**An exported identifier must appear in its own package's exported signature surface, or be
+referred to by another package.** Anything else is exported but unreachable — a contract in
+`godoc` that no caller can enter — and the module is closed (everything is under `internal/`
+or `cmd/`), so the tree contains every caller there will ever be. This is the rule that keeps
+the import boundaries above meaningful: they only hold while a caller cannot reach past a seam
+to the implementation behind it. Stated in full, with the two cases that look like violations
+and are not, in [Go style § Visibility](/standards/go-style.md#visibility--export-the-seam-not-the-machinery).
 
 ## State
 

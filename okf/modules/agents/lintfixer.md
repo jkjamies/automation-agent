@@ -6,7 +6,7 @@ resource: go/internal/agent/lintfixer
 tags: [lint, autofix, ci-loop]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # Lint Fixer Workflow
@@ -17,22 +17,22 @@ The autonomous lint-remediation workflow. It is a configuration of the shared [f
 
 ```mermaid
 flowchart TD
-    K["KindLint -> Kickoff(raw)"] --> KP["ParseKickoff{repo, base, report}"]
-    KP --> T["Triage(LLM): report -> []FileProblems"]
-    T --> OP["fixflow.Open: clone + checkout"]
+    K["KindLint -> Kickoff(raw)"] --> KP["parseKickoff{repo, base, report}"]
+    KP --> T["triage(LLM): report -> []FileWork"]
+    T --> OP["openCheckout: clone + checkout"]
     OP --> FF["fixflow.ReadFile(RepoDir, path) per file (local checkout)"]
-    FF --> AN["RunAnalyze: ParallelAgent[analyze_<file>] -> []FileEdit"]
-    AN --> AF["ApplyFix: clone -> new branch -> commit -> push -> CreatePR + label"]
+    FF --> AN["analyze: ParallelAgent[analyze_<file>] -> []FileEdit"]
+    AN --> AF["applyFix: clone -> new branch -> commit -> push -> CreatePR + label"]
     AF --> SUS(["suspend: PR open, await CI"])
 
     SUS -->|"agent-lint-verify check_run"| CI["KindCI -> Resume(raw)"]
     TO["CI_TIMEOUT soft timer + /internal/sweep"] -.->|"CI never reports"| HR
-    CI --> RH["Engine.Resume(ResumeInput)"]
+    CI --> RH["Engine.Resume(resumeInput)"]
     RH --> C{conclusion}
     C -->|success| OK["notify status-aware summary + PR link"]
     C -->|failure| AT{"park-record attempts >= MaxIter (3)?"}
     AT -->|yes| HR["notify needs human review + PR link"]
-    AT -->|no| RT["attempt(retry): re-triage from check output, read branch files, analyze w/ feedback, ApplyFix (continues the existing branch)"]
+    AT -->|no| RT["attempt(retry): re-triage from check output, read branch files, analyze w/ feedback, applyFix (continues the existing branch)"]
     RT --> SUS
     OK --> Chat[("Slack / Teams")]
     HR --> Chat
@@ -40,12 +40,12 @@ flowchart TD
 
 ## Kickoff and resume
 
-- **Kickoff** (`KindLint`) → `Engine.Kickoff`: parse the trusted `{repo, base, report}` envelope → `Triage` (LLM normalizes the arbitrary report) → clone + checkout → read each affected file from the local checkout (`fixflow.ReadFile`) → analyze (one parallel agent per file) → `apply_fix` (branch, commit, push, labeled PR) → suspend on `await_ci`.
+- **Kickoff** (`KindLint`) → `Engine.Kickoff`: parse the trusted `{repo, base, report}` envelope → `triage` (LLM normalizes the arbitrary report) → clone + checkout → read each affected file from the local checkout (`fixflow.ReadFile`) → analyze (one parallel agent per file) → `apply_fix` (branch, commit, push, labeled PR) → suspend on `await_ci`.
 - **Resume** (`KindCI`) → `Engine.Resume` (the fixflow driver): on the agent verify check completing — success → notify; failure & attempts < max → re-analyze with CI feedback and push onto the same branch; failure & attempts ≥ max → notify "needs human review" + PR link. Terminal results post a **status-aware summary** (what changed on the PR via `GH.Compare` + the targeted findings). Attempts are counted in the `ParkStore` record, not derived from GitHub SHAs. A parked run whose CI never reports is freed by its per-run `CI_TIMEOUT` soft timer or, durably, by the `/internal/sweep` catch-all (→ "needs human review").
 
 ## Implementation layout
 
-- `lint.go` — `NewEngine(fixflow.Deps)`: the lint `Spec` (branch/label/check + titles) that configures the shared fixflow engine.
+- `lint.go` — `NewEngine(fixflow.Deps)`: the lint `Spec` (branch/check + titles) that configures the shared fixflow engine.
 - `triage.go` — LLM report normalization (format-agnostic).
 - `analyze.go` — parallel per-file fix agents.
 - `prompts/{triage,analyze}.md`. The terminal chat summary is assembled deterministically in Go (`fixflow.buildSummaryText`), not by a prompt.

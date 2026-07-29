@@ -46,8 +46,9 @@ gate or the PR:
   (Ollama/Gemini/genai) only inside the `agent/setup` layer; nothing imports
   `cmd`; the config layer is the only place that reads environment variables.
 - **Go style**: [Google's Go Style Guide](https://google.github.io/styleguide/go/) is the
-  baseline — `make lint` enforces the mechanical subset. The project-specific deltas it cannot
-  cover (what to export, admitting a dependency) are in
+  baseline. `make lint` decides everything a linter can — every rule in `go/.golangci.yml`
+  cites the guide section it enforces — and `ARCH/` decides the cross-package rules a linter
+  cannot see, including what may be exported. The deltas the guide cannot cover are in
   [`okf/standards/go-style.md`](okf/standards/go-style.md).
 - **Testing**: coverage ≥ 80 %, enforced per package as well as overall; never
   assert on LLM output content; tests stay deterministic.

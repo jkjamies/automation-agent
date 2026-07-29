@@ -6,7 +6,7 @@ resource: go/internal/notify
 tags: [notifications, slack, teams]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # Notifications
@@ -21,9 +21,9 @@ Posts provider-agnostic `Message`s to Slack or Microsoft Teams behind one
 flowchart TD
     Caller[workflow] --> NEW["New(provider, slackURL, teamsURL)"]
     NEW --> SW{provider switch}
-    SW -->|"slack & slackURL set"| NS["NewSlack(url)"]
+    SW -->|"slack & slackURL set"| NS["newSlack(url)"]
     SW -->|"slack & url empty"| ES[error: SLACK_WEBHOOK_URL required]
-    SW -->|"teams & teamsURL set"| NT["NewTeams(url)"]
+    SW -->|"teams & teamsURL set"| NT["newTeams(url)"]
     SW -->|"teams & url empty"| ET[error: TEAMS_WEBHOOK_URL required]
     SW -->|other| EU[error: unknown provider]
 

@@ -6,12 +6,12 @@ resource: go/internal/agent/fixflow
 tags: [fix-loop, suspend-resume, ci, workflow-graph]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-07-29T00:00:00Z
 ---
 
 # Fixflow Engine
 
-The reusable engine behind the PR-fixing agents ([lint-fixer](/modules/agents/lintfixer.md), [coverage-fixer](/modules/agents/covfixer.md), …). It owns the event-driven fix loop — kickoff → apply → **suspend across the CI wait** → CI resume → loop or finish — plus the apply mechanics. Each concrete agent supplies a `Spec` (its own triage fn, analyze fn, and branch/label/check names) **and its own prompts**; nothing about the LLM prompting is shared here.
+The reusable engine behind the PR-fixing agents ([lint-fixer](/modules/agents/lintfixer.md), [coverage-fixer](/modules/agents/covfixer.md), …). It owns the event-driven fix loop — kickoff → apply → **suspend across the CI wait** → CI resume → loop or finish — plus the apply mechanics. Each concrete agent supplies a `Spec` (its own triage fn, analyze fn, and branch/check names; the PR label is one service-wide setting on `Deps`) **and its own prompts**; nothing about the LLM prompting is shared here.
 
 ## Durable suspend/resume
 
@@ -33,10 +33,10 @@ The outer loop is a deterministic workflow graph (`Start → apply_fix → await
 
 ```mermaid
 flowchart TD
-    Spec["Spec{Name, Branch, Label, CheckName, Triage, Analyze, titles}"] --> E["NewEngine(spec, Deps)"]
-    K["Kickoff(raw)"] --> KP["ParseKickoff{repo, base, report}"]
+    Spec["Spec{Name, Branch, CheckName, Triage, Analyze, titles}"] --> E["NewEngine(spec, Deps)"]
+    K["Kickoff(raw)"] --> KP["parseKickoff{repo, base, report}"]
     KP --> DK["driver.Kickoff: run fixer agent"]
-    DK --> AF["apply_fix -> attemptOnce: Triage -> Open -> Analyze -> Commit (clone/branch/push/ensure PR)"]
+    DK --> AF["apply_fix -> attemptOnce: Triage -> openCheckout -> Analyze -> commitEdits (clone/branch/push/ensure PR)"]
     AF -->|"triage found nothing (ErrNoWork)"| CLN["clean summary (CleanTitle) + clear; no PR, no park (StopWhen concludes)"]
     AF --> AW["await_ci (IsLongRunning)"]
     AW --> PK["ParkStore.Put(prKey=owner/repo#pr, attempts) + CITimeout timer"]
