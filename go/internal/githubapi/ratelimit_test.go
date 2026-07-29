@@ -303,3 +303,54 @@ func TestSleepCtx(t *testing.T) {
 		t.Errorf("returned after %v, want at least 5ms", elapsed)
 	}
 }
+
+// clientTransport puts an *http.Client where a RoundTripper is expected, so the per-attempt
+// timeout and redirect handling survive beneath the retry loop. Client.Do wraps transport errors
+// in *url.Error, and RoundTrip is contractually supposed to return the unwrapped one — without
+// that, the outer client wraps it a second time and every connection error names its URL twice.
+func TestClientTransportDoesNotDoubleWrapErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	host := srv.URL
+	srv.Close() // nothing is listening
+
+	c := New(auth.NewStaticProvider(""))
+	u, _ := url.Parse(host + "/")
+	c.gh.BaseURL = u
+
+	_, err := c.PullRequestHeadSHA(context.Background(), "o", "r", 7)
+	if err == nil {
+		t.Fatal("expected a connection error")
+	}
+	if n := strings.Count(err.Error(), host); n != 1 {
+		t.Errorf("error names the URL %d times, want 1 — the *url.Error was wrapped twice:\n%v", n, err)
+	}
+}
+
+// Redirects still resolve through the nesting: a bare RoundTripper has no redirect handling, so
+// the inner *http.Client is what provides it.
+func TestClientTransportFollowsRedirects(t *testing.T) {
+	var hits int
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/o/r/pulls/7", func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "/moved", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("GET /moved", func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"number":7,"head":{"sha":"abc"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(auth.NewStaticProvider(""))
+	u, _ := url.Parse(srv.URL + "/")
+	c.gh.BaseURL = u
+
+	sha, err := c.PullRequestHeadSHA(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatalf("PullRequestHeadSHA: %v", err)
+	}
+	if sha != "abc" || hits != 2 {
+		t.Errorf("sha=%q hits=%d, want abc/2 (redirect followed)", sha, hits)
+	}
+}

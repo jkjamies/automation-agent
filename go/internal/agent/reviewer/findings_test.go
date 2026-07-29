@@ -122,3 +122,46 @@ func TestMaxBacktickRun(t *testing.T) {
 		}
 	}
 }
+
+// A lens that prefaces its findings with some other JSON array must not silence the review.
+// JSON is permissive about extra fields, so an unrelated array of objects decodes cleanly into
+// findingWire records with every field zero — and committing to it would leave every element
+// message-less, so the lens reports nothing and the review calls the code clean. The scan has to
+// keep going until an array yields a usable finding.
+func TestParseFindingsSkipsUnrelatedLeadingArray(t *testing.T) {
+	raw := `Files I looked at: [{"path":"a.go"},{"path":"b.go"}]
+
+Findings:
+[{"file":"a.go","line":2,"severity":"major","dimension":"security","message":"sqli"}]`
+
+	got := parseFindings(raw)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1 — an unrelated leading array swallowed the real one: %+v", len(got), got)
+	}
+	if got[0].Message != "sqli" || got[0].File != "a.go" || got[0].Line != 2 {
+		t.Errorf("finding = %+v", got[0])
+	}
+}
+
+// The same shape one level up: an array of well-formed-looking objects that simply have no
+// message is not findings, however plausible it looks.
+func TestParseFindingsSkipsMessagelessArray(t *testing.T) {
+	raw := `[{"file":"a.go","line":1,"severity":"critical"},{"file":"b.go","line":2}]
+[{"file":"c.go","line":3,"severity":"medium","dimension":"performance","message":"n+1"}]`
+
+	got := parseFindings(raw)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+	}
+	if got[0].File != "c.go" || got[0].Message != "n+1" {
+		t.Errorf("finding = %+v", got[0])
+	}
+}
+
+// And when nothing in the text is usable, the answer stays "no findings" rather than an error or
+// a pile of empty ones.
+func TestParseFindingsAllUnusable(t *testing.T) {
+	if got := parseFindings(`prose [{"path":"a.go"}] more prose [{"file":"b.go"}] end`); len(got) != 0 {
+		t.Errorf("got %+v, want none", got)
+	}
+}
