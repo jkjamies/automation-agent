@@ -30,8 +30,8 @@ type FileEdit struct {
 	Content string
 }
 
-// ApplyConfig parameterizes one apply.
-type ApplyConfig struct {
+// applyConfig parameterizes one apply.
+type applyConfig struct {
 	Owner, Repo string
 	CloneURL    string
 	// Provider yields the GitHub token for https git transport, fetched fresh per op
@@ -49,13 +49,13 @@ type ApplyConfig struct {
 	Author        gitrepo.Author
 }
 
-// ApplyResult is the outcome of one apply.
-type ApplyResult struct {
+// applyResult is the outcome of one apply.
+type applyResult struct {
 	PR      githubapi.PR
 	HeadSHA string
 }
 
-// Open clones the repo into a fresh temp dir and checks out the agent branch — the
+// openCheckout clones the repo into a fresh temp dir and checks out the agent branch — the
 // single checkout the explorer reads, the executor writes into, and the commit step
 // pushes. The caller must os.RemoveAll(repo.Dir()) when done.
 //
@@ -66,7 +66,7 @@ type ApplyResult struct {
 // Whether the agent branch is created or continued is decided by the remote, not by the
 // caller — see gitrepo.CheckoutOrCreate. That is what makes an apply safe to repeat: a
 // retry and a redelivered kickoff both land on the existing branch and add to it.
-func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
+func openCheckout(ctx context.Context, cfg applyConfig) (*gitrepo.Repo, error) {
 	dir, err := os.MkdirTemp("", "agentfix-*")
 	if err != nil {
 		return nil, fmt.Errorf("tempdir: %w", err)
@@ -85,14 +85,14 @@ func Open(ctx context.Context, cfg ApplyConfig) (*gitrepo.Repo, error) {
 	return repo, nil
 }
 
-// Commit writes edits into the working tree, commits, pushes, and ensures a labeled
+// commitEdits writes edits into the working tree, commits, pushes, and ensures a labeled
 // PR exists.
-func Commit(ctx context.Context, gh GitHub, repo *gitrepo.Repo, cfg ApplyConfig, edits []FileEdit) (ApplyResult, error) {
+func commitEdits(ctx context.Context, gh GitHub, repo *gitrepo.Repo, cfg applyConfig, edits []FileEdit) (applyResult, error) {
 	if len(edits) == 0 {
-		return ApplyResult{}, fmt.Errorf("apply: no edits to apply")
+		return applyResult{}, fmt.Errorf("apply: no edits to apply")
 	}
 	if err := writeEdits(repo, edits); err != nil {
-		return ApplyResult{}, err
+		return applyResult{}, err
 	}
 	sha, err := repo.CommitAll(cfg.CommitMessage, cfg.Author)
 	if err != nil {
@@ -100,33 +100,32 @@ func Commit(ctx context.Context, gh GitHub, repo *gitrepo.Repo, cfg ApplyConfig,
 		// already matches the branch (common on retry). Resolve it like a real apply —
 		// reuse the current HEAD, push (an up-to-date push is fine), and ensure the PR —
 		// so the run parks on CI instead of being reported to a human as a failed fix.
-		if errors.Is(err, gitrepo.ErrNoChanges) {
-			if sha, err = repo.Head(); err != nil {
-				return ApplyResult{}, err
-			}
-		} else {
-			return ApplyResult{}, err
+		if !errors.Is(err, gitrepo.ErrNoChanges) {
+			return applyResult{}, err
+		}
+		if sha, err = repo.Head(); err != nil {
+			return applyResult{}, err
 		}
 	}
 	if err := repo.Push(ctx); err != nil {
-		return ApplyResult{}, err
+		return applyResult{}, err
 	}
 	pr, err := ensurePR(ctx, gh, cfg)
 	if err != nil {
-		return ApplyResult{}, err
+		return applyResult{}, err
 	}
-	return ApplyResult{PR: pr, HeadSHA: sha}, nil
+	return applyResult{PR: pr, HeadSHA: sha}, nil
 }
 
-// ApplyFix opens a checkout and commits edits in one step (no analysis in between) —
-// a convenience used in tests; the engine interleaves analysis between Open and Commit.
-func ApplyFix(ctx context.Context, gh GitHub, cfg ApplyConfig, edits []FileEdit) (ApplyResult, error) {
-	repo, err := Open(ctx, cfg)
+// applyFix opens a checkout and commits edits in one step (no analysis in between) —
+// a convenience used in tests; the engine interleaves analysis between openCheckout and commitEdits.
+func applyFix(ctx context.Context, gh GitHub, cfg applyConfig, edits []FileEdit) (applyResult, error) {
+	repo, err := openCheckout(ctx, cfg)
 	if err != nil {
-		return ApplyResult{}, err
+		return applyResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(repo.Dir()) }()
-	return Commit(ctx, gh, repo, cfg, edits)
+	return commitEdits(ctx, gh, repo, cfg, edits)
 }
 
 func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
@@ -148,7 +147,7 @@ func writeEdits(repo *gitrepo.Repo, edits []FileEdit) error {
 
 // ensurePR returns the existing open PR for the branch, or creates and labels one. The
 // lookup is by head branch (not the agent label, which is write-only and never read back).
-func ensurePR(ctx context.Context, gh GitHub, cfg ApplyConfig) (githubapi.PR, error) {
+func ensurePR(ctx context.Context, gh GitHub, cfg applyConfig) (githubapi.PR, error) {
 	existing, found, err := gh.FindOpenPRByBranch(ctx, cfg.Owner, cfg.Repo, cfg.Branch)
 	if err != nil {
 		return githubapi.PR{}, err

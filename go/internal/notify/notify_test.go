@@ -24,7 +24,7 @@ func captureServer(t *testing.T, status int) (*httptest.Server, *[]byte) {
 
 func TestSlackNotify(t *testing.T) {
 	srv, body := captureServer(t, http.StatusOK)
-	n := NewSlack(srv.URL)
+	n := newSlack(srv.URL)
 
 	if err := n.Notify(context.Background(), Message{Title: "Digest", Text: "3 commits", Link: "https://x/pr/1"}); err != nil {
 		t.Fatalf("Notify: %v", err)
@@ -41,7 +41,7 @@ func TestSlackNotify(t *testing.T) {
 
 func TestTeamsNotify(t *testing.T) {
 	srv, body := captureServer(t, http.StatusOK)
-	n := NewTeams(srv.URL)
+	n := newTeams(srv.URL)
 
 	if err := n.Notify(context.Background(), Message{Title: "Result", Text: "fixed", Link: "https://x/pr/2"}); err != nil {
 		t.Fatalf("Notify: %v", err)
@@ -72,7 +72,7 @@ func TestTeamsNotify(t *testing.T) {
 
 func TestNon2xxIsError(t *testing.T) {
 	srv, _ := captureServer(t, http.StatusInternalServerError)
-	if err := NewSlack(srv.URL).Notify(context.Background(), Message{Text: "x"}); err == nil {
+	if err := newSlack(srv.URL).Notify(context.Background(), Message{Text: "x"}); err == nil {
 		t.Fatal("expected error on 500")
 	}
 }

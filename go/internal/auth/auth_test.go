@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,13 +50,13 @@ type recordingRT struct{ auth string }
 
 func (r *recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.auth = req.Header.Get("Authorization")
-	return &http.Response{StatusCode: 200, Body: http.NoBody, Header: make(http.Header)}, nil
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 }
 
 func TestRoundTripperInjectsBearer(t *testing.T) {
 	base := &recordingRT{}
 	rt := NewRoundTripper(base, NewStaticProvider("tok-abc"))
-	req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestRoundTripperInjectsBearer(t *testing.T) {
 func TestRoundTripperEmptyTokenUnauthenticated(t *testing.T) {
 	base := &recordingRT{}
 	rt := NewRoundTripper(base, NewStaticProvider(""))
-	req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
@@ -89,7 +90,7 @@ func (errProvider) Token(context.Context, string) (string, error) {
 
 func TestRoundTripperPropagatesTokenError(t *testing.T) {
 	rt := NewRoundTripper(&recordingRT{}, errProvider{})
-	req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
 	if _, err := rt.RoundTrip(req); err == nil {
 		t.Fatal("expected the token error to propagate")
 	}
@@ -145,7 +146,7 @@ func TestAppProviderMintExchangeAndCache(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	p, err := NewAppProvider(nil, appID, installID, testKeyPEM(t), WithBaseURL(srv.URL))
+	p, err := NewAppProvider(nil, appID, installID, testKeyPEM(t), withBaseURL(srv.URL))
 	if err != nil {
 		t.Fatalf("NewAppProvider: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestAppProviderAuthoredLogin(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	p, err := NewAppProvider(nil, 42, 99, testKeyPEM(t), WithBaseURL(srv.URL))
+	p, err := NewAppProvider(nil, 42, 99, testKeyPEM(t), withBaseURL(srv.URL))
 	if err != nil {
 		t.Fatalf("NewAppProvider: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestAppProviderRefreshesExpiredToken(t *testing.T) {
 	mux.HandleFunc("POST /app/installations/{id}/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
 		n := atomic.AddInt32(&exchanges, 1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"token": "tok-" + string(rune('0'+n)),
+			"token": "tok-" + strconv.Itoa(int(n)),
 			// Already-expired (past) expiry forces a fresh exchange on each call.
 			"expires_at": time.Now().Add(-time.Minute).Format(time.RFC3339),
 		})
@@ -231,7 +232,7 @@ func TestAppProviderRefreshesExpiredToken(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	p, err := NewAppProvider(nil, 1, 2, testKeyPEM(t), WithBaseURL(srv.URL))
+	p, err := NewAppProvider(nil, 1, 2, testKeyPEM(t), withBaseURL(srv.URL))
 	if err != nil {
 		t.Fatalf("NewAppProvider: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestStaticProviderAuthoredLogin(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	login, err := NewStaticProvider("pat-123", WithStaticBaseURL(srv.URL)).AuthoredLogin(context.Background())
+	login, err := NewStaticProvider("pat-123", withStaticBaseURL(srv.URL)).AuthoredLogin(context.Background())
 	if err != nil {
 		t.Fatalf("AuthoredLogin: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestStaticProviderAuthoredLoginError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewStaticProvider("bad", WithStaticBaseURL(srv.URL)).AuthoredLogin(context.Background()); err == nil {
+	if _, err := NewStaticProvider("bad", withStaticBaseURL(srv.URL)).AuthoredLogin(context.Background()); err == nil {
 		t.Fatal("a rejected identity lookup must surface as an error")
 	}
 }
@@ -304,7 +305,7 @@ func TestNewRoundTripperNilArguments(t *testing.T) {
 	}
 	rec := &recordingRT{}
 	rt := NewRoundTripper(rec, nil)
-	req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("nil provider should be anonymous, got %v", err)
 	}

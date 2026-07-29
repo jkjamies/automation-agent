@@ -27,7 +27,7 @@ func NewEngine(d fixflow.Deps) *fixflow.Engine {
 		SuccessTitle:  "Coverage fix succeeded ✅",
 		ReviewTitle:   "Coverage fix needs human review ⚠️",
 		CleanTitle:    "Coverage already sufficient 👏",
-		Triage:        Triage,
-		Analyze:       Analyze,
+		Triage:        triage,
+		Analyze:       analyze,
 	}, d)
 }

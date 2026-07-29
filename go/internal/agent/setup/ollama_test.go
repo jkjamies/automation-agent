@@ -65,7 +65,7 @@ func TestOllamaStreaming(t *testing.T) {
 		t.Fatalf("NewOllamaModel: %v", err)
 	}
 
-	req := &model.LLMRequest{Contents: []*genai.Content{UserText("hi")}}
+	req := &model.LLMRequest{Contents: []*genai.Content{userText("hi")}}
 	resps := collect(t, m.GenerateContent(context.Background(), req, true))
 
 	var partials []string
@@ -100,8 +100,8 @@ func TestOllamaNonStreaming(t *testing.T) {
 
 	m, _ := NewOllamaModel(ts.URL, "gemma", 32768)
 	req := &model.LLMRequest{
-		Config:   &genai.GenerateContentConfig{SystemInstruction: UserText("be brief")},
-		Contents: []*genai.Content{UserText("hi")},
+		Config:   &genai.GenerateContentConfig{SystemInstruction: userText("be brief")},
+		Contents: []*genai.Content{userText("hi")},
 	}
 	resps := collect(t, m.GenerateContent(context.Background(), req, false))
 
@@ -142,9 +142,9 @@ func TestNewOllamaModelEmptyTag(t *testing.T) {
 
 func TestToOllamaMessages(t *testing.T) {
 	req := &model.LLMRequest{
-		Config: &genai.GenerateContentConfig{SystemInstruction: UserText("system rules")},
+		Config: &genai.GenerateContentConfig{SystemInstruction: userText("system rules")},
 		Contents: []*genai.Content{
-			UserText("question"),
+			userText("question"),
 			genai.NewContentFromText("answer", genai.RoleModel),
 			nil, // must be skipped
 		},
@@ -185,7 +185,7 @@ func TestLiveOllama(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOllamaModel: %v", err)
 	}
-	req := &model.LLMRequest{Contents: []*genai.Content{UserText("Reply with the single word: pong")}}
+	req := &model.LLMRequest{Contents: []*genai.Content{userText("Reply with the single word: pong")}}
 
 	var sb strings.Builder
 	for resp, err := range m.GenerateContent(context.Background(), req, false) {

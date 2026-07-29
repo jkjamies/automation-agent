@@ -279,7 +279,7 @@ func (dr *driver) awaitNode(nc agent.Context, _ any, emit func(*session.Event) e
 }
 
 // Kickoff starts a new suspended run: apply the fix, then park awaiting CI.
-func (dr *driver) Kickoff(ctx context.Context, k Kickoff) error {
+func (dr *driver) Kickoff(ctx context.Context, k kickoff) error {
 	base, err := dr.resolveBase(ctx, k)
 	if err != nil {
 		return err
@@ -311,7 +311,7 @@ func (dr *driver) Kickoff(ctx context.Context, k Kickoff) error {
 // A lookup failure fails the kickoff rather than falling back to a guessed name: every
 // downstream step (branch point, PR base, compare) needs a ref that really exists, and a
 // wrong guess surfaces only as an opaque GitHub 422 when the PR is opened.
-func (dr *driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
+func (dr *driver) resolveBase(ctx context.Context, k kickoff) (string, error) {
 	if k.Base != "" {
 		return k.Base, nil
 	}
@@ -324,7 +324,7 @@ func (dr *driver) resolveBase(ctx context.Context, k Kickoff) (string, error) {
 }
 
 // Resume reacts to a CI conclusion for a parked run.
-func (dr *driver) Resume(ctx context.Context, in ResumeInput) error {
+func (dr *driver) Resume(ctx context.Context, in resumeInput) error {
 	if in.PRNumber == 0 {
 		return fmt.Errorf("resume: missing PR number")
 	}

@@ -27,7 +27,7 @@ type Deps struct {
 // KindCronDaily → summary; KindLint → lint-fixer; KindCoverage → coverage-fixer;
 // KindCI → resume (all fix engines); KindReview → PR code-review agent.
 func BuildRootDispatcher(d Deps) (*Dispatcher, error) {
-	disp := NewDispatcher(d.Log)
+	disp := newDispatcher(d.Log)
 
 	if d.SummaryDaily != nil {
 		if err := registerSummary(disp, d.SummaryDaily, ingest.KindCronDaily, "Run the daily commit digest."); err != nil {

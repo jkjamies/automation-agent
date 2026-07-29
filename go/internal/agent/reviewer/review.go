@@ -24,7 +24,7 @@ const (
 // holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
 // score. It returns the scorecard and the gated findings (the caller publishes them); it posts
 // nothing itself.
-func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards, stale staleFunc) (scorecard, []Finding, error) {
+func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards, stale staleFunc) (scorecard, []finding, error) {
 	diff := formatDiff(files)
 	cats := selectCategories(files)
 
@@ -44,7 +44,7 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *stan
 	// see only the findings that survive the same gates as the final output. Otherwise a finding the
 	// verify/citation gate later drops (REVIEW_UNCITED_MODE=drop) is suppressed in glue and then
 	// dropped here, vanishing from the review entirely.
-	gatedForGlue := e.gateCitations(dropLowConfidence(append([]Finding(nil), category...), e.minConfidence), std)
+	gatedForGlue := e.gateCitations(dropLowConfidence(append([]finding(nil), category...), e.minConfidence), std)
 	glue, err := e.runGlue(ctx, diff, gatedForGlue, std)
 	if err != nil {
 		return scorecard{}, nil, fmt.Errorf("reviewer: glue review: %w", err)
@@ -61,7 +61,7 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *stan
 // ParallelAgent — genuine concurrency on Vertex, GPU-serialized locally with no code change,
 // spec Decision 17), and returns every category's parsed findings. Empty findings is success
 // (spec Decision 2). The "(other)" catch-all's findings are demoted to nitpick.
-func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category, std *standards) ([]Finding, error) {
+func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category, std *standards) ([]finding, error) {
 	agents := make([]agent.Agent, 0, len(cats))
 	for _, c := range cats {
 		a, err := e.buildCategoryAgent(c, diff, std)
@@ -87,7 +87,7 @@ func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []cate
 		return nil, err
 	}
 
-	var out []Finding
+	var out []finding
 	for _, c := range cats {
 		v, ok := state[findingsKey(c.name)]
 		raw, _ := v.(string)
@@ -108,7 +108,7 @@ func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []cate
 
 // runGlue runs the holistic synthesis pass over the diff and the category findings, returning
 // the additional architectural/testability/coverage findings it produced. Empty is success.
-func (e *Engine) runGlue(ctx context.Context, diff string, prior []Finding, std *standards) ([]Finding, error) {
+func (e *Engine) runGlue(ctx context.Context, diff string, prior []finding, std *standards) ([]finding, error) {
 	a, err := e.buildGlueAgent(diff, prior, std)
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func buildReviewInstruction(promptBody, diff string, std *standards) string {
 // buildGlueInstruction composes the glue agent's instruction: the glue prompt, the standards menu,
 // the diff, and the findings the category agents already produced (so it reasons holistically
 // without re-flagging them).
-func buildGlueInstruction(promptBody, diff string, prior []Finding, std *standards) string {
+func buildGlueInstruction(promptBody, diff string, prior []finding, std *standards) string {
 	var b strings.Builder
 	b.WriteString(promptBody)
 	writeStandardsMenu(&b, std)

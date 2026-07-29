@@ -156,7 +156,7 @@ func TestRecordedSpanTreeAndGenAIAttributes(t *testing.T) {
 	exp := installRecording(t)
 
 	emitFakeAgentTree(context.Background())
-	if err := Flush(context.Background()); err != nil {
+	if err := flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestFlushExportsBeforeReturn(t *testing.T) {
 	if got := len(exp.GetSpans()); got != 0 {
 		t.Fatalf("spans exported before Flush (%d); the batch processor should still be buffering", got)
 	}
-	if err := Flush(context.Background()); err != nil {
+	if err := flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 	if got := len(exp.GetSpans()); got == 0 {
@@ -221,7 +221,7 @@ func TestFlushWithoutProviderIsNoOp(t *testing.T) {
 	// With tracing disabled the global is the framework's no-op provider (no ForceFlush);
 	// Flush must be a safe no-op rather than panic.
 	otel.SetTracerProvider(noop.NewTracerProvider())
-	if err := Flush(context.Background()); err != nil {
+	if err := flush(context.Background()); err != nil {
 		t.Errorf("Flush with no SDK provider returned error: %v", err)
 	}
 }

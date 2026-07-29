@@ -10,7 +10,7 @@ func TestParseKickoff(t *testing.T) {
 	// An omitted base stays empty: the driver resolves the repo's real default branch. It
 	// must NOT be defaulted to a literal name here — a hardcoded "main" opens the PR against
 	// a branch that does not exist on any repo whose default is master/develop/trunk.
-	k, err := ParseKickoff([]byte(`{"repo":"acme/api","report":{"x":1}}`))
+	k, err := parseKickoff([]byte(`{"repo":"acme/api","report":{"x":1}}`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -18,7 +18,7 @@ func TestParseKickoff(t *testing.T) {
 		t.Errorf("kickoff = %+v", k)
 	}
 	// An explicit base is preserved verbatim (the caller's override).
-	if k, err := ParseKickoff([]byte(`{"repo":"acme/api","base":"develop","report":{"x":1}}`)); err != nil || k.Base != "develop" {
+	if k, err := parseKickoff([]byte(`{"repo":"acme/api","base":"develop","report":{"x":1}}`)); err != nil || k.Base != "develop" {
 		t.Errorf("explicit base = %q, err %v; want develop", k.Base, err)
 	}
 	for name, body := range map[string]string{
@@ -27,7 +27,7 @@ func TestParseKickoff(t *testing.T) {
 		"bad repo":       `{"repo":"noslash","report":{"x":1}}`,
 		"missing report": `{"repo":"a/b"}`,
 	} {
-		if _, err := ParseKickoff([]byte(body)); err == nil {
+		if _, err := parseKickoff([]byte(body)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
@@ -35,7 +35,7 @@ func TestParseKickoff(t *testing.T) {
 
 func TestReportText(t *testing.T) {
 	// A JSON-value report (a linter that emits JSON) is passed through as-is.
-	k, err := ParseKickoff([]byte(`{"repo":"a/b","report":{"x":1}}`))
+	k, err := parseKickoff([]byte(`{"repo":"a/b","report":{"x":1}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestReportText(t *testing.T) {
 		t.Errorf("json value report = %q", k.ReportText())
 	}
 	// A JSON-string report (wrapping text/XML like lcov or JaCoCo) is unquoted.
-	k2, err := ParseKickoff([]byte(`{"repo":"a/b","report":"TN:\nSF:calc.go\nDA:7,0\n"}`))
+	k2, err := parseKickoff([]byte(`{"repo":"a/b","report":"TN:\nSF:calc.go\nDA:7,0\n"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +59,10 @@ func TestExtractAndStrip(t *testing.T) {
 	if ExtractJSONArray("none") != "" {
 		t.Error("array empty")
 	}
-	if ExtractJSONObject("x {\"a\":1} y") != `{"a":1}` {
+	if extractJSONObject("x {\"a\":1} y") != `{"a":1}` {
 		t.Error("object")
 	}
-	if ExtractJSONObject("none") != "" {
+	if extractJSONObject("none") != "" {
 		t.Error("object empty")
 	}
 	// Trailing prose with a stray bracket: the first complete value is returned (the old
@@ -70,7 +70,7 @@ func TestExtractAndStrip(t *testing.T) {
 	if ExtractJSONArray(`[{"a":1}] then see [2]`) != `[{"a":1}]` {
 		t.Error("array trailing prose")
 	}
-	if ExtractJSONObject(`{"a":1} note: closing }`) != `{"a":1}` {
+	if extractJSONObject(`{"a":1} note: closing }`) != `{"a":1}` {
 		t.Error("object trailing prose")
 	}
 	if StripFences("```go\npackage x\n```") != "package x\n" {

@@ -10,9 +10,9 @@ import (
 	"automation-agent/internal/agent/setup"
 )
 
-// Analyze plans test placement by having a tool-using agent examine the checked-out
+// analyze plans test placement by having a tool-using agent examine the checked-out
 // repo's real conventions, then generates a test per file in parallel from that plan.
-func Analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, error) {
+func analyze(ctx context.Context, in fixflow.AnalyzeInput) ([]fixflow.FileEdit, error) {
 	plan, err := explore(ctx, in)
 	if err != nil {
 		return nil, err

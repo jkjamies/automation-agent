@@ -95,8 +95,8 @@ func normalizeDimension(s string) Dimension {
 // grade to red regardless of the other lenses (spec Decision 5).
 var criticalDimensions = map[Dimension]bool{DimSecurity: true, DimRuntimeSafety: true}
 
-// Finding is one review observation from a category agent or the glue pass.
-type Finding struct {
+// finding is one review observation from a category agent or the glue pass.
+type finding struct {
 	File       string
 	Line       int
 	Dimension  Dimension
@@ -111,7 +111,7 @@ type Finding struct {
 // fingerprint identifies a finding across re-reviews for reconciliation (spec Decision 11) and
 // for cross-lens dedup: file + line + a normalized message. Dimension is deliberately omitted so
 // the same line/message surfaced by two different lenses collapses to one finding.
-func (f Finding) fingerprint() string {
+func (f finding) fingerprint() string {
 	return fmt.Sprintf("%s:%d:%s", f.File, f.Line, normalizeMessage(f.Message))
 }
 
@@ -153,7 +153,7 @@ type findingWire struct {
 // fences, prose, and stray brackets without over-grabbing: a bracketed phrase like "[see below]"
 // fails to decode and the scan moves on. json.Decoder reads only the first value, so trailing
 // prose is ignored.
-func parseFindings(raw string) []Finding {
+func parseFindings(raw string) []finding {
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '[' {
 			continue
@@ -171,14 +171,14 @@ func parseFindings(raw string) []Finding {
 
 // toFindings converts decoded wire records, dropping the unusable ones. A finding with no
 // message says nothing a reviewer could act on, so it is not a finding.
-func toFindings(wires []findingWire) []Finding {
-	out := make([]Finding, 0, len(wires))
+func toFindings(wires []findingWire) []finding {
+	out := make([]finding, 0, len(wires))
 	for _, w := range wires {
 		msg := strings.TrimSpace(w.Message)
 		if msg == "" {
 			continue // a finding with no message is unusable
 		}
-		out = append(out, Finding{
+		out = append(out, finding{
 			File:       strings.TrimSpace(w.File),
 			Line:       w.Line,
 			Dimension:  normalizeDimension(w.Dimension),
@@ -209,7 +209,7 @@ func clampThreshold(f float64) float64 {
 
 // findingsJSON renders findings as a compact JSON array for embedding in the glue prompt. On the
 // (practically impossible) marshal error it falls back to an empty array.
-func findingsJSON(findings []Finding) string {
+func findingsJSON(findings []finding) string {
 	b, err := json.Marshal(findings)
 	if err != nil {
 		return "[]"

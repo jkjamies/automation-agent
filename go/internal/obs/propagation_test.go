@@ -27,7 +27,7 @@ func TestInjectExtractRoundTripCloudTasks(t *testing.T) {
 	}
 
 	// Dispatch side: a fresh process/request with only the carrier reconstructs the trace.
-	dispatchCtx := Extract(context.Background(), carrier)
+	dispatchCtx := extract(context.Background(), carrier)
 	extracted := trace.SpanContextFromContext(dispatchCtx)
 	if extracted.TraceID() != ingress.TraceID() {
 		t.Errorf("extracted trace id %s != ingress %s", extracted.TraceID(), ingress.TraceID())
@@ -61,7 +61,7 @@ func TestInProcessPassthroughSharesTrace(t *testing.T) {
 
 	// Both backends yield the same logical trace: the cloudtasks header round-trip and the
 	// inprocess passthrough resolve to one trace id.
-	viaHeader := trace.SpanContextFromContext(Extract(context.Background(), Inject(ingressCtx)))
+	viaHeader := trace.SpanContextFromContext(extract(context.Background(), Inject(ingressCtx)))
 	if viaHeader.TraceID() != carried.TraceID() {
 		t.Errorf("cloudtasks (%s) and inprocess (%s) produced different traces", viaHeader.TraceID(), carried.TraceID())
 	}

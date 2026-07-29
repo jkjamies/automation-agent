@@ -19,7 +19,7 @@ func env(kind ingest.Kind) ingest.Envelope {
 }
 
 func TestDispatchRoutesByKind(t *testing.T) {
-	d := NewDispatcher(nil)
+	d := newDispatcher(nil)
 	var got ingest.Kind
 	d.Register(ingest.KindCronDaily, func(_ context.Context, e ingest.Envelope) error {
 		got = e.Kind
@@ -38,7 +38,7 @@ func TestDispatchRoutesByKind(t *testing.T) {
 }
 
 func TestDispatchUnhandledIsNoOp(t *testing.T) {
-	d := NewDispatcher(nil)
+	d := newDispatcher(nil)
 	if d.Handles(ingest.KindLint) {
 		t.Error("nothing registered yet")
 	}
@@ -48,7 +48,7 @@ func TestDispatchUnhandledIsNoOp(t *testing.T) {
 }
 
 func TestDispatchPropagatesHandlerError(t *testing.T) {
-	d := NewDispatcher(nil)
+	d := newDispatcher(nil)
 	d.Register(ingest.KindCI, func(context.Context, ingest.Envelope) error {
 		return errors.New("handler failed")
 	})

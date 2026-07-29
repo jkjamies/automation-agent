@@ -60,6 +60,6 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		// backstop above the exporter's own timeout (see flushTimeout).
 		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), flushTimeout)
 		defer cancel()
-		_ = Flush(flushCtx)
+		_ = flush(flushCtx)
 	})
 }

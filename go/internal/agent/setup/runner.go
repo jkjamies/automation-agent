@@ -41,7 +41,7 @@ func streamingRunConfig() agent.RunConfig {
 // Drive runs the agent for a single input, draining events and returning the first
 // error. Side-effecting agents (e.g. a notifier) perform their work as they run.
 func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input string) error {
-	for _, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
+	for _, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
 		if err != nil {
 			return err
 		}
@@ -54,7 +54,7 @@ func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input strin
 // (intermediate function-call/response events carry no text).
 func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (string, error) {
 	var sb strings.Builder
-	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
+	for ev, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
 		if err != nil {
 			return "", err
 		}
@@ -70,7 +70,7 @@ func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input s
 // each write a distinct state key the caller needs to read back.
 func DriveCollectState(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (map[string]any, error) {
 	state := make(map[string]any)
-	for ev, err := range r.Run(ctx, userID, sessionID, UserText(input), streamingRunConfig()) {
+	for ev, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
 		if err != nil {
 			return nil, err
 		}

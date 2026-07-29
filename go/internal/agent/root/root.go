@@ -20,8 +20,8 @@ type Dispatcher struct {
 	log      *slog.Logger
 }
 
-// NewDispatcher creates an empty dispatcher.
-func NewDispatcher(log *slog.Logger) *Dispatcher {
+// newDispatcher creates an empty dispatcher.
+func newDispatcher(log *slog.Logger) *Dispatcher {
 	if log == nil {
 		log = slog.Default()
 	}

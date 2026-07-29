@@ -33,7 +33,7 @@ func summaryMarker(owner, repo string, number int) string {
 // publish posts the review for a scored PR: inline comments for in-diff actionable findings, a
 // marker-updated summary comment with the scorecard, and the advisory agent-review check. Out-of-
 // diff actionable findings and nitpicks go into the summary (never dropped, spec Decision 6).
-func (e *Engine) publish(ctx context.Context, card scorecard, findings []Finding, meta publishMeta) error {
+func (e *Engine) publish(ctx context.Context, card scorecard, findings []finding, meta publishMeta) error {
 	// At-least-once safety: reconciliation makes the inline comments idempotent, but the check run
 	// and summary are create/upsert-only, so a redelivered task for a SHA already published would
 	// duplicate the check. If the agent-review check already exists for this head SHA, skip — a
@@ -136,7 +136,7 @@ func (e *Engine) alreadyPublished(ctx context.Context, meta publishMeta) bool {
 // line — these become review comments after reconciliation), out-of-diff actionable findings (listed
 // in the summary, never snapped to a wrong line — spec Decision 6), and nitpicks (collapsed in the
 // summary).
-func classify(findings []Finding, idx diffIndex) (inline, outOfDiff, nitpicks []Finding) {
+func classify(findings []finding, idx diffIndex) (inline, outOfDiff, nitpicks []finding) {
 	for _, f := range findings {
 		if f.Severity == SeverityNitpick {
 			nitpicks = append(nitpicks, f)
@@ -154,7 +154,7 @@ func classify(findings []Finding, idx diffIndex) (inline, outOfDiff, nitpicks []
 // inlineCommentBody renders one inline comment: an icon+category prefix, the message, an optional
 // ```suggestion block (a localized fix), and an optional "Prompt for AI agents" block (spec
 // Decisions 9/10).
-func inlineCommentBody(f Finding) string {
+func inlineCommentBody(f finding) string {
 	var b strings.Builder
 	// Dimension/severity are normalized to known enums, so only the model-authored message needs
 	// sanitizing here.
@@ -212,7 +212,7 @@ func sanitizeText(s string) string {
 var mentionPattern = regexp.MustCompile(`@([A-Za-z0-9])`)
 
 // findingPrefix is the icon+category label that leads an inline comment (spec Decision 9).
-func findingPrefix(f Finding) string {
+func findingPrefix(f finding) string {
 	if f.Dimension == DimSecurity {
 		return "🔒 Security"
 	}
@@ -226,7 +226,7 @@ func findingPrefix(f Finding) string {
 
 // summaryComment assembles the marker-updated summary comment (spec Decision 9): header, scorecard
 // table, and collapsible sections for nitpicks, out-of-diff findings, and review details.
-func summaryComment(marker string, card scorecard, actionable int, nitpicks, outOfDiff []Finding, meta publishMeta) string {
+func summaryComment(marker string, card scorecard, actionable int, nitpicks, outOfDiff []finding, meta publishMeta) string {
 	var b strings.Builder
 	b.WriteString(marker)
 	b.WriteByte('\n')
@@ -260,7 +260,7 @@ func scorecardTable(card scorecard) string {
 
 // findingsList renders findings as a bulleted file:line list for the summary's collapsible
 // sections (out-of-diff findings and nitpicks).
-func findingsList(fs []Finding) string {
+func findingsList(fs []finding) string {
 	var b strings.Builder
 	for _, f := range fs {
 		loc := f.File

@@ -13,8 +13,8 @@ type slackNotifier struct {
 	httpc *http.Client
 }
 
-// NewSlack builds a Slack notifier for the given incoming-webhook URL.
-func NewSlack(url string) Notifier {
+// newSlack builds a Slack notifier for the given incoming-webhook URL.
+func newSlack(url string) Notifier {
 	return &slackNotifier{url: url, httpc: defaultClient()}
 }
 

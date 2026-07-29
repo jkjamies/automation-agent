@@ -6,9 +6,9 @@ import (
 	"google.golang.org/genai"
 )
 
-// UserText builds a user-role content message from plain text — the common way to
+// userText builds a user-role content message from plain text — the common way to
 // seed an agent invocation.
-func UserText(text string) *genai.Content {
+func userText(text string) *genai.Content {
 	return genai.NewContentFromText(text, genai.RoleUser)
 }
 
@@ -22,8 +22,8 @@ func ContentText(c *genai.Content) string {
 	return contentText(c)
 }
 
-// LastText returns the concatenated text of the final content in a slice, or "".
-func LastText(contents []*genai.Content) string {
+// lastText returns the concatenated text of the final content in a slice, or "".
+func lastText(contents []*genai.Content) string {
 	if len(contents) == 0 {
 		return ""
 	}

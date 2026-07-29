@@ -83,11 +83,6 @@ func WithDispatch(fn DispatchFunc) Option {
 	return func(s *Server) { s.dispatchFn = fn }
 }
 
-// WithClock injects a clock for deterministic ReceivedAt timestamps in tests.
-func WithClock(now func() time.Time) Option {
-	return func(s *Server) { s.now = now }
-}
-
 // WithLogger sets the logger used for non-fatal handler diagnostics (e.g. a poison
 // /internal/dispatch body that is acked rather than retried). A nil logger is ignored so
 // the non-nil default (slog.Default) is preserved — handleDispatch always has a logger.
@@ -100,8 +95,8 @@ func WithLogger(log *slog.Logger) Option {
 }
 
 // New builds a Server.
-func New(ingest IngestFunc, opts ...Option) *Server {
-	s := &Server{ingest: ingest, now: time.Now, log: slog.Default(), mux: http.NewServeMux()}
+func New(enqueue IngestFunc, opts ...Option) *Server {
+	s := &Server{ingest: enqueue, now: time.Now, log: slog.Default(), mux: http.NewServeMux()}
 	for _, o := range opts {
 		o(s)
 	}

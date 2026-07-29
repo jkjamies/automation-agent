@@ -16,8 +16,8 @@ func ExtractJSONArray(s string) string {
 	return firstJSONValue(s, '[')
 }
 
-// ExtractJSONObject returns the first complete JSON object in model output. "" if none parses.
-func ExtractJSONObject(s string) string {
+// extractJSONObject returns the first complete JSON object in model output. "" if none parses.
+func extractJSONObject(s string) string {
 	return firstJSONValue(s, '{')
 }
 

@@ -47,14 +47,14 @@ func TestParseTriage(t *testing.T) {
 }
 
 func TestTriage(t *testing.T) {
-	work, err := Triage(context.Background(), scriptedLLM{triage: `[{"path":"calc.go","uncovered":["Divide"]}]`}, "jacoco xml")
+	work, err := triage(context.Background(), scriptedLLM{triage: `[{"path":"calc.go","uncovered":["Divide"]}]`}, "jacoco xml")
 	if err != nil {
 		t.Fatalf("Triage: %v", err)
 	}
 	if len(work) != 1 || work[0].Path != "calc.go" {
 		t.Errorf("work = %+v", work)
 	}
-	if _, err := Triage(context.Background(), scriptedLLM{triage: "[]"}, "report"); !errors.Is(err, fixflow.ErrNoWork) {
+	if _, err := triage(context.Background(), scriptedLLM{triage: "[]"}, "report"); !errors.Is(err, fixflow.ErrNoWork) {
 		t.Errorf("empty triage should report ErrNoWork, got %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestAnalyze(t *testing.T) {
 	}
 	in := fixflow.AnalyzeInput{LLM: llm, RepoDir: dir, Work: []fixflow.FileWork{{Path: "calc.go", Items: []string{"Divide"}}}}
 
-	edits, err := Analyze(context.Background(), in)
+	edits, err := analyze(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestLiveCoverage(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "calc_existing_test.go"), []byte("package calc\n\nimport \"testing\"\n\nfunc TestExisting(t *testing.T) {}\n"), 0o644)
 
 	in := fixflow.AnalyzeInput{LLM: llm, CodeLLM: codeLLM, RepoDir: dir, Work: []fixflow.FileWork{{Path: "calc.go", Items: []string{"Divide error path"}}}}
-	edits, err := Analyze(context.Background(), in)
+	edits, err := analyze(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}

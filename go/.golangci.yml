@@ -3,6 +3,13 @@
 # `make ci` runs this, so a new finding fails the gate rather than accumulating. Note that
 # on the v2 schema `staticcheck` subsumes the former gosimple and stylecheck checks, so the
 # S* and ST* diagnostics are part of this set.
+#
+# This file is the mechanical half of okf/standards/go-style.md. The baseline there is
+# Google's Go Style Guide; every linter and rule below is enabled because it decides a point
+# one of those documents rules on, and the citation is on the line. A rule with no citation
+# does not belong here — the linter enforces the guide, it does not invent a house style.
+# In particular, `lll` and friends are deliberately absent: the Style Guide states there is
+# no fixed line length for Go.
 version: "2"
 
 linters:
@@ -10,7 +17,29 @@ linters:
     - depguard
     - misspell
     - revive
+
+    - containedctx    # decisions#contexts: no context.Context member on a struct type
+    - errorlint       # best-practices#error-structure: errors.Is/As, not == on a sentinel
+    - iface           # best-practices#avoid-unnecessary-interfaces
+    - interfacebloat  # best-practices#designing-effective-interfaces: keep interfaces small
+    - nakedret        # decisions#named-result-parameters: naked returns only in small funcs
+    - nilerr          # decisions#handle-errors: don't return nil after a non-nil error
+    - unconvert       # guide#concision: no redundant conversions
+    - unparam         # guide#maintainability: don't carry parameters nothing varies
+    - usestdlibvars   # guide#least-mechanism: http.MethodGet over "GET"
+    - usetesting      # decisions#contexts: (testing.TB).Context() over context.Background()
     # errcheck, govet, ineffassign, staticcheck and unused are enabled by default.
+
+    # Deliberately NOT enabled, because each is stricter than the guide it would claim to
+    # enforce, and a gate stricter than its source teaches people to ignore it:
+    #   gochecknoglobals — best-practices#globals gives litmus tests that permit logically
+    #                      constant package state; this bans every var.
+    #   gochecknoinits   — the same section warns about init-ORDER-dependent state, and
+    #                      best-practices#when-to-panic takes for granted that init exists;
+    #                      this bans init outright, which the guide never does.
+    #   lll              — guide#line-length: "There is no fixed line length for Go source".
+    #   funlen, gocognit — no section rules on either; they proxy a metric for the judgment
+    #                      guide#simplicity actually asks for.
 
   settings:
     depguard:
@@ -29,12 +58,70 @@ linters:
             - pkg: "automation-agent/internal/agent"
               desc: "tooling must not import agent packages"
 
+    nakedret:
+      # The guide permits a naked return in a *small* function and asks for explicit values
+      # "once it's a medium-sized function". It sizes a small scope at 1-7 lines and a medium
+      # one at 8-15, so the boundary is 7 — not 15, which would allow them through the whole
+      # medium range, and not nakedret's default of 30.
+      max-func-lines: 7
+
+    revive:
+      # Naming a rule REPLACES revive's default rule set rather than adding to it, so the
+      # defaults are restated here in full. Dropping one of them silently stops enforcing it.
+      rules:
+        # --- revive's default set, kept as a BLOCK. These are not individually chosen: they
+        # --- are revive's defaults, restated only because naming any rule replaces them.
+        # --- Most map to a Style Decisions section and say which; the unannotated few are
+        # --- general Go idiom that no section rules on individually, and they stay because
+        # --- dropping a default is a decision to stop enforcing it, not a neutral edit.
+        - name: blank-imports          # decisions#import-blank
+        - name: context-as-argument    # decisions#contexts: ctx is the first parameter
+        - name: context-keys-type      # decisions#contexts
+        - name: dot-imports            # decisions#import-dot
+        - name: empty-block
+        - name: error-naming           # best-practices#error-structure: ErrFoo sentinels
+        - name: error-return           # decisions#returning-errors: error is the last result
+        - name: error-strings          # decisions#error-strings: lowercase, no punctuation
+        - name: errorf                 # guide#concision: fmt.Errorf over errors.New(Sprintf)
+        - name: exported               # decisions#doc-comments + #repetitive-with-package
+        - name: increment-decrement
+        - name: indent-error-flow      # decisions#indent-error-flow
+        - name: package-comments       # decisions#package-comments
+        - name: range
+        - name: receiver-naming        # decisions#receiver-names
+        - name: redefines-builtin-id   # best-practices#shadowing
+        - name: superfluous-else       # decisions#indent-error-flow
+        - name: time-naming            # decisions#variable-names: units belong in the name
+        - name: unexported-return      # guide#clarity: an exported func's result is nameable
+        - name: unreachable-code
+        - name: unused-parameter       # guide#concision
+        - name: var-declaration        # decisions#literal-formatting
+        - name: var-naming             # decisions#mixed-caps, #initialisms, #underscores
+
+        # --- Additions, each one a decision the guide makes that the default set misses.
+        - name: use-any                # decisions#use-any: any over interface{}
+        - name: early-return           # decisions#indent-error-flow
+        - name: import-shadowing       # best-practices#shadowing
+        - name: import-alias-naming    # decisions#import-renaming
+        - name: redundant-import-alias # decisions#import-renaming
+        - name: confusing-results      # decisions#named-result-parameters
+        - name: modifies-value-receiver # decisions#receiver-type
+        - name: range-val-address      # decisions#copying
+        - name: waitgroup-by-value     # decisions#copying
+        - name: datarace               # decisions#goroutine-lifetimes
+
   exclusions:
     rules:
       # A test asserting on a call's side effect routinely ignores its error return.
       - path: _test\.go
         linters:
           - errcheck
+      # A test helper that takes an argument every caller happens to pass the same value for
+      # is documenting the axis it varies on, not carrying dead weight. unparam's point is
+      # about production API surface.
+      - path: _test\.go
+        linters:
+          - unparam
 
 formatters:
   enable:

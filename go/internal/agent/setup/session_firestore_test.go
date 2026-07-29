@@ -21,7 +21,7 @@ func TestFirestoreSessionConformance(t *testing.T) {
 	opts := sessiontestsuite.SuiteOptions{SupportsUserProvidedSessionID: true}
 	sessiontestsuite.RunServiceTests(t, opts, func(t *testing.T) session.Service {
 		// A per-run-unique prefix isolates cases on the shared, persistent emulator.
-		svc, err := NewFirestoreSessionService(context.Background(), "test-project", firestorePrefix("conf"))
+		svc, err := newFirestoreSessionService(context.Background(), "test-project", firestorePrefix("conf"))
 		if err != nil {
 			t.Fatalf("new firestore session service: %v", err)
 		}
@@ -42,7 +42,7 @@ func TestFirestoreSession_AppendEvent_WorkflowFieldsRoundTrip(t *testing.T) {
 		t.Skip("set FIRESTORE_EMULATOR_HOST to run the firestore workflow-fields round-trip test")
 	}
 	ctx := context.Background()
-	svc, err := NewFirestoreSessionService(ctx, "test-project", firestorePrefix("wf"))
+	svc, err := newFirestoreSessionService(ctx, "test-project", firestorePrefix("wf"))
 	if err != nil {
 		t.Fatalf("new firestore session service: %v", err)
 	}

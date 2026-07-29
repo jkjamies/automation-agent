@@ -17,14 +17,14 @@ func TestParseFPMarker(t *testing.T) {
 }
 
 func TestReconcile(t *testing.T) {
-	keep := Finding{File: "a.go", Line: 1, Message: "keep me"}
-	add := Finding{File: "b.go", Line: 2, Message: "brand new"}
+	keep := finding{File: "a.go", Line: 1, Message: "keep me"}
+	add := finding{File: "b.go", Line: 2, Message: "brand new"}
 	existing := []githubapi.ReviewCommentRef{
 		{NodeID: "n-keep", Body: "x " + fpMarker(keep.fingerprint())},
 		{NodeID: "n-stale", Body: "y " + fpMarker("c.go:9:gone")},
 		{NodeID: "n-foreign", Body: "human note, no marker"},
 	}
-	res := reconcile([]Finding{keep, add}, existing)
+	res := reconcile([]finding{keep, add}, existing)
 
 	// keep already has a comment → not re-posted; add is new → posted.
 	if len(res.toPost) != 1 || res.toPost[0].Message != "brand new" {
@@ -41,7 +41,7 @@ func TestReconcileEmpty(t *testing.T) {
 		t.Errorf("empty reconcile = %+v, want nothing", res)
 	}
 	// Every finding is new when the PR has no comments yet.
-	if res := reconcile([]Finding{{File: "a.go", Line: 1, Message: "x"}}, nil); len(res.toPost) != 1 {
+	if res := reconcile([]finding{{File: "a.go", Line: 1, Message: "x"}}, nil); len(res.toPost) != 1 {
 		t.Errorf("toPost = %d, want 1", len(res.toPost))
 	}
 }

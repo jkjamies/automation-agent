@@ -74,7 +74,7 @@ func TestParseRules(t *testing.T) {
 
 func TestStandardsMenuAndLookup(t *testing.T) {
 	std := buildStandards(
-		[]Rule{{ID: "R1", Dimension: DimSecurity, Summary: "validate input", Source: "SECURITY.md"}},
+		[]rule{{ID: "R1", Dimension: DimSecurity, Summary: "validate input", Source: "SECURITY.md"}},
 		map[string]string{"SECURITY.md": "full security doc text"},
 		[]string{"SECURITY.md"},
 	)
@@ -99,10 +99,10 @@ func TestStandardsMenuAndLookup(t *testing.T) {
 
 func TestGateCitations(t *testing.T) {
 	std := buildStandards(
-		[]Rule{{ID: "R1", Dimension: DimPatternViolation, Summary: "s", Source: "AGENTS.md"}},
+		[]rule{{ID: "R1", Dimension: DimPatternViolation, Summary: "s", Source: "AGENTS.md"}},
 		map[string]string{"AGENTS.md": "doc"}, []string{"AGENTS.md"},
 	)
-	findings := []Finding{
+	findings := []finding{
 		{Dimension: DimPatternViolation, Severity: SeverityMajor, Message: "cited", RuleID: "R1"}, // kept
 		{Dimension: DimPatternViolation, Severity: SeverityMajor, Message: "uncited"},             // gated
 		{Dimension: DimArchitecture, Severity: SeverityMajor, Message: "bad id", RuleID: "R9"},    // gated (unknown id)
@@ -111,7 +111,7 @@ func TestGateCitations(t *testing.T) {
 
 	t.Run("nitpick mode demotes uncited conformance", func(t *testing.T) {
 		e := NewEngine(Deps{StandardsEnabled: true}) // UncitedDrop false -> nitpick
-		got := e.gateCitations(append([]Finding(nil), findings...), std)
+		got := e.gateCitations(append([]finding(nil), findings...), std)
 		if len(got) != 4 {
 			t.Fatalf("nitpick mode keeps all, got %d", len(got))
 		}
@@ -128,7 +128,7 @@ func TestGateCitations(t *testing.T) {
 
 	t.Run("drop mode removes uncited conformance", func(t *testing.T) {
 		e := NewEngine(Deps{StandardsEnabled: true, UncitedDrop: true})
-		got := e.gateCitations(append([]Finding(nil), findings...), std)
+		got := e.gateCitations(append([]finding(nil), findings...), std)
 		if len(got) != 2 { // the cited conformance + the security finding
 			t.Fatalf("drop mode = %d findings, want 2", len(got))
 		}
@@ -136,7 +136,7 @@ func TestGateCitations(t *testing.T) {
 
 	t.Run("disabled passes everything through", func(t *testing.T) {
 		e := NewEngine(Deps{StandardsEnabled: false, UncitedDrop: true})
-		got := e.gateCitations(append([]Finding(nil), findings...), std)
+		got := e.gateCitations(append([]finding(nil), findings...), std)
 		if len(got) != 4 {
 			t.Errorf("standards off must not gate, got %d", len(got))
 		}
@@ -144,7 +144,7 @@ func TestGateCitations(t *testing.T) {
 }
 
 func TestStandardsToolsPresence(t *testing.T) {
-	std := buildStandards([]Rule{{ID: "R1", Summary: "s"}}, map[string]string{}, []string{"AGENTS.md"})
+	std := buildStandards([]rule{{ID: "R1", Summary: "s"}}, map[string]string{}, []string{"AGENTS.md"})
 	tools, err := standardsTools(std)
 	if err != nil || len(tools) != 1 {
 		t.Fatalf("standardsTools(non-empty) = %d tools, err %v; want 1", len(tools), err)

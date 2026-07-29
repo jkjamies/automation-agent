@@ -12,9 +12,9 @@ import (
 	"automation-agent/internal/agent/setup"
 )
 
-// Triage uses the LLM to normalize an arbitrary linter report into per-file work,
+// triage uses the LLM to normalize an arbitrary linter report into per-file work,
 // so the lint-fixer is agnostic to the reporting format.
-func Triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWork, error) {
+func triage(ctx context.Context, llm model.LLM, report string) ([]fixflow.FileWork, error) {
 	out, err := setup.GenerateText(ctx, llm, prompts.MustGet("triage"), report)
 	if err != nil {
 		return nil, fmt.Errorf("triage: %w", err)
