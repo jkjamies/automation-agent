@@ -117,3 +117,7 @@ Inside `go/`:
 System knowledge lives in the [`okf/`](okf/index.md) bundle (Open Knowledge Format);
 the ARCH suite enforces its conformance. The repo-root `AGENTS.md` is the guardrail
 sheet + entry pointer.
+
+## License
+
+[MIT](LICENSE) — take it, change it, ship it; keep the copyright notice with any copy.
