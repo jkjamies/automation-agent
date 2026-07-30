@@ -36,8 +36,8 @@ and a server may key behaviour off it. So ours is **prepended** and the rest sur
 Space-separated product tokens are exactly what a `User-Agent` is defined to be:
 
 ```text
-automation-agent/(devel) go-github/v78.0.0
-automation-agent/(devel) ollama/0.0.0 (amd64 linux) Go/go1.26.0
+automation-agent/devel go-github/v78.0.0
+automation-agent/devel ollama/0.0.0 (amd64 linux) Go/go1.26.0
 ```
 
 ## The seam differs per destination
@@ -81,8 +81,9 @@ can rely on when reading someone else's logs.
 
 ## Testing
 
-The package itself is tested directly — the token's shape, that it is a single token with no
-whitespace, that it is stable across calls, that an existing agent is preserved, and that the
+The package itself is tested directly — the token's shape, that every character of the version
+is one RFC 9110 permits (checking only for whitespace is what let `(devel)` through), that it is
+stable across calls, that an existing agent is preserved, and that the
 caller's request is never mutated (the `RoundTripper` contract, and the reason a rate-limit
 replay cannot accumulate our token once per attempt).
 
