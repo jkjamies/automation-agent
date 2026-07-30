@@ -199,3 +199,51 @@ func TestNothingImportsCmd(t *testing.T) {
 		}
 	}
 }
+
+// Every environment variable the config layer reads must be documented in .env.example.
+//
+// .env.example calls itself the copy-paste starting point, so a variable missing from it is
+// invisible to anyone setting the service up — and the ones that hurt most are exactly the
+// ones with validation, because those turn an undocumented default into a startup failure the
+// operator has no way to anticipate. Drift here is silent in both directions: the code keeps
+// working with its default, and the example keeps looking complete.
+//
+// Only this direction is enforced. The example also carries variables config does NOT read —
+// the genai SDK's GOOGLE_* settings, FIRESTORE_EMULATOR_HOST — which belong there because the
+// service loads the file into the process environment, so their consumer sees them too.
+func TestEnvExampleDocumentsEveryConfigVar(t *testing.T) {
+	root := repoRoot(t)
+	src, err := os.ReadFile(filepath.Join(root, "internal", "config", "config.go"))
+	if err != nil {
+		t.Fatalf("read config.go: %v", err)
+	}
+	// Keyed off the accessor calls rather than every upper-case literal, so an unrelated
+	// constant cannot masquerade as an environment variable.
+	reads := regexp.MustCompile(`get[A-Za-z]*\(get, "([A-Z][A-Z0-9_]*)"`).FindAllStringSubmatch(string(src), -1)
+	if len(reads) == 0 {
+		t.Fatal("found no config env reads; the accessor pattern this test keys on has changed")
+	}
+
+	example, err := os.ReadFile(filepath.Join(root, "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	documented := map[string]bool{}
+	for _, line := range strings.Split(string(example), "\n") {
+		if k, _, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			documented[strings.TrimSpace(strings.TrimPrefix(k, "#"))] = true
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, m := range reads {
+		key := m[1]
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if !documented[key] {
+			t.Errorf("%s is read by internal/config but absent from .env.example", key)
+		}
+	}
+}
