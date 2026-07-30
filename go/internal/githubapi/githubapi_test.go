@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"automation-agent/internal/auth"
+	"automation-agent/internal/useragent"
 )
 
 // testClient points a real *github.Client at a stub server (go-github's testing
@@ -726,5 +727,26 @@ func TestDefaultBranchAPIError(t *testing.T) {
 	c := testClient(t, mux)
 	if _, err := c.DefaultBranch(context.Background(), "o", "r"); err == nil {
 		t.Fatal("expected an error when the repo lookup fails")
+	}
+}
+
+// Every request to GitHub identifies this service, and go-github's own token survives alongside
+// it. GitHub requires a User-Agent and rate-limits by it, so what reaches the wire is the thing
+// worth asserting — not that a header-setting call happened somewhere.
+func TestRequestsIdentifyTheService(t *testing.T) {
+	var ua string
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"head":{"sha":"abc"}}`))
+	}))
+	if _, err := c.PullRequestHeadSHA(context.Background(), "o", "r", 1); err != nil {
+		t.Fatalf("PullRequestHeadSHA: %v", err)
+	}
+	if !strings.HasPrefix(ua, useragent.String()) {
+		t.Errorf("User-Agent %q must start with %q", ua, useragent.String())
+	}
+	if !strings.Contains(ua, "go-github/") {
+		t.Errorf("User-Agent %q dropped go-github's own token; ours is prepended, not substituted", ua)
 	}
 }

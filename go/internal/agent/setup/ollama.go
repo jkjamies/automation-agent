@@ -15,6 +15,8 @@ import (
 	"github.com/ollama/ollama/api"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"automation-agent/internal/useragent"
 )
 
 // OllamaModel adapts a local Ollama server to the adk model.LLM interface so agents
@@ -53,11 +55,11 @@ func NewOllamaModel(host, modelTag string, numCtx int) (*OllamaModel, error) {
 	// slow for a large model on modest hardware — not the token-by-token decode that
 	// follows. 300s is a generous cold-start cushion, not a cap on total generation.
 	httpClient := &http.Client{
-		Transport: &http.Transport{
+		Transport: useragent.Transport(&http.Transport{
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ResponseHeaderTimeout: 300 * time.Second,
-		},
+		}),
 	}
 	return &OllamaModel{client: api.NewClient(base, httpClient), name: modelTag, numCtx: numCtx}, nil
 }

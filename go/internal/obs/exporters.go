@@ -3,12 +3,16 @@ package obs
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/api/option"
+
+	"automation-agent/internal/useragent"
 )
 
 // newExporter builds the span exporter for cfg.Exporter. The caller has already rejected
@@ -31,7 +35,19 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 			return nil, fmt.Errorf("obs: exporter %q requires an OTLP endpoint", ExporterOTLP)
 		}
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(cfg.OTLPEndpoint)}
-		if headers := parseOTLPHeaders(cfg.OTLPHeaders); len(headers) > 0 {
+		// Merged into the configured headers rather than set separately, because WithHeaders
+		// replaces the map wholesale — two calls would silently drop the operator's values. A
+		// User-Agent the operator set explicitly wins; ours is the default, not an override.
+		headers := parseOTLPHeaders(cfg.OTLPHeaders)
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		// parseOTLPHeaders canonicalizes, so this exact key matches whatever casing the operator
+		// wrote — "user-agent=..." included.
+		if _, set := headers[http.CanonicalHeaderKey("User-Agent")]; !set {
+			headers["User-Agent"] = useragent.String()
+		}
+		if len(headers) > 0 {
 			opts = append(opts, otlptracehttp.WithHeaders(headers))
 		}
 		exp, err := otlptracehttp.New(ctx, opts...)
@@ -42,7 +58,9 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 	case ExporterGCP:
 		// No project id: the Cloud Trace exporter detects it from Application Default
 		// Credentials / the metadata server, matching how the rest of the GCP path authenticates.
-		exp, err := texporter.New()
+		exp, err := texporter.New(texporter.WithTraceClientOptions(
+			[]option.ClientOption{option.WithUserAgent(useragent.String())},
+		))
 		if err != nil {
 			return nil, fmt.Errorf("obs: build gcp (cloud trace) exporter: %w", err)
 		}
@@ -67,7 +85,13 @@ func parseOTLPHeaders(raw string) map[string]string {
 		if !ok || k == "" {
 			continue
 		}
-		out[k] = strings.TrimSpace(v)
+		// Canonicalized because that is how net/http will treat these on the way out: the
+		// exporter calls Header.Set per entry, and Set canonicalizes. Two spellings of one
+		// header would otherwise survive as distinct map keys and collapse only at send time,
+		// in map-iteration order — so which value won would vary per process. Canonicalizing
+		// here makes the collision deterministic (last spelling in the string wins) and lets a
+		// caller's exact-match lookup actually find what the operator configured.
+		out[http.CanonicalHeaderKey(k)] = strings.TrimSpace(v)
 	}
 	return out
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-github/v78/github"
 
 	"automation-agent/internal/auth"
+	"automation-agent/internal/useragent"
 )
 
 // httpTimeout bounds every GitHub request. Without it the client relies solely on the
@@ -82,7 +83,11 @@ func New(provider auth.TokenProvider, opts ...Option) *Client {
 	// httpTimeout bounds one attempt. The rate-limit wait happens between attempts, outside this
 	// inner client's clock, so the retry budget is not silently capped by the per-request timeout.
 	inner := &http.Client{Timeout: httpTimeout, Transport: auth.NewRoundTripper(nil, provider)}
-	gh := github.NewClient(&http.Client{Transport: newRateLimitTransport(&clientTransport{c: inner}, o.log)})
+	// useragent.Transport sits outermost so it applies once per attempt regardless of what the
+	// layers beneath do, and so go-github's own token survives in the value it prepends to.
+	gh := github.NewClient(&http.Client{
+		Transport: useragent.Transport(newRateLimitTransport(&clientTransport{c: inner}, o.log)),
+	})
 	// An App installation token posts comments as the app's bot user; a PAT posts as a human.
 	// This distinguishes the two for the marker-upsert ownership fallback (see ownsComment).
 	_, appAuthored := provider.(*auth.AppProvider)

@@ -244,15 +244,33 @@ func TestParseSamplerDefaults(t *testing.T) {
 	}
 }
 
+// Keys come back canonicalized, because that is how net/http will treat them when the exporter
+// calls Header.Set: "api-key" and "Api-Key" are one header, and leaving both in the map would
+// defer the collision to send time, where map-iteration order decides the winner per process.
 func TestParseOTLPHeaders(t *testing.T) {
 	got := parseOTLPHeaders("api-key=secret , env=prod,bad,=novalue,k=a=b")
-	want := map[string]string{"api-key": "secret", "env": "prod", "k": "a=b"}
+	want := map[string]string{"Api-Key": "secret", "Env": "prod", "K": "a=b"}
 	if len(got) != len(want) {
 		t.Fatalf("parseOTLPHeaders parsed %d entries, want %d: %v", len(got), len(want), got)
 	}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("header %q = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// An operator's User-Agent wins over the service default, whatever casing they wrote it in.
+// Before the keys were canonicalized, "user-agent=..." missed the exact-match check, so both
+// spellings reached the exporter and which one it sent varied with map order.
+func TestParseOTLPHeadersCanonicalizesRegardlessOfCasing(t *testing.T) {
+	for _, spelling := range []string{"User-Agent", "user-agent", "USER-AGENT", "uSeR-aGeNt"} {
+		got := parseOTLPHeaders(spelling + "=collector-token")
+		if len(got) != 1 {
+			t.Fatalf("%q parsed to %d entries, want 1: %v", spelling, len(got), got)
+		}
+		if got["User-Agent"] != "collector-token" {
+			t.Errorf("%q did not land on the canonical key: %v", spelling, got)
 		}
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/ollama/ollama/api"
+
+	"automation-agent/internal/useragent"
 )
 
 // ErrOllamaUnreachable reports that the Ollama server could not be contacted at all, as
@@ -77,7 +79,10 @@ func preflightClient(host string) (*api.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse ollama host %q: %w", host, err)
 	}
-	return api.NewClient(base, &http.Client{Timeout: preflightTimeout}), nil
+	return api.NewClient(base, &http.Client{
+		Timeout:   preflightTimeout,
+		Transport: useragent.Transport(nil),
+	}), nil
 }
 
 // normalizeTag applies Ollama's implicit ":latest": a tag written without one refers to the

@@ -33,6 +33,7 @@ import (
 	"automation-agent/internal/notify"
 	"automation-agent/internal/obs"
 	"automation-agent/internal/tasks"
+	"automation-agent/internal/useragent"
 	"automation-agent/internal/webhook"
 )
 
@@ -59,6 +60,20 @@ func run(logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Brand the git transport. go-git builds its own HTTP requests, so there is no client for
+	// useragent.Transport to wrap — but it appends this variable to its own agent string, which
+	// is the seam the library provides for exactly this. Composition writes it: it must happen
+	// before any clone, and writing the environment is not a tooling package's business. The
+	// *read* is config's, like every other variable, so an operator-supplied value is preserved
+	// rather than clobbered.
+	gitAgent := useragent.String()
+	if cfg.GitUserAgentExtra != "" {
+		gitAgent = cfg.GitUserAgentExtra + " " + gitAgent
+	}
+	if err := os.Setenv("GO_GIT_USER_AGENT_EXTRA", gitAgent); err != nil {
+		logger.Warn("could not brand the git user agent", "err", err)
 	}
 
 	// Register the OTel tracer provider so the agent framework's native span tree is

@@ -10,5 +10,6 @@ the architecture tests).
 * [Ingress envelope](ingest.md) - The normalized Envelope every ingress source reduces to before reaching the root agent, plus the JSON wire codec that carries it across the Cloud Tasks boundary.
 * [HTTP ingress](webhook.md) - The HTTP ingress — HMAC-verified /webhooks/* endpoints, bearer-gated /internal/* Cloud Scheduler triggers, and the Cloud Tasks dispatch worker.
 * [Execution transport](tasks.md) - The Enqueue transport between webhook ingress and the dispatcher, with in-process and Cloud Tasks backends so long LLM compute runs in-request on Cloud Run.
+* [Egress identity](useragent.md) - The single User-Agent every outbound request carries, and the seam each SDK exposes for it — so traffic from this service is legible in someone else's logs.
 * [Notifications](notify.md) - Provider-agnostic notifier that posts Messages to Slack or Microsoft Teams behind one interface, chosen by a config flag.
 * [Observability](obs.md) - Tracer-provider registration, trace propagation across the Cloud Tasks boundary, and scale-to-zero-safe flushing for the agent framework's native spans.
