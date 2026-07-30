@@ -3,6 +3,7 @@ package obs
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
@@ -41,7 +42,9 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 		if headers == nil {
 			headers = map[string]string{}
 		}
-		if _, set := headers["User-Agent"]; !set {
+		// parseOTLPHeaders canonicalizes, so this exact key matches whatever casing the operator
+		// wrote — "user-agent=..." included.
+		if _, set := headers[http.CanonicalHeaderKey("User-Agent")]; !set {
 			headers["User-Agent"] = useragent.String()
 		}
 		if len(headers) > 0 {
@@ -82,7 +85,13 @@ func parseOTLPHeaders(raw string) map[string]string {
 		if !ok || k == "" {
 			continue
 		}
-		out[k] = strings.TrimSpace(v)
+		// Canonicalized because that is how net/http will treat these on the way out: the
+		// exporter calls Header.Set per entry, and Set canonicalizes. Two spellings of one
+		// header would otherwise survive as distinct map keys and collapse only at send time,
+		// in map-iteration order — so which value won would vary per process. Canonicalizing
+		// here makes the collision deterministic (last spelling in the string wins) and lets a
+		// caller's exact-match lookup actually find what the operator configured.
+		out[http.CanonicalHeaderKey(k)] = strings.TrimSpace(v)
 	}
 	return out
 }

@@ -10,6 +10,7 @@ package useragent
 import (
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 )
 
@@ -22,12 +23,34 @@ const product = "automation-agent"
 // what was actually compiled. A binary built outside a module context reports "(devel)", which
 // is what go itself reports and more honest than inventing a number.
 var String = sync.OnceValue(func() string {
-	version := "(devel)"
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
-		version = info.Main.Version
+	version := ""
+	if info, ok := debug.ReadBuildInfo(); ok {
+		version = tokenize(info.Main.Version)
+	}
+	if version == "" {
+		version = "devel"
 	}
 	return product + "/" + version
 })
+
+// tokenize keeps only the characters RFC 9110 allows in a token, because a User-Agent is a
+// sequence of product/version tokens and a delimiter in one changes how the whole header parses.
+// This is not hypothetical: go reports an untagged build as "(devel)", and parentheses open a
+// comment — "automation-agent/(devel)" is a product with *no* version followed by a comment,
+// which is not what it looks like. Stripping rather than substituting keeps real versions,
+// including pseudo-versions like v0.0.0-20260101120000-abcdef123456, exactly as go reports them.
+func tokenize(s string) string {
+	const punct = "!#$%&'*+-.^_`|~"
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z',
+			strings.ContainsRune(punct, r):
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // Transport wraps base so every request through it identifies this service. A nil base means
 // http.DefaultTransport, matching the http.Client convention.

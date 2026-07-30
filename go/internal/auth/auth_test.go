@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"automation-agent/internal/useragent"
 )
 
 // testKeyPEM generates a throwaway RSA private key in PKCS#1 PEM form (the shape of
@@ -311,5 +313,33 @@ func TestNewRoundTripperNilArguments(t *testing.T) {
 	}
 	if rec.auth != "" {
 		t.Errorf("nil provider set an Authorization header %q, want none", rec.auth)
+	}
+}
+
+// The installation-token exchange must identify this service, not just the /app identity
+// lookup. ghinstallation refreshes the token by POSTing through the base transport, so
+// branding a client built on top of it would leave the most frequent request this provider
+// makes anonymous — it reported "Go-http-client/1.1" until the base itself was wrapped.
+func TestAppProviderIdentifiesTheServiceOnTheTokenExchange(t *testing.T) {
+	var path, ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, ua = r.URL.Path, r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"t","expires_at":"2099-01-01T00:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	p, err := NewAppProvider(nil, 1, 2, testKeyPEM(t), withBaseURL(srv.URL))
+	if err != nil {
+		t.Fatalf("NewAppProvider: %v", err)
+	}
+	if _, err := p.Token(context.Background(), "o/r"); err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if path != "/app/installations/2/access_tokens" {
+		t.Fatalf("expected the token exchange, got %s", path)
+	}
+	if !strings.HasPrefix(ua, useragent.String()) {
+		t.Errorf("token exchange sent User-Agent %q, want it to start with %q", ua, useragent.String())
 	}
 }

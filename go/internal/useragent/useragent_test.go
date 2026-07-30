@@ -19,10 +19,15 @@ func TestStringNamesTheServiceAndAVersion(t *testing.T) {
 	if version == "" {
 		t.Errorf("version half of %q is empty", got)
 	}
-	// A User-Agent with whitespace or control characters in a token is malformed, and some
-	// servers reject the request rather than the header.
-	if strings.ContainsAny(got, " \t\r\n") {
-		t.Errorf("User-Agent %q must be a single token", got)
+	// The version has to be a valid RFC 9110 token, not merely whitespace-free. Checking only
+	// for spaces is what let "(devel)" through: parentheses are delimiters that open a comment,
+	// so "automation-agent/(devel)" parses as a product with no version at all.
+	const tokenPunct = "!#$%&'*+-.^_`|~"
+	for _, r := range version {
+		alnum := (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+		if !alnum && !strings.ContainsRune(tokenPunct, r) {
+			t.Errorf("version %q in %q contains %q, which is not a token character", version, got, r)
+		}
 	}
 	// Memoized, so repeated calls on every request cannot disagree.
 	if again := String(); again != got {
@@ -114,5 +119,25 @@ func TestApply(t *testing.T) {
 	}
 	if got := apply("x/1"); got != String()+" x/1" {
 		t.Errorf("apply(\"x/1\") = %q", got)
+	}
+}
+
+// go reports an untagged build's version as "(devel)", which is not a token. The fallback must
+// be a version a parser accepts, and the sanitiser must not mangle a real one.
+func TestTokenizeRejectsDelimiters(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"(devel)", "devel"},
+		{"v1.2.0", "v1.2.0"},
+		{"v0.0.0-20260101120000-abcdef123456", "v0.0.0-20260101120000-abcdef123456"},
+		{"v1.0.0+meta", "v1.0.0+meta"}, // '+' is a token char, so build metadata survives
+		{"v1=2", "v12"},                // '=' is a delimiter and does not
+		{"", ""},
+		{"()", ""},
+		{"a b", "ab"},
+		{`"quoted"`, "quoted"},
+	} {
+		if got := tokenize(tc.in); got != tc.want {
+			t.Errorf("tokenize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

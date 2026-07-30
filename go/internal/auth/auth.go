@@ -133,6 +133,11 @@ func NewAppProvider(base http.RoundTripper, appID, installationID int64, private
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	// Brand the base, not the clients built on it. ghinstallation's Transport refreshes the
+	// installation token by POSTing through its AppsTransport, which is this base — so wrapping
+	// only at a call site would leave the token exchange, the most frequent request this provider
+	// makes, unidentified.
+	base = useragent.Transport(base)
 	tr, err := ghinstallation.New(base, appID, installationID, privateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("auth: build app transport: %w", err)
@@ -171,7 +176,9 @@ func (p *AppProvider) AuthoredLogin(ctx context.Context) (string, error) {
 	if p.login != "" {
 		return p.login, nil
 	}
-	gh := github.NewClient(&http.Client{Transport: useragent.Transport(p.apps)})
+	// p.apps already carries the branded base from NewAppProvider; wrapping again would prepend
+	// our token twice.
+	gh := github.NewClient(&http.Client{Transport: p.apps})
 	if p.baseURL != "" {
 		u, err := url.Parse(p.baseURL + "/")
 		if err != nil {

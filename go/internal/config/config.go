@@ -218,6 +218,14 @@ type Config struct {
 	// OTLP-native backend or a Collector) | gcp (Cloud Trace via ADC). The app names no
 	// vendor — an OTLP backend is endpoint + headers, not code.
 	OTELTracesExporter string
+	// GitUserAgentExtra is whatever the operator put in GO_GIT_USER_AGENT_EXTRA, go-git's own
+	// hook for appending to the agent string it sends on clone and push. Config reads it for
+	// the same reason it reads OTEL_TRACES_EXPORTER: this variable belongs to a library rather
+	// than to us, but the rule that config is the sole environment reader does not have a
+	// library exemption — a second reader outside the typed Config is precisely what it exists
+	// to prevent. Composition writes the composed value back; config only reports what was
+	// there, so an operator-supplied value can be preserved rather than clobbered.
+	GitUserAgentExtra string
 	// OTELTracesExporterSet reports whether OTEL_TRACES_EXPORTER was actually present in the
 	// environment, as opposed to OTELTracesExporter having fallen back to its "none" default.
 	// The playground needs the distinction: it defaults to the console exporter so a developer
@@ -378,6 +386,7 @@ func loadFrom(get lookup) (Config, error) {
 		DispatchURL:          getOr(get, "DISPATCH_URL", ""),
 
 		OTELTracesExporter:       getOr(get, "OTEL_TRACES_EXPORTER", OTELExporterNone),
+		GitUserAgentExtra:        getOr(get, "GO_GIT_USER_AGENT_EXTRA", ""),
 		OTELTracesExporterSet:    isSet(get, "OTEL_TRACES_EXPORTER"),
 		OTELServiceName:          getOr(get, "OTEL_SERVICE_NAME", "automation-agent"),
 		OTELExporterOTLPEndpoint: getOr(get, "OTEL_EXPORTER_OTLP_ENDPOINT", ""),
