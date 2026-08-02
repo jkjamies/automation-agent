@@ -5,7 +5,8 @@ description: The system's recurring terms — envelope, Kind, park/resume, ParkS
 tags: [orientation, glossary]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 - **Envelope** — the normalized event: `{Kind, Source, Payload}`. Every ingress source

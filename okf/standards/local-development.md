@@ -5,7 +5,8 @@ description: How to run the service locally in every mode — prerequisites, run
 tags: [local-development, configuration, environment]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # Local development

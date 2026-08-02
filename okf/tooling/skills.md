@@ -6,7 +6,8 @@ resource: .agents/skills
 tags: [skills, workflow, process]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 The repo ships reusable **skills** — procedure files (`.agents/skills/<name>/SKILL.md`)

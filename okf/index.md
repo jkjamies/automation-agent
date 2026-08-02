@@ -1,3 +1,8 @@
+---
+okf_version: "0.2"
+bundle: automation-agent
+---
+
 # automation-agent — knowledge bundle
 
 The canonical knowledge for `automation-agent`: an event-driven automation service

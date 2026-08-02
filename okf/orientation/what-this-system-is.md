@@ -5,7 +5,8 @@ description: An event-driven automation service that summarizes repo activity, a
 tags: [orientation, overview]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 `automation-agent` is a single long-running service built on the Agent Development Kit

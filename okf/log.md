@@ -1,5 +1,17 @@
 # Bundle Update Log
 
+## 2026-08-01
+* **Update**: The bundle targets Open Knowledge Format v0.2, declared as
+  `okf_version: "0.2"` in the bundle-root `index.md`. Every concept's `timestamp` became
+  the v0.2 `generated: { by, at }` family — same instant, now carrying the actor that
+  produced it — and gained a lifecycle `status`. The v0.2 families the bundle does not
+  populate (`sources`, `verified`, `stale_after`, `Attested Computation`) are recorded in
+  [OKF format](/standards/okf-format.md) with the reason each is omitted.
+* **Update**: [OKF format](/standards/okf-format.md) now opens with the version the
+  bundle targets and frames the rest as this bundle's house profile of that spec — the
+  frontmatter schema, the actor convention for `generated.by`, the lifecycle set, the
+  `log.md` entry prefixes, and the widened conformance floor.
+
 ## 2026-07-29
 * **Rewrite**: [Go style](/standards/go-style.md) now adopts
   [Google's Go Style Guide](https://google.github.io/styleguide/go/) as the baseline and

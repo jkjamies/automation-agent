@@ -5,7 +5,8 @@ description: How a CI pipeline on any tech stack kicks off the lint and coverage
 tags: [ci, lint, coverage, webhooks]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # CI Integration — sending lint problems to the agent

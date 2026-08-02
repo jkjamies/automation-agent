@@ -5,7 +5,8 @@ description: Why and how a fix run parks across a 20–40+ minute CI wait on sca
 tags: [orientation, suspend-resume, durability, fixflow]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 The hardest constraint in the system: a fix cannot be confirmed until CI reports —

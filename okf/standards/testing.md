@@ -5,7 +5,8 @@ description: How to run every kind of test and the rules they obey — ≥80% co
 tags: [testing, coverage, conventions]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # Testing

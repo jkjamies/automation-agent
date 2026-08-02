@@ -7,7 +7,7 @@ service lives in `go/`.
 ## Knowledge — start here
 
 **The system's knowledge lives in the [`/okf`](okf/index.md) bundle** (Open Knowledge
-Format: markdown concepts with YAML frontmatter, cross-linked). Start at
+Format v0.2: markdown concepts with YAML frontmatter, cross-linked). Start at
 [`okf/index.md`](okf/index.md) and follow links; read only the concepts a task needs.
 
 Before non-trivial work in an area, read its concept:

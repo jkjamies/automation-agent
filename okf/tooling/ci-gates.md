@@ -5,7 +5,8 @@ description: The local gate (tidy, vet, lint, architecture tests, tests, coverag
 tags: [ci, testing, quality-gate]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-29T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-29T00:00:00Z }
 ---
 
 One self-contained local gate, run from `go/`:

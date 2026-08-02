@@ -5,7 +5,8 @@ description: Non-trivial changes start as a spec generated from a template; spec
 tags: [process, specs, templates]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 New features and non-trivial changes start as a **spec**: a design/intent document under

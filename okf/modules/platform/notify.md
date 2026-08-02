@@ -6,7 +6,8 @@ resource: go/internal/notify
 tags: [notifications, slack, teams]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-29T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-29T00:00:00Z }
 ---
 
 # Notifications
