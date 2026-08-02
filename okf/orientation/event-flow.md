@@ -5,7 +5,8 @@ description: How an event travels from ingress (cron, webhooks) through normaliz
 tags: [orientation, event-flow, ingress, dispatch]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 Every piece of work enters through a single front door and is normalized before any agent

@@ -6,7 +6,8 @@ resource: go/internal/agent/summary
 tags: [summary, daily-digest, notifications]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # Daily Summary Workflow

@@ -5,7 +5,8 @@ description: Splits every standalone agent directory into pure ADK wiring and de
 tags: [agents, wiring, testability]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # The build-agent pattern

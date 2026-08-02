@@ -6,7 +6,8 @@ resource: go/
 tags: [go, service, layout, adk-v2]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+status: stable
+generated: { by: human:jkjamies, at: 2026-07-04T00:00:00Z }
 ---
 
 # The service — layout, flows, and conventions

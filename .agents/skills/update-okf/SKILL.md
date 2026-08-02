@@ -19,7 +19,7 @@ describes it is updated in the same change — this skill is that step, made mec
 ## Reference knowledge
 
 - The rules this skill enforces: okf/standards/documentation.md
-- The format contract (frontmatter, types, timestamps, links): okf/standards/okf-format.md
+- The format contract (frontmatter, types, provenance, lifecycle, links): okf/standards/okf-format.md
 - Bundle structure and conventions: okf/index.md
 - The registry that must stay in lockstep with code: okf/standards/webhooks.md
 
@@ -43,9 +43,11 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
 - State the **new reality** factually — never "changed X to Y", never status language
   (per okf/standards/documentation.md).
 - Keep the body **self-contained** — no "see the repo file for details".
-- **Bump the concept's `timestamp`** (last material update, per
+- **Bump the concept's `generated.at`** (last material update, per
   okf/standards/okf-format.md) whenever the body changes meaning; cosmetic fixes don't
-  bump it.
+  bump it. Set `generated.by` to the actor that made the change — `human:<id>` for a
+  person, `<producer>/<version>` for an agent or tool, `process:<id>` for an automated
+  process.
 - If the change implements a choice a spec grilled and locked, capture the *why*
   (the forcing constraint + the alternatives rejected) as a short **Why** section in
   the owning concept **before the spec is discarded** — rationale lives with the facts
@@ -54,8 +56,9 @@ From `git diff --name-only` (branch vs its base), map changed code to concepts:
   entry in its directory `index.md`.
 - New unit (agent or package)? Create the concept with the house frontmatter (`type`,
   `title`, `description`, `tags`, `sensitivity: internal`, `bundle: automation-agent`,
-  `timestamp`) and add its index entry. Removed unit? Delete concept + index entry, and
-  sweep inbound links (`grep -rn "<name>.md" okf/`).
+  `status`, `generated`) and add its index entry. Removed unit? Retire the concept —
+  `status: deprecated` when inbound links still need a target, otherwise delete concept +
+  index entry — and sweep inbound links (`grep -rn "<name>.md" okf/`).
 
 ### 3. Update diagrams
 
@@ -64,8 +67,11 @@ diagrams, the dispatcher concept, and the architecture-design topology sections.
 
 ### 4. Log the change
 
-Append a dated entry to `okf/log.md` (newest first) when the bundle gains, loses, or
-materially rewrites a concept. Routine factual touch-ups don't need a log entry.
+Prepend a dated entry to `okf/log.md` — the log runs newest first, under an ISO 8601
+`YYYY-MM-DD` heading — when the bundle gains, loses, or materially rewrites a concept,
+opening with one of
+`**Creation**`, `**Update**`, `**Rewrite**`, `**Deprecation**`, `**Initialization**`.
+Routine factual touch-ups don't need a log entry.
 
 ### 5. Verify
 
