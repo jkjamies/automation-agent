@@ -99,3 +99,20 @@ func scoreFindings(findings []finding) scorecard {
 	}
 	return card
 }
+
+// lensLevel derives a lens's level from the scorecard: the worst level among the dimensions the
+// lens owns. A lens none of whose dimensions scored is green. Deriving it here — from the same
+// per-dimension levels the scorecard table shows, never from the findings the lens happened to
+// emit — is what keeps the lens table and the scorecard in agreement: a finding is credited to
+// the lens that owns its dimension, whichever agent produced it.
+func lensLevel(card scorecard, l category) level {
+	worst := levelGreen
+	for _, d := range card.dims {
+		for _, own := range l.dims {
+			if d.dimension == own && d.level > worst {
+				worst = d.level
+			}
+		}
+	}
+	return worst
+}

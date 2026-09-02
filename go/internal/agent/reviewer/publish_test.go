@@ -19,7 +19,8 @@ func TestPublishRoutesFindings(t *testing.T) {
 	}
 	card := scoreFindings(findings)
 	gh := &fakeGH{}
-	meta := publishMeta{owner: "o", repo: "r", number: 7, headSHA: "sha1", files: files}
+	meta := publishMeta{owner: "o", repo: "r", number: 7, headSHA: "sha1", files: files,
+		lenses: []lensStat{{lens: categories[1], model: "m", ran: true, usage: true, tokensIn: 10, tokensOut: 2}}}
 	if err := testEngine(gh).publish(context.Background(), card, findings, meta); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -52,7 +53,8 @@ func TestPublishRoutesFindings(t *testing.T) {
 	if !strings.Contains(sum.body, sum.marker) {
 		t.Error("summary body must embed its marker")
 	}
-	for _, want := range []string{"automation-agent:review:o/r#7", "Agent review", "Outside diff range (1)", "Nitpicks (1)", "a.go:99"} {
+	for _, want := range []string{"automation-agent:review:o/r#7", "Agent review", "Outside diff range (1)", "Nitpicks (1)", "a.go:99",
+		"| Lens | Level | Model | Time | Tokens in | Tokens out |", "| Security | 🔴 | `m` |"} {
 		if !strings.Contains(sum.body, want) {
 			t.Errorf("summary missing %q:\n%s", want, sum.body)
 		}

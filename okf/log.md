@@ -6,6 +6,11 @@
   because the ADK templates the plain `Instruction` field and a `{placeholder}` in a diff or
   a standards doc failed the run; inline suggestions are plain-language prose rather than
   GitHub ```suggestion blocks, with the rationale in the publish stage.
+* **Update**: [PR reviewer](/modules/agents/reviewer.md) *Review details* gained a per-lens
+  status table (level, model, wall time, tokens in/out), fed by the new `setup.DriveReport`
+  in [Setup](/modules/agents/setup.md) and the Ollama adapter's usage mapping; each lens now
+  owns its dimensions so the lens table is derived from the scorecard and the two cannot
+  disagree (asserted against the prompts too).
 
 ## 2026-07-29
 * **Rewrite**: [Go style](/standards/go-style.md) now adopts

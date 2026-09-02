@@ -39,7 +39,7 @@ func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (ag
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                  "review_" + c.name,
+		Name:                  agentName(c),
 		Description:           c.title + " review",
 		Model:                 e.modelForTier(c.tier),
 		InstructionProvider:   setup.StaticInstruction(buildReviewInstruction(body, diff, std)),
@@ -54,7 +54,7 @@ func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (ag
 // alignment / testability / test-coverage findings (cross-lens dedup is done deterministically in
 // code, not here).
 func (e *Engine) buildGlueAgent(diff string, prior []finding, std *standards) (agent.Agent, error) {
-	body, err := prompts.Get("glue")
+	body, err := prompts.Get(glueLens.promptName)
 	if err != nil {
 		return nil, fmt.Errorf("reviewer: load glue prompt: %w", err)
 	}
@@ -63,9 +63,9 @@ func (e *Engine) buildGlueAgent(diff string, prior []finding, std *standards) (a
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                  "review_glue",
-		Description:           "Holistic synthesis review",
-		Model:                 e.codeLLM,
+		Name:                  agentName(glueLens),
+		Description:           glueLens.title + " review",
+		Model:                 e.modelForTier(glueLens.tier),
 		InstructionProvider:   setup.StaticInstruction(buildGlueInstruction(body, diff, prior, std)),
 		Tools:                 tools,
 		GenerateContentConfig: setup.JSONConfig(),

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"automation-agent/internal/githubapi"
 )
@@ -20,7 +21,7 @@ type publishMeta struct {
 	number      int
 	headSHA     string
 	files       []githubapi.PRFile // for the in-diff index
-	tiers       string             // model tiers used, for the Review details section
+	lenses      []lensStat         // per-lens status rows for the Review details section
 	standards   []string           // applied standards source paths (nil = generic), for reporting
 }
 
@@ -235,7 +236,7 @@ func summaryComment(marker string, card scorecard, actionable int, nitpicks, out
 	if len(outOfDiff) > 0 {
 		b.WriteString(collapsible(fmt.Sprintf("🔭 Outside diff range (%d)", len(outOfDiff)), findingsList(outOfDiff)))
 	}
-	b.WriteString(collapsible("Review details", reviewDetails(meta)))
+	b.WriteString(collapsible("Review details", reviewDetails(card, meta)))
 	return b.String()
 }
 
@@ -269,14 +270,12 @@ func findingsList(fs []finding) string {
 	return b.String()
 }
 
-// reviewDetails renders the "Review details" section: head SHA, file count, and the model tiers.
-func reviewDetails(meta publishMeta) string {
+// reviewDetails renders the "Review details" section: head SHA, file count, the standards
+// applied, and the per-lens status table.
+func reviewDetails(card scorecard, meta publishMeta) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- Head SHA: `%s`\n", meta.headSHA)
 	fmt.Fprintf(&b, "- Files reviewed: %d\n", len(meta.files))
-	if meta.tiers != "" {
-		fmt.Fprintf(&b, "- Model tiers: %s\n", meta.tiers)
-	}
 	if len(meta.standards) > 0 {
 		fmt.Fprintf(&b, "- Standards applied: %s\n", strings.Join(meta.standards, ", "))
 	} else {
@@ -284,7 +283,43 @@ func reviewDetails(meta publishMeta) string {
 		// no convention docs — so stay neutral rather than asserting none were found.
 		b.WriteString("- Standards: generic review\n")
 	}
+	if len(meta.lenses) > 0 {
+		b.WriteByte('\n')
+		b.WriteString(lensTable(card, meta.lenses))
+	}
 	return b.String()
+}
+
+// lensTable renders one status row per lens: its level (derived from the scorecard, see
+// lensLevel), the model it ran on, how long it took, and the tokens it consumed. A lens that
+// produced no output is marked so a silent lens is visible rather than reading as a clean one;
+// token cells show "–" when the model reported no usage, which is not the same as zero.
+func lensTable(card scorecard, lenses []lensStat) string {
+	var b strings.Builder
+	b.WriteString("| Lens | Level | Model | Time | Tokens in | Tokens out |\n")
+	b.WriteString("|---|---|---|---|---|---|\n")
+	for _, l := range lenses {
+		lvl := lensLevel(card, l.lens).String()
+		if !l.ran {
+			lvl = "⚪ no output"
+		}
+		in, out := "–", "–"
+		if l.usage {
+			in, out = fmt.Sprint(l.tokensIn), fmt.Sprint(l.tokensOut)
+		}
+		fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s | %s |\n", l.lens.title, lvl, l.model, formatElapsed(l.elapsed), in, out)
+	}
+	return b.String()
+}
+
+// formatElapsed renders a lens duration for the table as seconds to one decimal — "0.9s",
+// "12.3s", "74.5s" — one unit down the column so rows compare at a glance; "–" when nothing
+// was observed.
+func formatElapsed(d time.Duration) string {
+	if d <= 0 {
+		return "–"
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // collapsible wraps body in a <details> block with the given summary label.
