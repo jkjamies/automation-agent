@@ -119,7 +119,7 @@ func TestLensTable(t *testing.T) {
 		"| Lens | Level | Model | Time | Tokens in | Tokens out |",
 		"| Security | 🔴 | `gemma3:27b` | 12.3s | 8120 | 240 |",
 		"| Performance | 🟢 | `gemma3:12b` | 0.9s | – | – |", // ran, no usage reported: dashes, not zeros
-		"| Accessibility | – | – | – | – | – |", // not selected for this diff: did not apply
+		"| Accessibility | – | – | – | – | – |",             // not selected for this diff: did not apply
 		"| Holistic synthesis | ⚪ no output | `gemma3:27b` | – | – | – |",
 	} {
 		if !strings.Contains(got, want) {
