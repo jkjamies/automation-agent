@@ -58,7 +58,7 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *stan
 	if err != nil {
 		return reviewOutcome{}, fmt.Errorf("reviewer: glue review: %w", err)
 	}
-	lenses = append(lenses, glueStat)
+	lenses = append(allLensRows(lenses), glueStat)
 
 	all := append(category, glue...)
 	all = dropLowConfidence(all, e.minConfidence) // phase-1 verify gate (spec Decision 13)
@@ -141,6 +141,26 @@ func (e *Engine) runGlue(ctx context.Context, diff string, prior []finding, std 
 	return parseFindings(rep.Text), stat, nil
 }
 
+// allLensRows expands the rows of the lenses that ran into one row per category, in category
+// order, marking the ones the diff did not select (the UI-only lens on a non-UI diff) as
+// skipped. The status table lists every lens so a reader can see what the review consisted of;
+// only the scorecard is limited to what produced findings.
+func allLensRows(ran []lensStat) []lensStat {
+	byName := make(map[string]lensStat, len(ran))
+	for _, l := range ran {
+		byName[l.lens.name] = l
+	}
+	rows := make([]lensStat, 0, len(categories))
+	for _, c := range categories {
+		if l, ok := byName[c.name]; ok {
+			rows = append(rows, l)
+			continue
+		}
+		rows = append(rows, lensStat{lens: c, skipped: true})
+	}
+	return rows
+}
+
 // newLensStat builds a lens's status row from what the drive observed about its agent. The model
 // column prefers the version the adapter reported (a hosted model can resolve an alias to a
 // dated version) and falls back to the configured model's name.
@@ -166,6 +186,7 @@ type lensStat struct {
 	tokensOut int
 	usage     bool // the model reported token counts (false = unknown, not zero)
 	ran       bool // the lens produced output at all
+	skipped   bool // the lens was not selected for this diff (UI-only lens, no UI files changed)
 }
 
 // formatDiff renders the filtered files as one prompt-ready diff: a header per file plus its

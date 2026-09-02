@@ -111,6 +111,7 @@ func TestLensTable(t *testing.T) {
 	lenses := []lensStat{
 		{lens: categories[1], model: "gemma3:27b", elapsed: 12340 * time.Millisecond, tokensIn: 8120, tokensOut: 240, usage: true, ran: true},
 		{lens: categories[2], model: "gemma3:12b", elapsed: 900 * time.Millisecond, ran: true},
+		{lens: categories[4], skipped: true},
 		{lens: glueLens, model: "gemma3:27b", ran: false},
 	}
 	got := lensTable(card, lenses)
@@ -118,6 +119,7 @@ func TestLensTable(t *testing.T) {
 		"| Lens | Level | Model | Time | Tokens in | Tokens out |",
 		"| Security | 🔴 | `gemma3:27b` | 12.3s | 8120 | 240 |",
 		"| Performance | 🟢 | `gemma3:12b` | 0.9s | – | – |", // ran, no usage reported: dashes, not zeros
+		"| Accessibility | ⏭️ skipped (no UI files changed) | – | – | – | – |",
 		"| Holistic synthesis | ⚪ no output | `gemma3:27b` | – | – | – |",
 	} {
 		if !strings.Contains(got, want) {
@@ -146,5 +148,22 @@ func TestClassifyPartitionsEveryFinding(t *testing.T) {
 	}
 	if len(inline) != 1 || len(outOfDiff) != 2 || len(nitpicks) != 1 {
 		t.Errorf("partition = inline %d / out %d / nits %d, want 1/2/1", len(inline), len(outOfDiff), len(nitpicks))
+	}
+}
+
+// The two tables deliberately differ in what they list: the scorecard shows only dimensions that
+// received findings, while the lens table shows every lens (skipped or silent ones included).
+func TestScorecardTableListsOnlyDimensionsWithFindings(t *testing.T) {
+	got := scorecardTable(scoreFindings([]finding{f(DimSecurity, SeverityMajor)}))
+	if !strings.Contains(got, "| security |") {
+		t.Errorf("scorecard missing the scored dimension:\n%s", got)
+	}
+	for _, d := range []Dimension{DimPerformance, DimAccessibility, DimTestCoverage, DimOther} {
+		if strings.Contains(got, "| "+string(d)+" |") {
+			t.Errorf("scorecard lists %s, which has no findings:\n%s", d, got)
+		}
+	}
+	if !strings.Contains(scorecardTable(scoreFindings(nil)), "No findings") {
+		t.Error("an empty scorecard must say so rather than render an empty table")
 	}
 }

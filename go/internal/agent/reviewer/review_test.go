@@ -128,8 +128,10 @@ func TestReviewInstructionIsNotTemplated(t *testing.T) {
 	}
 }
 
-// The review reports one status row per lens that ran — every selected category, then glue — with
-// the model it ran on and the usage its agent reported, attributed by agent name.
+// The review reports one status row per lens — every category in order, whether it ran or not,
+// then glue — with the model it ran on and the usage its agent reported, attributed by agent
+// name. A non-UI diff leaves the accessibility lens unselected; it is listed as skipped rather
+// than omitted, so the table always shows what a review consists of.
 func TestReviewReportsLensStats(t *testing.T) {
 	files := []githubapi.PRFile{{Path: "main.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x"}}
 	e := reviewEngine("[]", func(d *Deps) {
@@ -140,19 +142,24 @@ func TestReviewReportsLensStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
-	cats := selectCategories(files)
-	if len(out.lenses) != len(cats)+1 {
-		t.Fatalf("lenses = %d, want %d categories + glue", len(out.lenses), len(cats))
+	if len(out.lenses) != len(categories)+1 {
+		t.Fatalf("lenses = %d, want all %d categories + glue", len(out.lenses), len(categories))
 	}
-	for i, c := range cats {
+	for i, c := range categories {
 		if out.lenses[i].lens.name != c.name {
 			t.Errorf("lens[%d] = %s, want %s (category order)", i, out.lenses[i].lens.name, c.name)
 		}
+		if out.lenses[i].skipped != c.uiOnly {
+			t.Errorf("lens %s skipped = %v, want %v on a non-UI diff", c.name, out.lenses[i].skipped, c.uiOnly)
+		}
 	}
-	if last := out.lenses[len(out.lenses)-1]; last.lens.name != glueLens.name {
-		t.Errorf("last lens = %s, want glue", last.lens.name)
+	if last := out.lenses[len(out.lenses)-1]; last.lens.name != glueLens.name || last.skipped {
+		t.Errorf("last lens = %s (skipped %v), want glue, not skipped", last.lens.name, last.skipped)
 	}
 	for _, l := range out.lenses {
+		if l.skipped {
+			continue
+		}
 		wantIn, wantOut := 50, 4
 		if l.lens.tier == tierCode {
 			wantIn, wantOut = 80, 6
@@ -182,6 +189,19 @@ func TestReviewMarksSilentLens(t *testing.T) {
 	for _, l := range out.lenses {
 		if l.ran {
 			t.Errorf("%s reported as ran with no output", l.lens.name)
+		}
+	}
+}
+
+// A UI diff selects every category, so no lens row is skipped.
+func TestReviewSelectsAccessibilityForUIDiff(t *testing.T) {
+	out, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "app.tsx", Patch: "+x"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	for _, l := range out.lenses {
+		if l.skipped {
+			t.Errorf("%s skipped on a UI diff", l.lens.name)
 		}
 	}
 }
