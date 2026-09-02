@@ -293,16 +293,17 @@ func reviewDetails(card scorecard, meta publishMeta) string {
 // lensTable renders one status row per lens — every category and the glue pass, whether or not
 // it ran, unlike the scorecard, which lists only dimensions with findings: its level (derived
 // from the scorecard, see lensLevel), the model it ran on, how long it took, and the tokens it
-// consumed. A lens the diff did not select is marked skipped, and one that produced no output is
-// marked so a silent lens is visible rather than reading as a clean one; token cells show "–"
-// when the model reported no usage, which is not the same as zero.
+// consumed. A lens the diff did not select (the UI-only lens on a non-UI diff) shows a dash in
+// every cell — it did not apply; a lens that ran but produced no output is marked so a silent
+// lens is visible rather than reading as a clean one; token cells show "–" when the model
+// reported no usage, which is not the same as zero.
 func lensTable(card scorecard, lenses []lensStat) string {
 	var b strings.Builder
 	b.WriteString("| Lens | Level | Model | Time | Tokens in | Tokens out |\n")
 	b.WriteString("|---|---|---|---|---|---|\n")
 	for _, l := range lenses {
 		if l.skipped {
-			fmt.Fprintf(&b, "| %s | ⏭️ skipped (no UI files changed) | – | – | – | – |\n", l.lens.title)
+			fmt.Fprintf(&b, "| %s | – | – | – | – | – |\n", l.lens.title)
 			continue
 		}
 		lvl := lensLevel(card, l.lens).String()
