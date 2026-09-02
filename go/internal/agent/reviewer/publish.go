@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"automation-agent/internal/githubapi"
 )
@@ -20,7 +21,7 @@ type publishMeta struct {
 	number      int
 	headSHA     string
 	files       []githubapi.PRFile // for the in-diff index
-	tiers       string             // model tiers used, for the Review details section
+	lenses      []lensStat         // per-lens status rows for the Review details section
 	standards   []string           // applied standards source paths (nil = generic), for reporting
 }
 
@@ -152,27 +153,24 @@ func classify(findings []finding, idx diffIndex) (inline, outOfDiff, nitpicks []
 }
 
 // inlineCommentBody renders one inline comment: an icon+category prefix, the message, an optional
-// ```suggestion block (a localized fix), and an optional "Prompt for AI agents" block (spec
-// Decisions 9/10).
+// plain-language suggestion, and an optional "Prompt for AI agents" block (spec Decisions 9/10).
+//
+// The suggestion is prose, deliberately not a GitHub ```suggestion block. That block is a
+// one-click commit of a verbatim replacement for the commented lines, and the lenses cannot
+// author one reliably: they see a unified diff with no surrounding file, so a snippet they
+// write rarely aligns with the exact lines it would replace, and "apply" then commits broken
+// code. Worse, the model-authored "snippet" is often itself a sentence, which the block would
+// offer to commit as source. A sentence describing the change is what the reader can act on
+// with the context they have; the fenced fix prompt below is the hand-off for an agent that
+// does have the file.
 func inlineCommentBody(f finding) string {
 	var b strings.Builder
 	// Dimension/severity are normalized to known enums, so only the model-authored message needs
 	// sanitizing here.
 	fmt.Fprintf(&b, "**%s** · _%s_\n\n%s\n", findingPrefix(f), f.Dimension, sanitizeText(f.Message))
-	if f.Suggestion != "" {
-		// Suggestion is model-authored; size the outer fence past any backtick run in it so a
-		// suggestion containing a ```fence can't close the block early and inject markdown or
-		// @mentions (GitHub honors longer suggestion fences). Same approach as FixPrompt below.
-		fence := strings.Repeat("`", maxBacktickRun(f.Suggestion)+1)
-		if len(fence) < 3 {
-			fence = "```"
-		}
-		b.WriteString("\n" + fence + "suggestion\n")
-		b.WriteString(f.Suggestion)
-		if !strings.HasSuffix(f.Suggestion, "\n") {
-			b.WriteByte('\n')
-		}
-		b.WriteString(fence + "\n")
+	if s := strings.TrimSpace(f.Suggestion); s != "" {
+		// Model-authored prose, so it gets the same sanitizing as the message.
+		fmt.Fprintf(&b, "\n**Suggestion:** %s\n", sanitizeText(s))
 	}
 	if f.FixPrompt != "" {
 		// FixPrompt is model-authored; render it inside a code fence so any @mentions or HTML are
@@ -198,8 +196,8 @@ func inlineCommentBody(f finding) string {
 
 // sanitizeText neutralizes model-authored text for safe embedding in a Markdown comment: it
 // escapes HTML-significant characters (so a finding can't inject markup such as </details>) and
-// breaks @mentions with a zero-width space (so the reviewer never pings a real user). Code in
-// ```suggestion blocks and fenced FixPrompt is left untouched by callers.
+// breaks @mentions with a zero-width space (so the reviewer never pings a real user). The fenced
+// FixPrompt is left untouched by callers — a code fence already renders its content literally.
 func sanitizeText(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
@@ -238,7 +236,7 @@ func summaryComment(marker string, card scorecard, actionable int, nitpicks, out
 	if len(outOfDiff) > 0 {
 		b.WriteString(collapsible(fmt.Sprintf("🔭 Outside diff range (%d)", len(outOfDiff)), findingsList(outOfDiff)))
 	}
-	b.WriteString(collapsible("Review details", reviewDetails(meta)))
+	b.WriteString(collapsible("Review details", reviewDetails(card, meta)))
 	return b.String()
 }
 
@@ -272,14 +270,12 @@ func findingsList(fs []finding) string {
 	return b.String()
 }
 
-// reviewDetails renders the "Review details" section: head SHA, file count, and the model tiers.
-func reviewDetails(meta publishMeta) string {
+// reviewDetails renders the "Review details" section: head SHA, file count, the standards
+// applied, and the per-lens status table.
+func reviewDetails(card scorecard, meta publishMeta) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- Head SHA: `%s`\n", meta.headSHA)
 	fmt.Fprintf(&b, "- Files reviewed: %d\n", len(meta.files))
-	if meta.tiers != "" {
-		fmt.Fprintf(&b, "- Model tiers: %s\n", meta.tiers)
-	}
 	if len(meta.standards) > 0 {
 		fmt.Fprintf(&b, "- Standards applied: %s\n", strings.Join(meta.standards, ", "))
 	} else {
@@ -287,7 +283,50 @@ func reviewDetails(meta publishMeta) string {
 		// no convention docs — so stay neutral rather than asserting none were found.
 		b.WriteString("- Standards: generic review\n")
 	}
+	if len(meta.lenses) > 0 {
+		b.WriteByte('\n')
+		b.WriteString(lensTable(card, meta.lenses))
+	}
 	return b.String()
+}
+
+// lensTable renders one status row per lens — every category and the glue pass, whether or not
+// it ran, unlike the scorecard, which lists only dimensions with findings: its level (derived
+// from the scorecard, see lensLevel), the model it ran on, how long it took, and the tokens it
+// consumed. A lens the diff did not select (the UI-only lens on a non-UI diff) shows a dash in
+// every cell — it did not apply; a lens that ran but produced no output is marked so a silent
+// lens is visible rather than reading as a clean one; token cells show "–" when the model
+// reported no usage, which is not the same as zero.
+func lensTable(card scorecard, lenses []lensStat) string {
+	var b strings.Builder
+	b.WriteString("| Lens | Level | Model | Time | Tokens in | Tokens out |\n")
+	b.WriteString("|---|---|---|---|---|---|\n")
+	for _, l := range lenses {
+		if l.skipped {
+			fmt.Fprintf(&b, "| %s | – | – | – | – | – |\n", l.lens.title)
+			continue
+		}
+		lvl := lensLevel(card, l.lens).String()
+		if !l.ran {
+			lvl = "⚪ no output"
+		}
+		in, out := "–", "–"
+		if l.usage {
+			in, out = fmt.Sprint(l.tokensIn), fmt.Sprint(l.tokensOut)
+		}
+		fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s | %s |\n", l.lens.title, lvl, l.model, formatElapsed(l.elapsed), in, out)
+	}
+	return b.String()
+}
+
+// formatElapsed renders a lens duration for the table as seconds to one decimal — "0.9s",
+// "12.3s", "74.5s" — one unit down the column so rows compare at a glance; "–" when nothing
+// was observed.
+func formatElapsed(d time.Duration) string {
+	if d <= 0 {
+		return "–"
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // collapsible wraps body in a <details> block with the given summary label.

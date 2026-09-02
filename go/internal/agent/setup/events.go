@@ -60,6 +60,17 @@ func FinalTextResponse(text string) *model.LLMResponse {
 	}
 }
 
+// ReportUsage sets the token usage a response reports, in the genai shape every consumer reads
+// (DriveReport sums it per agent). Model adapters and test doubles use it so they need not
+// import the provider SDK to report usage.
+func ReportUsage(resp *model.LLMResponse, tokensIn, tokensOut int) {
+	resp.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:     int32(tokensIn),
+		CandidatesTokenCount: int32(tokensOut),
+		TotalTokenCount:      int32(tokensIn + tokensOut),
+	}
+}
+
 // StateReader is the read side of session state (satisfied by both session.State
 // and session.ReadonlyState).
 type StateReader interface {

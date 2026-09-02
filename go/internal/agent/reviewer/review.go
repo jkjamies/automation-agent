@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/workflowagents/parallelagent"
@@ -20,17 +21,25 @@ const (
 	glueTrigger   = "Synthesize the holistic findings as the JSON array specified."
 )
 
+// reviewOutcome is what the model-calling stage hands to publish: the scorecard, the gated
+// findings, and one status row per lens that ran.
+type reviewOutcome struct {
+	card     scorecard
+	findings []finding
+	lenses   []lensStat
+}
+
 // review runs the model-calling stage for a reviewable PR: fan out the category lenses, run the
 // holistic glue pass, then apply the deterministic verify gate (confidence drop + dedup) and
-// score. It returns the scorecard and the gated findings (the caller publishes them); it posts
-// nothing itself.
-func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards, stale staleFunc) (scorecard, []finding, error) {
+// score. It returns the scorecard, the gated findings, and the per-lens status (the caller
+// publishes them); it posts nothing itself.
+func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *standards, stale staleFunc) (reviewOutcome, error) {
 	diff := formatDiff(files)
 	cats := selectCategories(files)
 
-	category, err := e.runCategoryReview(ctx, diff, cats, std)
+	category, lenses, err := e.runCategoryReview(ctx, diff, cats, std)
 	if err != nil {
-		return scorecard{}, nil, fmt.Errorf("reviewer: category review: %w", err)
+		return reviewOutcome{}, fmt.Errorf("reviewer: category review: %w", err)
 	}
 	// The fan-out is the long pole, so a newer push very plausibly landed during it. Stop before
 	// spending the glue call on findings that will be discarded anyway. The check goes here rather
@@ -38,35 +47,37 @@ func (e *Engine) review(ctx context.Context, files []githubapi.PRFile, std *stan
 	// same question N times at the same instant and still could not stop the calls already in
 	// flight — the stage boundary is the only place the answer can change the outcome.
 	if stale != nil && stale(ctx) {
-		return scorecard{}, nil, errSuperseded
+		return reviewOutcome{}, errSuperseded
 	}
 	// Glue sees the category findings as "already reported" and skips re-flagging them, so it must
 	// see only the findings that survive the same gates as the final output. Otherwise a finding the
 	// verify/citation gate later drops (REVIEW_UNCITED_MODE=drop) is suppressed in glue and then
 	// dropped here, vanishing from the review entirely.
 	gatedForGlue := e.gateCitations(dropLowConfidence(append([]finding(nil), category...), e.minConfidence), std)
-	glue, err := e.runGlue(ctx, diff, gatedForGlue, std)
+	glue, glueStat, err := e.runGlue(ctx, diff, gatedForGlue, std)
 	if err != nil {
-		return scorecard{}, nil, fmt.Errorf("reviewer: glue review: %w", err)
+		return reviewOutcome{}, fmt.Errorf("reviewer: glue review: %w", err)
 	}
+	lenses = append(allLensRows(lenses), glueStat)
 
 	all := append(category, glue...)
 	all = dropLowConfidence(all, e.minConfidence) // phase-1 verify gate (spec Decision 13)
 	all = e.gateCitations(all, std)               // standards citation gate (spec Decision 14)
 	all = dedupe(all)                             // cross-lens dedup (spec Decision 3/7)
-	return scoreFindings(all), all, nil
+	return reviewOutcome{card: scoreFindings(all), findings: all, lenses: lenses}, nil
 }
 
 // runCategoryReview builds one agent per applicable category, runs them in parallel (ADK
 // ParallelAgent — genuine concurrency on Vertex, GPU-serialized locally with no code change,
-// spec Decision 17), and returns every category's parsed findings. Empty findings is success
-// (spec Decision 2). The "(other)" catch-all's findings are demoted to nitpick.
-func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category, std *standards) ([]finding, error) {
+// spec Decision 17), and returns every category's parsed findings plus one status row per
+// category. Empty findings is success (spec Decision 2). The "(other)" catch-all's findings are
+// demoted to nitpick.
+func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []category, std *standards) ([]finding, []lensStat, error) {
 	agents := make([]agent.Agent, 0, len(cats))
 	for _, c := range cats {
 		a, err := e.buildCategoryAgent(c, diff, std)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		agents = append(agents, a)
 	}
@@ -76,20 +87,21 @@ func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []cate
 		SubAgents:   agents,
 	}})
 	if err != nil {
-		return nil, fmt.Errorf("build review fan-out: %w", err)
+		return nil, nil, fmt.Errorf("build review fan-out: %w", err)
 	}
 	r, err := setup.NewRunner("reviewer-review", par)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	state, err := setup.DriveCollectState(ctx, r, "system", "review", reviewTrigger)
+	rep, err := setup.DriveReport(ctx, r, "system", "review", reviewTrigger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var out []finding
+	lenses := make([]lensStat, 0, len(cats))
 	for _, c := range cats {
-		v, ok := state[findingsKey(c.name)]
+		v, ok := rep.State[findingsKey(c.name)]
 		raw, _ := v.(string)
 		if !ok {
 			// A lens that ran but found nothing is normal (empty = success); a missing state key
@@ -97,31 +109,84 @@ func (e *Engine) runCategoryReview(ctx context.Context, diff string, cats []cate
 			// review on one lens — best-effort by design (spec Decision 13).
 			e.log.Warn("category produced no findings output", "category", c.name)
 		}
+		lenses = append(lenses, e.newLensStat(c, rep.Agents[agentName(c)], ok))
 		found := parseFindings(raw)
 		if c.other {
 			found = demoteToNitpick(found)
 		}
 		out = append(out, found...)
 	}
-	return out, nil
+	return out, lenses, nil
 }
 
 // runGlue runs the holistic synthesis pass over the diff and the category findings, returning
-// the additional architectural/testability/coverage findings it produced. Empty is success.
-func (e *Engine) runGlue(ctx context.Context, diff string, prior []finding, std *standards) ([]finding, error) {
+// the additional architectural/testability/coverage findings it produced and the pass's status
+// row. Empty is success.
+func (e *Engine) runGlue(ctx context.Context, diff string, prior []finding, std *standards) ([]finding, lensStat, error) {
 	a, err := e.buildGlueAgent(diff, prior, std)
 	if err != nil {
-		return nil, err
+		return nil, lensStat{}, err
 	}
 	r, err := setup.NewRunner("reviewer-glue", a)
 	if err != nil {
-		return nil, err
+		return nil, lensStat{}, err
 	}
-	text, err := setup.DriveText(ctx, r, "system", "glue", glueTrigger)
+	rep, err := setup.DriveReport(ctx, r, "system", "glue", glueTrigger)
 	if err != nil {
-		return nil, err
+		return nil, lensStat{}, err
 	}
-	return parseFindings(text), nil
+	// Glue writes no state key; its output is the drive's text, so "produced output" is that
+	// text being non-blank.
+	stat := e.newLensStat(glueLens, rep.Agents[agentName(glueLens)], strings.TrimSpace(rep.Text) != "")
+	return parseFindings(rep.Text), stat, nil
+}
+
+// allLensRows expands the rows of the lenses that ran into one row per category, in category
+// order, marking the ones the diff did not select (the UI-only lens on a non-UI diff) as
+// skipped. The status table lists every lens so a reader can see what the review consisted of;
+// only the scorecard is limited to what produced findings.
+func allLensRows(ran []lensStat) []lensStat {
+	byName := make(map[string]lensStat, len(ran))
+	for _, l := range ran {
+		byName[l.lens.name] = l
+	}
+	rows := make([]lensStat, 0, len(categories))
+	for _, c := range categories {
+		if l, ok := byName[c.name]; ok {
+			rows = append(rows, l)
+			continue
+		}
+		rows = append(rows, lensStat{lens: c, skipped: true})
+	}
+	return rows
+}
+
+// newLensStat builds a lens's status row from what the drive observed about its agent. The model
+// column prefers the version the adapter reported (a hosted model can resolve an alias to a
+// dated version) and falls back to the configured model's name.
+func (e *Engine) newLensStat(c category, st setup.AgentStats, ran bool) lensStat {
+	modelName := st.Model
+	if modelName == "" {
+		modelName = e.modelForTier(c.tier).Name()
+	}
+	return lensStat{lens: c, model: modelName, elapsed: st.Elapsed, tokensIn: st.TokensIn, tokensOut: st.TokensOut, usage: st.Reported, ran: ran}
+}
+
+// agentName is the ADK sub-agent name a lens runs under, and so the author its events carry.
+func agentName(c category) string { return "review_" + c.name }
+
+// lensStat is one row of the Review details lens table: what a lens ran on, how long it took,
+// and what it cost. Its level is not stored here — it is derived from the scorecard at render
+// time (lensLevel) so the two tables cannot drift apart.
+type lensStat struct {
+	lens      category
+	model     string
+	elapsed   time.Duration
+	tokensIn  int
+	tokensOut int
+	usage     bool // the model reported token counts (false = unknown, not zero)
+	ran       bool // the lens produced output at all
+	skipped   bool // the lens was not selected for this diff (UI-only lens, no UI files changed)
 }
 
 // formatDiff renders the filtered files as one prompt-ready diff: a header per file plus its

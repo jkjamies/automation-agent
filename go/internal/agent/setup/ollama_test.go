@@ -267,3 +267,30 @@ func TestLiveOllamaTools(t *testing.T) {
 	}
 	t.Logf("tool executed with city=%q", gotCity)
 }
+
+// The token counts Ollama reports on its done chunk surface as genai usage on the final response,
+// so a consumer reads usage identically for both providers; a chunk without them yields no usage
+// rather than a zero one.
+func TestOllamaReportsUsage(t *testing.T) {
+	t.Run("counts mapped", func(t *testing.T) {
+		ts := fakeOllama(t, []api.ChatResponse{{
+			Model: "gemma", Message: api.Message{Role: "assistant", Content: "ok"}, Done: true, DoneReason: "stop",
+			Metrics: api.Metrics{PromptEvalCount: 120, EvalCount: 9},
+		}})
+		defer ts.Close()
+		m, _ := NewOllamaModel(ts.URL, "gemma", 32768)
+		resps := collect(t, m.GenerateContent(context.Background(), &model.LLMRequest{Contents: []*genai.Content{userText("hi")}}, false))
+		if len(resps) != 1 || resps[0].UsageMetadata == nil {
+			t.Fatalf("responses = %+v, want one with usage", resps)
+		}
+		u := resps[0].UsageMetadata
+		if u.PromptTokenCount != 120 || u.CandidatesTokenCount != 9 || u.TotalTokenCount != 129 {
+			t.Errorf("usage = %+v, want 120 in / 9 out / 129 total", u)
+		}
+	})
+	t.Run("absent counts yield no usage", func(t *testing.T) {
+		if got := ollamaUsage(api.Metrics{}); got != nil {
+			t.Errorf("ollamaUsage(zero) = %+v, want nil", got)
+		}
+	})
+}

@@ -14,13 +14,22 @@ import (
 
 // fakeLLM is a model.LLM that returns one canned response, so the fan-out wiring can be driven
 // without a real model. Structure/glue tests assert orchestration, never LLM output content.
-type fakeLLM struct{ json string }
+// When in/out are set the response also reports that token usage, as a real adapter's final
+// chunk does.
+type fakeLLM struct {
+	json    string
+	in, out int
+}
 
 func (fakeLLM) Name() string { return "fake" }
 
 func (m fakeLLM) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(setup.FinalTextResponse(m.json), nil)
+		resp := setup.FinalTextResponse(m.json)
+		if m.in > 0 || m.out > 0 {
+			setup.ReportUsage(resp, m.in, m.out)
+		}
+		yield(resp, nil)
 	}
 }
 
@@ -38,10 +47,11 @@ func TestReviewPipeline(t *testing.T) {
 	e := reviewEngine(canned)
 	files := []githubapi.PRFile{{Path: "main.go", Patch: "@@ -1 +1 @@\n+x", Status: "modified"}}
 
-	card, _, err := e.review(context.Background(), files, nil, nil)
+	out, err := e.review(context.Background(), files, nil, nil)
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
+	card := out.card
 	// Every lens + glue returns the same finding (same fingerprint), so dedup collapses it to
 	// one; one runtime_safety major scores the dimension — and thus overall — yellow.
 	if card.total != 1 {
@@ -55,21 +65,21 @@ func TestReviewPipeline(t *testing.T) {
 func TestReviewPipelineDropsLowConfidence(t *testing.T) {
 	// All findings below the 0.6 gate -> dropped -> green, no findings.
 	canned := `[{"file":"main.go","line":10,"dimension":"security","severity":"critical","message":"x","confidence":0.2}]`
-	card, _, err := reviewEngine(canned).review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}}, nil, nil)
+	out, err := reviewEngine(canned).review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
-	if card.total != 0 || card.overall != levelGreen {
+	if card := out.card; card.total != 0 || card.overall != levelGreen {
 		t.Errorf("low-confidence critical leaked: total=%d overall=%v", card.total, card.overall)
 	}
 }
 
 func TestReviewPipelineEmptyFindings(t *testing.T) {
-	card, _, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}}, nil, nil)
+	out, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
-	if card.total != 0 || card.overall != levelGreen {
+	if card := out.card; card.total != 0 || card.overall != levelGreen {
 		t.Errorf("empty review = total %d overall %v, want clean green", card.total, card.overall)
 	}
 }
@@ -100,4 +110,107 @@ func TestFormatDiff(t *testing.T) {
 	if !strings.Contains(out, "### logo.png (added)") || !strings.Contains(out, "(no textual diff available)") {
 		t.Errorf("patchless file not noted:\n%s", out)
 	}
+}
+
+// A diff is per-event text the reviewer bakes into the agents' instructions. The ADK treats a
+// plain Instruction string as a template — every `{identifier}` is a session-state lookup that
+// errors when the key is absent — so code that merely mentions a placeholder (an f-string, a
+// route pattern, a templated config) must not be able to fail the review. The instruction is
+// therefore handed over through a provider, which the ADK does not template.
+func TestReviewInstructionIsNotTemplated(t *testing.T) {
+	files := []githubapi.PRFile{{
+		Path:   "app.py",
+		Status: "modified",
+		Patch:  "@@ -1 +1,2 @@\n+greeting = f\"hello {user}\"\n+route = \"/items/{item_id}\"",
+	}}
+	if _, err := reviewEngine("[]").review(context.Background(), files, nil, nil); err != nil {
+		t.Fatalf("review over a diff containing {placeholders}: %v", err)
+	}
+}
+
+// The review reports one status row per lens — every category in order, whether it ran or not,
+// then glue — with the model it ran on and the usage its agent reported, attributed by agent
+// name. A non-UI diff leaves the accessibility lens unselected; it is listed as skipped rather
+// than omitted, so the table always shows what a review consists of.
+func TestReviewReportsLensStats(t *testing.T) {
+	files := []githubapi.PRFile{{Path: "main.go", Status: "modified", Patch: "@@ -1 +1 @@\n+x"}}
+	e := reviewEngine("[]", func(d *Deps) {
+		d.BaseLLM = fakeLLM{json: "[]", in: 50, out: 4}
+		d.CodeLLM = fakeLLM{json: "[]", in: 80, out: 6}
+	})
+	out, err := e.review(context.Background(), files, nil, nil)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(out.lenses) != len(categories)+1 {
+		t.Fatalf("lenses = %d, want all %d categories + glue", len(out.lenses), len(categories))
+	}
+	for i, c := range categories {
+		if out.lenses[i].lens.name != c.name {
+			t.Errorf("lens[%d] = %s, want %s (category order)", i, out.lenses[i].lens.name, c.name)
+		}
+		if out.lenses[i].skipped != c.uiOnly {
+			t.Errorf("lens %s skipped = %v, want %v on a non-UI diff", c.name, out.lenses[i].skipped, c.uiOnly)
+		}
+	}
+	if last := out.lenses[len(out.lenses)-1]; last.lens.name != glueLens.name || last.skipped {
+		t.Errorf("last lens = %s (skipped %v), want glue, not skipped", last.lens.name, last.skipped)
+	}
+	for _, l := range out.lenses {
+		if l.skipped {
+			continue
+		}
+		wantIn, wantOut := 50, 4
+		if l.lens.tier == tierCode {
+			wantIn, wantOut = 80, 6
+		}
+		if !l.ran || !l.usage || l.tokensIn != wantIn || l.tokensOut != wantOut {
+			t.Errorf("%s: ran %v usage %v tokens %d/%d, want ran, usage, %d/%d", l.lens.name, l.ran, l.usage, l.tokensIn, l.tokensOut, wantIn, wantOut)
+		}
+		if l.model != "fake" {
+			t.Errorf("%s: model = %q, want the configured model's name when the adapter reports none", l.lens.name, l.model)
+		}
+		if l.elapsed <= 0 {
+			t.Errorf("%s: elapsed = %v, want > 0", l.lens.name, l.elapsed)
+		}
+	}
+}
+
+// A lens that produced no output at all (no state key written) is reported as not having run,
+// rather than reading as a clean lens, and does not fail the review.
+func TestReviewMarksSilentLens(t *testing.T) {
+	// A model that yields nothing writes no OutputKey, so every category is silent; glue's output
+	// is blank text, which counts as silent too.
+	e := reviewEngine("", func(d *Deps) { d.BaseLLM = silentLLM{}; d.CodeLLM = silentLLM{} })
+	out, err := e.review(context.Background(), []githubapi.PRFile{{Path: "main.go", Patch: "+x"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	for _, l := range out.lenses {
+		if l.ran {
+			t.Errorf("%s reported as ran with no output", l.lens.name)
+		}
+	}
+}
+
+// A UI diff selects every category, so no lens row is skipped.
+func TestReviewSelectsAccessibilityForUIDiff(t *testing.T) {
+	out, err := reviewEngine("[]").review(context.Background(), []githubapi.PRFile{{Path: "app.tsx", Patch: "+x"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	for _, l := range out.lenses {
+		if l.skipped {
+			t.Errorf("%s skipped on a UI diff", l.lens.name)
+		}
+	}
+}
+
+// silentLLM never yields a response, like a lens whose generation produced nothing.
+type silentLLM struct{}
+
+func (silentLLM) Name() string { return "silent" }
+
+func (silentLLM) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(func(*model.LLMResponse, error) bool) {}
 }

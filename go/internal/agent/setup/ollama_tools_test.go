@@ -73,7 +73,7 @@ func TestFinalResponseWithToolCalls(t *testing.T) {
 	args.Set("city", "Paris")
 	tc := api.ToolCall{Function: api.ToolCallFunction{Name: "get_weather", Arguments: args}}
 
-	resp := finalResponse("here you go", []api.ToolCall{tc}, "gemma4")
+	resp := finalResponse("here you go", []api.ToolCall{tc}, "gemma4", nil)
 	if !resp.TurnComplete || resp.FinishReason != genai.FinishReasonStop {
 		t.Error("final response should be complete")
 	}
@@ -89,7 +89,7 @@ func TestFinalResponseWithToolCalls(t *testing.T) {
 	}
 
 	// no tool calls + no text -> empty parts, still complete
-	if r := finalResponse("", nil, "gemma4"); len(r.Content.Parts) != 0 {
+	if r := finalResponse("", nil, "gemma4", nil); len(r.Content.Parts) != 0 {
 		t.Errorf("empty = %+v", r.Content.Parts)
 	}
 }

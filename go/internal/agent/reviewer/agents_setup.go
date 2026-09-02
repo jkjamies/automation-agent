@@ -26,7 +26,9 @@ const distillTrigger = "Extract the repository's rules as the JSON array specifi
 // instruction is the category prompt + the repo's standards rule menu (when any) + the filtered
 // diff, writing its findings JSON to the category's state key. When standards are present it also
 // gets the lazy get_rule tool. The diff/standards are baked into the instruction because they are
-// per-event.
+// per-event — and handed over through setup.StaticInstruction, never the templated Instruction
+// field, because a diff is foreign text: any `{identifier}` in it would otherwise be read as a
+// session-state lookup and fail the run.
 func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (agent.Agent, error) {
 	body, err := prompts.Get(c.promptName)
 	if err != nil {
@@ -37,10 +39,10 @@ func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (ag
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                  "review_" + c.name,
+		Name:                  agentName(c),
 		Description:           c.title + " review",
 		Model:                 e.modelForTier(c.tier),
-		Instruction:           buildReviewInstruction(body, diff, std),
+		InstructionProvider:   setup.StaticInstruction(buildReviewInstruction(body, diff, std)),
 		Tools:                 tools,
 		OutputKey:             findingsKey(c.name),
 		GenerateContentConfig: setup.JSONConfig(),
@@ -52,7 +54,7 @@ func (e *Engine) buildCategoryAgent(c category, diff string, std *standards) (ag
 // alignment / testability / test-coverage findings (cross-lens dedup is done deterministically in
 // code, not here).
 func (e *Engine) buildGlueAgent(diff string, prior []finding, std *standards) (agent.Agent, error) {
-	body, err := prompts.Get("glue")
+	body, err := prompts.Get(glueLens.promptName)
 	if err != nil {
 		return nil, fmt.Errorf("reviewer: load glue prompt: %w", err)
 	}
@@ -61,10 +63,10 @@ func (e *Engine) buildGlueAgent(diff string, prior []finding, std *standards) (a
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                  "review_glue",
-		Description:           "Holistic synthesis review",
-		Model:                 e.codeLLM,
-		Instruction:           buildGlueInstruction(body, diff, prior, std),
+		Name:                  agentName(glueLens),
+		Description:           glueLens.title + " review",
+		Model:                 e.modelForTier(glueLens.tier),
+		InstructionProvider:   setup.StaticInstruction(buildGlueInstruction(body, diff, prior, std)),
 		Tools:                 tools,
 		GenerateContentConfig: setup.JSONConfig(),
 	})
@@ -83,7 +85,7 @@ func (e *Engine) buildDistillerAgent(docs map[string]string, sources []string) (
 		Name:                  "standards_distiller",
 		Description:           "Distill the repo's standards docs into a tagged rule list",
 		Model:                 e.baseLLM,
-		Instruction:           buildDistillerInstruction(body, docs, sources),
+		InstructionProvider:   setup.StaticInstruction(buildDistillerInstruction(body, docs, sources)),
 		GenerateContentConfig: setup.JSONConfig(),
 	})
 }

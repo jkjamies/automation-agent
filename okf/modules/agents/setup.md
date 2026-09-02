@@ -6,7 +6,7 @@ resource: go/internal/agent/setup
 tags: [llm-provider, sessions, adk, park-store]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-04T00:00:00Z
+timestamp: 2026-09-02T00:00:00Z
 ---
 
 # Agent Setup Platform Package
@@ -50,7 +50,7 @@ flowchart TD
     Agents["root / summary / lintfixer"] -->|"model.LLM, GenerateText"| OM
     Agents --> GM
     Prompts["NewPrompts(embed.FS): Get / MustGet"] --> Agents
-    Runner["NewRunner + Drive / DriveCollectState"] --> Agents
+    Runner["NewRunner + Drive / DriveReport (DriveText, DriveCollectState)"] --> Agents
     Events["UserText / AssistantText / TextEvent / StateString"] --> Agents
 ```
 
@@ -58,11 +58,11 @@ flowchart TD
 
 - `llm.go` — `BuildLLM(ctx, cfg)`: the provider switch returning a `model.LLM`.
 - `ollama_preflight.go` — `VerifyOllamaModels(ctx, host, tags...)`: the startup check that the configured tags are pulled. `ErrOllamaUnreachable` separates "server is down" (warn) from "server lacks the model" (fail), which is the whole point — the two want opposite responses.
-- `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama client. Converts genai content ⇄ Ollama chat messages and aggregates streaming chunks. The ADK ships no built-in Ollama model, so this adapter provides one.
+- `ollama.go` — `OllamaModel`, the `model.LLM` adapter over the official Ollama client. Converts genai content ⇄ Ollama chat messages, aggregates streaming chunks, and maps the done chunk's `prompt_eval_count` / `eval_count` onto genai `UsageMetadata` so usage reads the same for both providers. The ADK ships no built-in Ollama model, so this adapter provides one.
 - `gemini.go` — the Gemini-backed `model.LLM` for the cloud deployment.
-- `prompt.go` — `Prompts`, a markdown loader over an embedded filesystem (each agent embeds its own `prompts/` dir).
+- `prompt.go` — `Prompts`, a markdown loader over an embedded filesystem (each agent embeds its own `prompts/` dir); `StaticInstruction(s)`, an `InstructionProvider` returning `s` verbatim, for any instruction that embeds text the service did not author (a diff, a fetched doc) — the ADK templates the plain `Instruction` field, so a `{placeholder}` in such text would otherwise be read as a session-state lookup and fail the run.
 - `events.go` — small genai content helpers (`UserText`, `ContentText`, `LastText`).
-- `runner.go` — runner helpers (`NewRunner` over an in-memory session for the ephemeral explore/analyze/root runs, `Drive`, `DriveText`, `DriveCollectState`).
+- `runner.go` — runner helpers (`NewRunner` over an in-memory session for the ephemeral explore/analyze/root runs, `Drive`, and `DriveReport` — the one event loop behind `DriveText` and `DriveCollectState` — returning a `RunReport`: merged state, final text, and per-agent `AgentStats` (elapsed wall time, reported token usage, model version) keyed by the event author, so a fan-out can report what each sub-agent took and cost).
 - `longrun.go` — generic workflow **pause/resume** plumbing: `LongRunDriver` (`Start`/`Resume` returning a plain `DriveResult`, over an injected `session.Service`; `DeleteSession` for terminal cleanup). Drives a parking workflow agent to its request-input pause and feeds the real result back; node outputs are attributed via the `NodeOutputKey` tag. Lives here because it touches `genai`; callers (e.g. the [fixflow engine](/modules/agents/fixflow.md)) stay genai-free.
 - `session.go` — `NewSessionService(ctx, cfg)`: the durable suspend/resume **history** backend switch (`memory` = the in-memory service; `sqlite` = the ADK database session service; `firestore` = `session_firestore.go`).
 - `session_firestore.go` — a hand-rolled Firestore `session.Service` (the ADK ships none for this stack). Five methods with `app:`/`user:`/`temp:` state scopes; validated against the ADK's own session-service conformance tests via the Firestore emulator.

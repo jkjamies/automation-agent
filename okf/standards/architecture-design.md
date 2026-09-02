@@ -869,7 +869,8 @@ Import root is `google.golang.org/adk/v2/...` (repo `github.com/google/adk-go`).
 llmagent.New(llmagent.Config{
     Name, Description string
     Model       model.LLM
-    Instruction string            // supports {var} placeholders; InstructionProvider for dynamic
+    Instruction string            // a template: {var} is a state lookup that errors when absent —
+                                  // foreign/per-event text goes via InstructionProvider (setup.StaticInstruction)
     Tools       []tool.Tool
     SubAgents   []agent.Agent
     OutputKey   string            // writes result into session state

@@ -23,21 +23,42 @@ type category struct {
 	title      string // human label
 	promptName string // prompts/<promptName>.md
 	tier       tier
-	uiOnly     bool // accessibility runs only when the diff touches UI/markup files
-	other      bool // the catch-all: its findings are forced to nitpick
+	// dims are the dimensions this lens owns — exactly the values its prompt allows a finding to
+	// carry. The scorecard groups by dimension and the lens status table groups by lens; a lens's
+	// level is derived from its dims' scorecard levels, so the two can never disagree. Every
+	// known dimension belongs to exactly one lens (asserted by tests against the prompts too).
+	dims   []Dimension
+	uiOnly bool // accessibility runs only when the diff touches UI/markup files
+	other  bool // the catch-all: its findings are forced to nitpick
 }
 
 // categories is the consolidated agent set (spec Decision 3). The glue/synthesis pass
 // (architectural alignment, testability, test coverage) is built separately — it runs after
 // these and needs their findings.
 var categories = []category{
-	{name: "safety", title: "Safety", promptName: "safety", tier: tierCode},
-	{name: "security", title: "Security", promptName: "security", tier: tierCode},
-	{name: "performance", title: "Performance", promptName: "performance", tier: tierBase},
-	{name: "code_quality", title: "Code quality", promptName: "code_quality", tier: tierCode},
-	{name: "accessibility", title: "Accessibility", promptName: "accessibility", tier: tierBase, uiOnly: true},
-	{name: "other", title: "Other", promptName: "other", tier: tierBase, other: true},
+	{name: "safety", title: "Safety", promptName: "safety", tier: tierCode,
+		dims: []Dimension{DimRuntimeSafety, DimErrorHandling}},
+	{name: "security", title: "Security", promptName: "security", tier: tierCode,
+		dims: []Dimension{DimSecurity}},
+	{name: "performance", title: "Performance", promptName: "performance", tier: tierBase,
+		dims: []Dimension{DimPerformance}},
+	{name: "code_quality", title: "Code quality", promptName: "code_quality", tier: tierCode,
+		dims: []Dimension{DimPatternViolation, DimMaintainability, DimReadability, DimDocumentation}},
+	{name: "accessibility", title: "Accessibility", promptName: "accessibility", tier: tierBase, uiOnly: true,
+		dims: []Dimension{DimAccessibility}},
+	{name: "other", title: "Other", promptName: "other", tier: tierBase, other: true,
+		dims: []Dimension{DimOther}},
 }
+
+// glueLens is the glue/synthesis pass described as a lens, so it is named, prompted, and
+// reported the same way as the categories. It is not in categories because it runs after them
+// and needs their findings.
+var glueLens = category{name: "glue", title: "Holistic synthesis", promptName: "glue", tier: tierCode,
+	dims: []Dimension{DimArchitecture, DimTestability, DimTestCoverage}}
+
+// allLenses is every lens that can contribute to a review, in report order: the categories,
+// then glue.
+func allLenses() []category { return append(append([]category(nil), categories...), glueLens) }
 
 // selectCategories returns the categories that apply to a changed-file set: all of them,
 // minus the UI-only lens (accessibility) when no UI/markup file changed.

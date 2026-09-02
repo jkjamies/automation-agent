@@ -105,7 +105,7 @@ func (m *OllamaModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				return nil
 			}
 			if resp.Done {
-				if !yield(finalResponse(full.String(), toolCalls, resp.Model), nil) {
+				if !yield(finalResponse(full.String(), toolCalls, resp.Model, ollamaUsage(resp.Metrics)), nil) {
 					return errStopIteration
 				}
 			}
@@ -156,9 +156,21 @@ func newTextResponse(text, modelVersion string) *model.LLMResponse {
 	}
 }
 
+// ollamaUsage maps the token counts Ollama reports on its final chunk onto genai's usage shape,
+// so a consumer reads usage the same way for both providers. nil when Ollama reported none (an
+// older server, or a response that never reached the done chunk).
+func ollamaUsage(m api.Metrics) *genai.GenerateContentResponseUsageMetadata {
+	if m.PromptEvalCount == 0 && m.EvalCount == 0 {
+		return nil
+	}
+	var resp model.LLMResponse
+	ReportUsage(&resp, m.PromptEvalCount, m.EvalCount)
+	return resp.UsageMetadata
+}
+
 // finalResponse builds the terminal response, including any tool calls as genai
-// function-call parts so the runner can execute the tools.
-func finalResponse(text string, toolCalls []api.ToolCall, modelVersion string) *model.LLMResponse {
+// function-call parts so the runner can execute the tools, and the usage Ollama reported.
+func finalResponse(text string, toolCalls []api.ToolCall, modelVersion string, usage *genai.GenerateContentResponseUsageMetadata) *model.LLMResponse {
 	parts := make([]*genai.Part, 0, len(toolCalls)+1)
 	if strings.TrimSpace(text) != "" {
 		parts = append(parts, genai.NewPartFromText(text))
@@ -167,10 +179,11 @@ func finalResponse(text string, toolCalls []api.ToolCall, modelVersion string) *
 		parts = append(parts, &genai.Part{FunctionCall: toGenaiFunctionCall(tc, i)})
 	}
 	return &model.LLMResponse{
-		Content:      &genai.Content{Role: genai.RoleModel, Parts: parts},
-		ModelVersion: modelVersion,
-		TurnComplete: true,
-		FinishReason: genai.FinishReasonStop,
+		Content:       &genai.Content{Role: genai.RoleModel, Parts: parts},
+		ModelVersion:  modelVersion,
+		UsageMetadata: usage,
+		TurnComplete:  true,
+		FinishReason:  genai.FinishReasonStop,
 	}
 }
 

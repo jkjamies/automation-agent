@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/runner"
@@ -49,34 +50,85 @@ func Drive(ctx context.Context, r *runner.Runner, userID, sessionID, input strin
 	return nil
 }
 
+// AgentStats is what a drive observed about one agent, keyed by agent name in RunReport.Agents.
+type AgentStats struct {
+	// Elapsed is wall time from the start of the drive to the agent's last event. For agents
+	// run in parallel that includes any wait for a model concurrency slot — it is how long the
+	// agent took as the caller experienced it, not model time.
+	Elapsed time.Duration
+	// TokensIn and TokensOut sum the prompt and candidate token counts the model reported across
+	// the agent's non-partial responses. Reported is false when it reported none, so a caller
+	// can tell "0 tokens" from "unknown" (a test double, or an adapter with no usage data).
+	TokensIn, TokensOut int
+	Reported            bool
+	// Model is the model version the agent's last response named, or "" when the adapter
+	// reports none.
+	Model string
+}
+
+// RunReport is everything a drive collected: the merged state deltas, the concatenated text of
+// the non-partial responses, and per-agent statistics.
+type RunReport struct {
+	State  map[string]any
+	Text   string
+	Agents map[string]AgentStats
+}
+
+// DriveReport runs the agent for a single input and returns a RunReport. It is the one event
+// loop behind DriveText and DriveCollectState; use it directly when the caller wants more than
+// one of the report's parts — a fan-out that reads each sub-agent's state key and also reports
+// how long and how many tokens each took.
+func DriveReport(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (RunReport, error) {
+	rep := RunReport{State: make(map[string]any), Agents: make(map[string]AgentStats)}
+	var text strings.Builder
+	start := time.Now()
+	for ev, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
+		if err != nil {
+			return RunReport{}, err
+		}
+		if ev.Partial {
+			continue // partial chunks carry neither state nor final usage; the final event does
+		}
+		if ev.Content != nil {
+			text.WriteString(contentText(ev.Content))
+		}
+		for k, v := range ev.Actions.StateDelta {
+			rep.State[k] = v
+		}
+		st := rep.Agents[ev.Author]
+		st.Elapsed = time.Since(start)
+		if u := ev.UsageMetadata; u != nil {
+			st.Reported = true
+			st.TokensIn += int(u.PromptTokenCount)
+			st.TokensOut += int(u.CandidatesTokenCount)
+		}
+		if ev.ModelVersion != "" {
+			st.Model = ev.ModelVersion
+		}
+		rep.Agents[ev.Author] = st
+	}
+	rep.Text = text.String()
+	return rep, nil
+}
+
 // DriveText runs the agent and returns the concatenated text of its non-partial
 // responses. For a tool-using agent this is the final answer after any tool calls
 // (intermediate function-call/response events carry no text).
 func DriveText(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (string, error) {
-	var sb strings.Builder
-	for ev, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
-		if err != nil {
-			return "", err
-		}
-		if ev.Content != nil && !ev.Partial {
-			sb.WriteString(contentText(ev.Content))
-		}
+	rep, err := DriveReport(ctx, r, userID, sessionID, input)
+	if err != nil {
+		return "", err
 	}
-	return sb.String(), nil
+	return rep.Text, nil
 }
 
 // DriveCollectState runs the agent and accumulates every state delta emitted by its
 // events into a single map. Useful for fan-out workflows where parallel sub-agents
 // each write a distinct state key the caller needs to read back.
 func DriveCollectState(ctx context.Context, r *runner.Runner, userID, sessionID, input string) (map[string]any, error) {
-	state := make(map[string]any)
-	for ev, err := range r.Run(ctx, userID, sessionID, userText(input), streamingRunConfig()) {
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range ev.Actions.StateDelta {
-			state[k] = v
-		}
+	rep, err := DriveReport(ctx, r, userID, sessionID, input)
+	if err != nil {
+		return nil, err
 	}
-	return state, nil
+	return rep.State, nil
 }

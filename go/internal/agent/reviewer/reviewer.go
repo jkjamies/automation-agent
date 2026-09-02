@@ -222,7 +222,7 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 		e.log.Info("stale review skipped (superseded by a newer push)", "pr", pr, "event_sha", ev.HeadSHA)
 		return nil
 	}
-	meta := publishMeta{owner: owner, repo: repo, number: ev.Number, headSHA: ev.HeadSHA, files: d.files, tiers: "code-reasoning + base"}
+	meta := publishMeta{owner: owner, repo: repo, number: ev.Number, headSHA: ev.HeadSHA, files: d.files}
 	switch d.kind {
 	case decisionSkip:
 		e.log.Info("review skipped", "pr", pr, "action", ev.Action, "reason", d.reason)
@@ -249,7 +249,7 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 			return nil
 		}
 		// Fan out the category lenses + glue pass, score, then publish the review.
-		card, findings, err := e.review(ctx, d.files, std, stale)
+		out, err := e.review(ctx, d.files, std, stale)
 		if errors.Is(err, errSuperseded) {
 			e.log.Info("review superseded mid-run; discarding", "pr", pr, "event_sha", ev.HeadSHA)
 			return nil
@@ -263,10 +263,11 @@ func (e *Engine) Kickoff(ctx context.Context, raw []byte) error {
 			e.log.Info("review completed but superseded before publish; discarding", "pr", pr, "event_sha", ev.HeadSHA)
 			return nil
 		}
-		if err := e.publish(ctx, card, findings, meta); err != nil {
+		meta.lenses = out.lenses
+		if err := e.publish(ctx, out.card, out.findings, meta); err != nil {
 			return err
 		}
-		e.log.Info("review published", "pr", pr, "files", len(d.files), "overall", card.overall.String(), "findings", card.total)
+		e.log.Info("review published", "pr", pr, "files", len(d.files), "overall", out.card.overall.String(), "findings", out.card.total)
 	}
 	return nil
 }

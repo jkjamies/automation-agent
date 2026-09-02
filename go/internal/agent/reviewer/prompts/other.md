@@ -16,7 +16,7 @@ Output **only** a JSON array of findings (no prose, no markdown fences). Each fi
   "dimension": "other",
   "severity": "nitpick",
   "message": "what is worth noting",
-  "suggestion": "a corrected code snippet, or empty",
+  "suggestion": "one or two plain sentences saying what to change and how, or empty",
   "fix_prompt": "a short instruction another agent could follow to fix it, or empty",
   "confidence": 0.0
 }
