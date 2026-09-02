@@ -101,3 +101,19 @@ func TestFormatDiff(t *testing.T) {
 		t.Errorf("patchless file not noted:\n%s", out)
 	}
 }
+
+// A diff is per-event text the reviewer bakes into the agents' instructions. The ADK treats a
+// plain Instruction string as a template — every `{identifier}` is a session-state lookup that
+// errors when the key is absent — so code that merely mentions a placeholder (an f-string, a
+// route pattern, a templated config) must not be able to fail the review. The instruction is
+// therefore handed over through a provider, which the ADK does not template.
+func TestReviewInstructionIsNotTemplated(t *testing.T) {
+	files := []githubapi.PRFile{{
+		Path:   "app.py",
+		Status: "modified",
+		Patch:  "@@ -1 +1,2 @@\n+greeting = f\"hello {user}\"\n+route = \"/items/{item_id}\"",
+	}}
+	if _, _, err := reviewEngine("[]").review(context.Background(), files, nil, nil); err != nil {
+		t.Fatalf("review over a diff containing {placeholders}: %v", err)
+	}
+}

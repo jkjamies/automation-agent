@@ -6,12 +6,12 @@ resource: go/internal/agent/reviewer
 tags: [code-review, pull-request, advisory]
 sensitivity: internal
 bundle: automation-agent
-timestamp: 2026-07-29T00:00:00Z
+timestamp: 2026-09-02T00:00:00Z
 ---
 
 # PR Code-Review Workflow
 
-The in-house **PR code-review** workflow. It reacts to GitHub `pull_request` events and posts a CodeRabbit-style review — per-category sub-agent findings, a count-based scorecard, inline comments with ```suggestion blocks, an "🤖 Prompt for AI agents" block, and an **advisory** `agent-review` check (never a merge gate). It is **comment-only** and never opens PRs.
+The in-house **PR code-review** workflow. It reacts to GitHub `pull_request` events and posts a CodeRabbit-style review — per-category sub-agent findings, a count-based scorecard, inline comments with plain-language suggestions, an "🤖 Prompt for AI agents" block, and an **advisory** `agent-review` check (never a merge gate). It is **comment-only** and never opens PRs.
 
 Unlike the lint/coverage fixers, the reviewer is **not** a suspend/resume fix loop: it is mostly one-shot per `pull_request` event and does not park on `await_ci`. Its long LLM compute runs **in-request** via the execution transport (`KindReview` → `/internal/dispatch`), so CPU stays allocated on Cloud Run.
 
@@ -92,7 +92,7 @@ Rapid pushes to one PR are collapsed so only the latest SHA is reviewed (two par
 The reviewer reads the PR and posts its output via the **GitHub REST API**, over the shared `auth.TokenProvider` (App installation token in production, PAT locally — no auth work here):
 
 - **Read:** changed files **and patches** via `GET /pulls/{n}/files` (paginated); file content at the head SHA via `githubapi.GetFileContent`; PR metadata, labels, and check runs via REST.
-- **Write:** the review (`POST /pulls/{n}/reviews` — inline comments + ```suggestion), the marker summary comment (issue comments), and the `agent-review` check run.
+- **Write:** the review (`POST /pulls/{n}/reviews` — inline comments + prose suggestions), the marker summary comment (issue comments), and the `agent-review` check run.
 - **The `agent-review` check is REST-only** — GitHub's GraphQL API has no check-run mutation, so there is no GraphQL path for it by design.
 
 ### Reconciliation — GitHub-as-store (no local durable state)
@@ -130,6 +130,10 @@ When intake returns `review`, `Engine.review` runs the model-calling stage:
 3. **Verify gate + citation gate + dedup** (deterministic, in code — not asked of the model): drop findings below `REVIEW_MIN_CONFIDENCE`; apply the standards citation gate (below); then collapse cross-lens duplicates by fingerprint (keep worst severity).
 4. **Scorecard**: a per-dimension severity histogram → level (🔴 any critical or ≥2 major · 🟡 any major or ≥3 medium · 🟢 else); overall = critical-cap (any critical in security / runtime safety → 🔴) combined with the worst dimension level. Count-based — no synthetic 0–100 score.
 
+### Per-event text is never templated
+
+Every reviewer agent — the category lenses, glue, and the standards distiller — receives its instruction through `setup.StaticInstruction`, an `InstructionProvider` that returns the composed string verbatim, never through the ADK's plain `Instruction` field. The ADK treats that field as a template: each `{identifier}` is a session-state lookup that fails the run with "state key does not exist" when the key is absent. The diff and the standards docs are foreign text that routinely contains exactly that shape — a Python f-string, a `/repos/{owner}/{repo}` route, a templated config — so on the templated path a single such line would error the whole review (or silently degrade a distillation to generic). The provider path is exempt from templating, which is the same reason the [summary](/modules/agents/summary.md) workflow drives its summarizer through a provider.
+
 ## Standards-aware review — steer off the reviewed repo's own conventions
 
 The reviewer steers off the conventions of the **repo under review** — `.agents/standards`, `.cursor/rules`, `CLAUDE.md`, `CONTRIBUTING.md`, linter configs, whatever that repo has — **not** the automation service's own. All **API-only** (no clone). In `standards.go`:
@@ -148,7 +152,8 @@ Graceful by design: standards off, no docs found, or a distillation/fetch error 
 `Engine.publish` posts the scored review; nothing here gates a merge:
 
 1. **Classify** the gated findings against the diff hunks (`hunks.go`): actionable (critical/major/medium) findings on a commentable head-side line post **inline**; actionable findings outside the diff are listed in the summary's **🔭 Outside diff range** section (never dropped or snapped to a wrong line); nitpicks collapse into **🧹 Nitpicks**.
-2. **Inline comments** carry an icon+category prefix (`🔒 Security` / `⚠️ Potential issue` / `🛠️ Refactor`), an optional ```suggestion block, and an optional collapsible **🤖 Prompt for AI agents** block (`fix_prompt`), posted as one advisory `COMMENT` review **pinned to the reviewed head SHA** (`commit_id`). The pin matters because every line number came from that SHA's diff: unpinned, GitHub resolves the lines against whatever HEAD is current when the call lands, so a push arriving mid-review anchors comments to the wrong lines or `422`s the whole call — and publish aborts on the first error, so the summary comment and the check would go down with it. Staleness detection at kickoff narrows this window but cannot close it; the pin does.
+2. **Inline comments** carry an icon+category prefix (`🔒 Security` / `⚠️ Potential issue` / `🛠️ Refactor`), an optional plain-language **Suggestion** line, and an optional collapsible **🤖 Prompt for AI agents** block (`fix_prompt`), posted as one advisory `COMMENT` review **pinned to the reviewed head SHA** (`commit_id`). The pin matters because every line number came from that SHA's diff: unpinned, GitHub resolves the lines against whatever HEAD is current when the call lands, so a push arriving mid-review anchors comments to the wrong lines or `422`s the whole call — and publish aborts on the first error, so the summary comment and the check would go down with it. Staleness detection at kickoff narrows this window but cannot close it; the pin does.
+   The suggestion is **prose, never a GitHub ```suggestion block**. That block is a one-click commit of a verbatim replacement for the commented lines, and the lenses cannot author one reliably: they see a unified diff with no surrounding file, so a snippet rarely aligns with the exact lines it would replace — and the model's "snippet" is often itself a sentence, which the block would offer to commit as source. A sentence saying what to change is what a reader can act on with the context they have; the fenced fix prompt is the hand-off for an agent that does have the file. Being prose, it goes through the same @mention / HTML sanitizing as the message.
 3. **Reconcile** against the PR's existing fingerprinted comments (see *Reconciliation* above): skip findings already posted (idempotent), post only new ones, and minimize comments now fixed.
 4. **Summary comment** is marker-updated (`<!-- automation-agent:review:<owner>/<repo>#<n> -->`) so a re-review edits it in place: header + scorecard table + the collapsible sections + review details (head SHA, file count, tiers).
 5. **`agent-review` check** (advisory): green → `success`, yellow/red → `neutral` — **never** `failure`. Deny publishes the "too large, please split" summary + a neutral check.
@@ -172,7 +177,7 @@ Category agents deliberately do not set `OutputSchema` — schema validation fai
 - `reconcile.go` — the fingerprint marker (`fpMarker`/`parseFPMarker`) and the pure `reconcile`: given this run's inline findings + the PR's existing comments, what to post vs minimize.
 - `standards.go` — standards-aware review: discovery (`matchStandards`), the distiller orchestration + defensive `parseRules`, the per-repo `standardsCache`, the rule menu / lazy `get_rule` tool (`standardsTools`), and the `gateCitations` citation gate.
 - `enqueue.go` — `EnqueueOptions`: the debounce/coalesce transport hints for a synchronize review.
-- `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue + distiller LLM agents, the prompt embed, the JSON `GenerateContentConfig`). Logic lives in the files above.
+- `agents_setup.go` — the build-agent split: pure ADK wiring (category + glue + distiller LLM agents, the prompt embed, the JSON `GenerateContentConfig`), every instruction handed over via `setup.StaticInstruction`. Logic lives in the files above.
 - `prompts/*.md` — one markdown prompt per category, the glue pass, and the standards distiller.
 
 The `pull_request` webhook parse (`ParsePullRequestEvent`) and the file fetch (`ListPRFiles`) live in the GitHub API tooling layer (`githubapi`) next to `ParseCheckRunEvent`, so the provider SDK stays in the tooling layer and the reviewer consumes stable projections — no GitHub SDK import here.

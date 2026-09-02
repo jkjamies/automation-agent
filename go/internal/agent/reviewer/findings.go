@@ -102,7 +102,7 @@ type finding struct {
 	Dimension  Dimension
 	Severity   Severity
 	Message    string
-	Suggestion string  // optional ```suggestion body (a localized in-diff fix)
+	Suggestion string  // optional plain-language description of the change to make
 	FixPrompt  string  // optional "Prompt for AI agents" body (feeds the future fix hand-off)
 	RuleID     string  // optional repo-standard rule id this finding cites (standards-aware review)
 	Confidence float64 // 0..1; below REVIEW_MIN_CONFIDENCE is dropped before scoring

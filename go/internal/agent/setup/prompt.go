@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
 )
 
 // Prompts loads markdown prompt files from an fs.FS. Each agent embeds its own
@@ -35,4 +38,17 @@ func (p Prompts) MustGet(name string) string {
 		panic(err)
 	}
 	return s
+}
+
+// StaticInstruction returns an InstructionProvider that yields s verbatim.
+//
+// Use it whenever an agent's instruction embeds text the service did not author — a diff, a
+// fetched document, tool output. The ADK treats the plain Instruction string as a template:
+// every `{identifier}` is a session-state lookup that fails the run when the key is absent, so
+// an instruction carrying a Python f-string, a route pattern, or a templated config would error
+// with "state key does not exist" before the model is ever called. An InstructionProvider is
+// exempt from that templating, and this one adds nothing else — the string goes to the model
+// exactly as composed.
+func StaticInstruction(s string) llmagent.InstructionProvider {
+	return func(agent.ReadonlyContext) (string, error) { return s, nil }
 }

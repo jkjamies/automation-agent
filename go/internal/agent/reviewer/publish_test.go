@@ -13,7 +13,7 @@ func TestPublishRoutesFindings(t *testing.T) {
 	// a.go's hunk makes head lines 1 (context), 2 and 3 (added) commentable.
 	files := []githubapi.PRFile{{Path: "a.go", Status: "modified", Patch: "@@ -1,2 +1,3 @@\n a\n+b\n+c\n"}}
 	findings := []finding{
-		{File: "a.go", Line: 2, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli", Suggestion: "safe()", FixPrompt: "fix it"},
+		{File: "a.go", Line: 2, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli", Suggestion: "Bind the id as a query parameter.", FixPrompt: "fix it"},
 		{File: "a.go", Line: 99, Dimension: DimPerformance, Severity: SeverityMajor, Message: "n+1 query"}, // out of diff
 		{File: "b.go", Line: 1, Dimension: DimMaintainability, Severity: SeverityNitpick, Message: "rename"},
 	}
@@ -38,7 +38,7 @@ func TestPublishRoutesFindings(t *testing.T) {
 	if gh.review.CommitID != meta.headSHA {
 		t.Errorf("review CommitID = %q, want the reviewed head SHA %q", gh.review.CommitID, meta.headSHA)
 	}
-	for _, want := range []string{"🔒 Security", "```suggestion", "Prompt for AI agents"} {
+	for _, want := range []string{"🔒 Security", "**Suggestion:** Bind the id as a query parameter.", "Prompt for AI agents"} {
 		if !strings.Contains(c.Body, want) {
 			t.Errorf("inline body missing %q:\n%s", want, c.Body)
 		}
@@ -190,8 +190,27 @@ func TestPublishPostsNewFinding(t *testing.T) {
 	}
 }
 
+// A suggestion is rendered as sanitized prose, never as a GitHub ```suggestion block: the lenses
+// see only a diff, so a verbatim replacement would misalign with the lines it claims to replace,
+// and the one-click "apply" would commit it. As prose it also goes through the same @mention /
+// HTML defusing as the message.
+func TestInlineCommentSuggestionIsProse(t *testing.T) {
+	f := finding{File: "a.go", Line: 2, Dimension: DimSecurity, Severity: SeverityCritical, Message: "sqli",
+		Suggestion: "Ask @octocat to use <code>Bind</code>; see ```go``` docs."}
+	body := inlineCommentBody(f)
+	if strings.Contains(body, "```suggestion") || strings.Contains(body, "````") {
+		t.Errorf("suggestion must not render as a suggestion/code block:\n%s", body)
+	}
+	if !strings.Contains(body, "**Suggestion:** Ask @\u200boctocat to use &lt;code&gt;Bind&lt;/code&gt;") {
+		t.Errorf("suggestion prose not rendered sanitized:\n%s", body)
+	}
+	if strings.Contains(inlineCommentBody(finding{Message: "m", Suggestion: "  \n"}), "Suggestion") {
+		t.Error("a blank suggestion must render nothing")
+	}
+}
+
 // sanitizeText defuses @mentions and escapes HTML so model-authored findings can't ping users or
-// inject markup; the ```suggestion code path is left untouched by callers.
+// inject markup; the fenced FixPrompt path is left untouched by callers.
 func TestSanitizeText(t *testing.T) {
 	got := sanitizeText("ping @octocat with <b>x</b> & </details>")
 	if strings.Contains(got, "@octocat") {

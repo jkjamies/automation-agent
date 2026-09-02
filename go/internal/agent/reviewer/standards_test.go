@@ -334,3 +334,22 @@ func TestStandardsCacheRetainsNilAndOverwrites(t *testing.T) {
 		t.Errorf("overwriting a key must not add an entry: map=%d lru=%d", len(c.m), c.lru.Len())
 	}
 }
+
+// Standards docs are foreign text baked into the distiller's instruction, and a convention doc
+// routinely quotes placeholders (`{owner}/{repo}`, `f"{x}"`). The ADK templates a plain
+// Instruction string, so such a doc would fail the distillation and silently degrade the review
+// to generic — the instruction must reach the model untemplated.
+func TestDistillerInstructionIsNotTemplated(t *testing.T) {
+	rulesJSON := `[{"id":"R1","dimension":"pattern_violation","summary":"name routes","source":"AGENTS.md"}]`
+	gh := &fakeGH{
+		tree:     []githubapi.TreeEntry{{Path: "AGENTS.md", SHA: "s1", Type: "blob"}},
+		contents: map[string]string{"AGENTS.md": "Routes are named like /repos/{owner}/{repo}; log with f\"{msg}\"."},
+	}
+	e := NewEngine(Deps{
+		Enabled: true, GH: gh, BaseLLM: fakeLLM{json: rulesJSON}, CodeLLM: fakeLLM{json: rulesJSON},
+		StandardsEnabled: true, StandardsGlobs: []string{"AGENTS.md"}, StandardsMaxBytes: 1 << 20,
+	})
+	if std := e.discoverStandards(context.Background(), "o", "r", "head", nil); std.empty() {
+		t.Fatal("a standards doc containing {placeholders} degraded the review to generic")
+	}
+}

@@ -38,3 +38,16 @@ func TestPromptsMustGet(t *testing.T) {
 	}()
 	p.MustGet("nope")
 }
+
+// StaticInstruction must hand the composed text to the ADK untouched: a `{placeholder}` in it is
+// literal text, never a session-state lookup (which would fail the run on a missing key).
+func TestStaticInstructionIsVerbatim(t *testing.T) {
+	const in = "review this: greeting = f\"hello {user}\" and {app:missing}"
+	got, err := StaticInstruction(in)(nil)
+	if err != nil {
+		t.Fatalf("StaticInstruction: %v", err)
+	}
+	if got != in {
+		t.Errorf("StaticInstruction = %q, want the input verbatim %q", got, in)
+	}
+}
