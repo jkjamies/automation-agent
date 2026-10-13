@@ -32,9 +32,10 @@ for anything else.
   headless in a sandbox, takes a task, and exits. Unless Antigravity offers a supported,
   documented non-interactive mode (verify this before committing to it — see
   [below](#what-to-verify-about-antigravity)), it cannot be that component.
-- **So give each harness the job it fits.** The unattended path uses a headless harness
-  behind one Go interface: ADK itself (the default here — pure Go, pure Google) or a
-  headless Google agent such as Gemini CLI. Antigravity is where *people* work on the
+- **So give each harness the job it fits.** The unattended path uses **ADK itself** as
+  the coding harness — the chosen option: pure Go, pure Google, one binary. It sits
+  behind a Go interface, so another headless agent can be compared or swapped in later
+  without touching the pipeline. Antigravity is where *people* work on the
   same tickets: writing and refining tickets and skills, reviewing agent PRs and pushing
   fixes to them, and picking up escalations. Both read the same repository instructions
   (`AGENTS.md`, Agent Skills), so they behave alike.
@@ -151,16 +152,18 @@ coding-specific parts are yours to build. That is the trade the options below ma
 
 | Harness | Runs unattended? | Stays on Google? | Trade-off |
 |---|---|---|---|
-| **ADK coder** (`TICKETFLOW_HARNESS=adk`, default) | Yes — it is a Go function call. | Fully: ADK + Vertex AI, one binary. | You own harness quality: tool design, context compaction, prompt tuning. The prototype's tools (confined read/search/edit/write + named checks) are a solid start, not a finished product. |
+| **ADK coder** (`TICKETFLOW_HARNESS=adk`) — **chosen** | Yes — it is a Go function call. | Fully: ADK + Vertex AI, one binary. | You own harness quality: tool design, context compaction, prompt tuning. The prototype's tools (confined read/search/edit/write + named checks) are a solid start, not a finished product. |
 | **Gemini CLI** (`cli`) | Yes — Google's open-source terminal agent has a non-interactive prompt mode with JSON output and an auto-approve mode, and authenticates to Vertex AI. | Yes: Google-maintained, Vertex-backed. | A Node.js process in the sandbox; its behaviour changes with its releases, so pin the version. Less code for you to own. |
 | **Antigravity** | Only if it offers a supported headless entrypoint (unverified). | Yes. | The natural fit for the *human* side of this workflow regardless. |
 | **Jules** (Google's hosted async coding agent) | Yes, as a service. | Yes. | It owns the sandbox and the branch, so the orchestrator cannot judge a diff before it reaches GitHub; the gates move to CI. |
 
-The recommendation is to start with the ADK coder and keep the `cli` seam honest, then
-**decide with data**: run the same set of historical tickets through each harness in
-dry-run mode and compare check pass rate and reviewer acceptance (see
-[rolling it out](#rolling-it-out)). The harness is the component most likely to change,
-which is why it sits behind an interface and why the orchestrator never trusts it.
+**Decision: the ADK coder.** Orchestration and coding share one Go codebase on ADK and
+Vertex AI, with no second runtime to install, pin, or sandbox separately. The cost is
+that harness quality is this project's to build (see
+[what the prototype covers](#what-the-prototype-covers)). The `cli` seam stays: if
+someone later proposes another harness, the same set of historical tickets run in
+dry-run mode through both settles it on check pass rate and reviewer acceptance (see
+[rolling it out](#rolling-it-out)).
 
 ### What to verify about Antigravity
 
@@ -302,22 +305,26 @@ Not built yet, in the order they would matter:
    commits — still never merging.
 5. **A durable queue and lock** (Cloud Tasks + Firestore) in place of the in-process
    worker pool, so `serve` can run on Cloud Run.
-6. **Evaluation.** A fixed set of historical tickets with their merged PRs, replayed in
+6. **Hardening the ADK coder.** Context management for long sessions (summarising old
+   tool output instead of carrying it), a way to run one test or package rather than the
+   full check for faster iteration, and tuning `implementer.md` against the evaluation set.
+7. **Evaluation.** A fixed set of historical tickets with their merged PRs, replayed in
    dry-run mode against each prompt or model change, scoring check pass rate, diff
    similarity, and reviewer-acceptance.
 
 ## Alternatives, and how to argue for them
 
-The harness seam makes most alternatives a configuration change, so the honest way to
-argue for one is the evaluation set, not a feature list: same tickets, same gates, same
-checks, compare the outcomes.
+The pipeline uses ADK for both orchestration and coding. This section is reference for
+anyone who proposes another harness later: the seam makes most of them a configuration
+change, so the way to argue for one is the evaluation set, not a feature list — same
+tickets, same gates, same checks, compare the outcomes.
 
 | Option | What it is | When it is worth the argument |
 |---|---|---|
 | **Gemini CLI** | Google's open-source terminal coding agent; headless mode, Vertex AI auth, an official GitHub Action. | The easiest case to make: it is Google's, so it stays inside the constraint, and it removes harness engineering from your backlog. |
 | **Jules** | Google's hosted asynchronous coding agent that works on a GitHub repo and produces a branch/PR. | When you would rather not run sandboxes at all. You give up judging the diff before it reaches GitHub. |
 | **Goose** (Block) | Open-source, model-agnostic agent with a CLI, headless runs, and MCP extensions. | If a non-Google harness is acceptable and you want one that is not tied to a vendor; it can use Vertex AI models. |
-| **BuilderBot** | Several unrelated products share the name; confirm which one is meant before evaluating it. | — |
+| **BuilderBot** (Block) | From Block, the company behind Goose. Not evaluated here. | — |
 
 What is *not* worth replacing: the orchestrator. Jira intake, gates, budgets, the merge
 gate, and reporting are deterministic code that every harness option still needs, and
@@ -325,20 +332,21 @@ ADK Go is a reasonable home for it.
 
 ## Decisions to make
 
-1. **The unattended harness:** ADK coder (default), Gemini CLI, or Antigravity if it
-   passes [the three checks](#what-to-verify-about-antigravity).
-2. **Models per role** (`TICKETFLOW_PLANNER_MODEL`, `_CODER_MODEL`, `_REVIEWER_MODEL`):
+Decided: **ADK Go for orchestration and for the unattended coding harness**, with models
+on Vertex AI; Antigravity for the human side.
+
+1. **Models per role** (`TICKETFLOW_PLANNER_MODEL`, `_CODER_MODEL`, `_REVIEWER_MODEL`):
    which Gemini models, and whether third-party models from Vertex AI Model Garden are in
    bounds. ADK Go ships a Gemini model; any other needs a small `model.LLM` adapter.
-3. **The trigger:** a label (as built) or a workflow status such as "Ready for Agent",
+2. **The trigger:** a label (as built) or a workflow status such as "Ready for Agent",
    and who may set it.
-4. **The sandbox:** Cloud Run jobs or GKE Sandbox, and the egress allowlist.
-5. **PR posture:** drafts (as built) or ready-for-review; reviewer assignment by
+3. **The sandbox:** Cloud Run jobs or GKE Sandbox, and the egress allowlist.
+4. **PR posture:** drafts (as built) or ready-for-review; reviewer assignment by
    CODEOWNERS or by the ticket's team.
-6. **Scope of autonomy after the PR:** stop at the PR (as built), or also fix CI
+5. **Scope of autonomy after the PR:** stop at the PR (as built), or also fix CI
    failures and answer review comments (see items 3–4 of
    [what the prototype covers](#what-the-prototype-covers)).
-7. **Where it lives:** this directory is self-contained so it can move to its own
+6. **Where it lives:** this directory is self-contained so it can move to its own
    repository unchanged.
 
 ## Rolling it out

@@ -44,7 +44,7 @@ the ticket, label removed), or **escalate** (`agent-needs-human`, reason posted)
 
 | `TICKETFLOW_HARNESS` | What edits the code |
 |---|---|
-| `adk` (default) | An in-process ADK `LlmAgent` on a Vertex AI model with confined file tools and the repo's named checks. Loads the repo's Agent Skills (`.agents/skills`, `.agent/skills`, `.gemini/skills`). |
+| `adk` (default, the chosen harness) | An in-process ADK `LlmAgent` on a Vertex AI model with confined file tools and the repo's named checks. Loads the repo's Agent Skills (`.agents/skills`, `.agent/skills`, `.gemini/skills`). |
 | `cli` | Any headless coding agent started as a process in the checkout — e.g. Gemini CLI, or Antigravity if it gains a headless mode. Gets a scrubbed environment: no repo or Jira credentials. |
 
 Either way, the harness's own claims are informational; the diff, the gates, and the
